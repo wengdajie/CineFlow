@@ -13,6 +13,8 @@ from app.db.models import SiteConfig
 from app.providers.registry import list_providers
 from app.schemas.enums import ProviderKind
 from app.schemas.models import Message, SiteCreate, SiteOut, SiteUpdate
+from app.services import discovery as discovery_service
+from app.services import presets as preset_service
 from app.services import sites as site_service
 
 router = APIRouter(prefix="/sites", tags=["站点管理"])
@@ -103,3 +105,74 @@ async def test_site(site_id: int, session: DbSession, user: CurrentUser) -> dict
     site.last_check_at = utcnow()
     session.commit()
     return {"success": ok, "message": message}
+
+
+@router.get("/presets", summary="自定义站点预设模板")
+def site_presets(user: CurrentUser, kind: ProviderKind | None = None) -> list[dict[str, Any]]:
+    """列出可一键套用的站点配置模板。"""
+    return preset_service.list_presets(kind.value if kind else None)
+
+
+@router.post("/presets/{preset_id}/apply", response_model=SiteOut, summary="套用预设新增站点")
+def apply_preset(
+    preset_id: str,
+    session: DbSession,
+    user: SuperUser,
+    name: str | None = None,
+    url: str | None = None,
+    enabled: bool = False,
+) -> SiteOut:
+    """按预设创建站点（默认不启用，便于先测试连通性）。"""
+    preset = preset_service.get_preset(preset_id)
+    if not preset:
+        raise HTTPException(status_code=404, detail=f"预设不存在：{preset_id}")
+
+    site_name = (name or preset["name"]).strip()
+    if session.execute(
+        select(SiteConfig).where(SiteConfig.name == site_name)
+    ).scalar_one_or_none():
+        raise HTTPException(status_code=409, detail="站点名称已存在")
+
+    site = SiteConfig(
+        name=site_name,
+        kind=preset["kind"],
+        provider=preset["provider"],
+        url=(url or preset["url"]).strip(),
+        enabled=enabled,
+        priority=int(preset.get("priority", 50)),
+        options=dict(preset.get("options") or {}),
+    )
+    session.add(site)
+    session.commit()
+    session.refresh(site)
+    return _to_out(site)
+
+
+@router.get("/discover", summary="从导航站发现资源站点")
+async def discover_sites(
+    session: DbSession,
+    user: CurrentUser,
+    url: str | None = None,
+    media_only: bool = True,
+    limit: int = 200,
+) -> dict[str, Any]:
+    """抓取导航站，列出其收录的候选资源站点。
+
+    导航站本身不提供磁力/网盘链接，只是资源站入口的集合；
+    发现结果需用户选择并配置为自定义站点后才能参与搜索与追新。
+    """
+    data = await discovery_service.discover(url, media_only=media_only, limit=limit)
+
+    # 标记哪些站点已经添加过，避免重复配置
+    existing = [
+        (row.url or "").lower()
+        for row in session.execute(select(SiteConfig)).scalars()
+    ]
+    for item in data["sites"]:
+        domain = str(item.get("domain") or "")
+        item["already_added"] = bool(
+            domain and any(domain in configured for configured in existing)
+        )
+
+    data["directories_builtin"] = discovery_service.DEFAULT_DIRECTORIES
+    return {"success": True, "data": data}

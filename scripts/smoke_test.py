@@ -114,6 +114,84 @@ if site_id:
     call("DELETE", f"/sites/{site_id}", token=token)
 
 print("\n" + "=" * 70)
+print("4b) 自定义站点：预设模板 / 字段映射 / 导航站发现")
+print("=" * 70)
+presets = call("GET", "/sites/presets", token=token)
+preset_ids = [item.get("id") for item in items_of(presets)]
+print(f"       可用预设 {preset_ids}")
+
+# 套用预设一键建站
+applied = call(
+    "POST",
+    "/sites/presets/mukaku/apply?name=" + urllib.parse.quote("冒烟-预设站"),
+    token=token,
+)
+preset_site_id = applied.get("id")
+print(f"       预设建站 id={preset_site_id} provider={applied.get('provider')}")
+if preset_site_id:
+    call("DELETE", f"/sites/{preset_site_id}", token=token)
+
+# 字段映射式自定义 JSON API 站点
+custom = call(
+    "POST",
+    "/sites",
+    token=token,
+    body={
+        "name": "冒烟-自定义接口站",
+        "kind": "indexer",
+        "provider": "api_generic",
+        "url": "https://example.invalid",
+        "enabled": False,
+        "options": {
+            "api_base": "https://example.invalid/api/v1",
+            "search_path": "search",
+            "query_key": "kw",
+            "list_path": "data.list",
+            "item_map": {"title": "name", "link": "magnet"},
+        },
+    },
+)
+custom_id = custom.get("id")
+print(f"       自定义站 id={custom_id} options 已保存={bool(custom.get('options'))}")
+if custom_id:
+    call("POST", f"/sites/{custom_id}/test", token=token, expect=(200, 400, 502))
+    call("DELETE", f"/sites/{custom_id}", token=token)
+
+# 正则式网页站点
+html_site = call(
+    "POST",
+    "/sites",
+    token=token,
+    body={
+        "name": "冒烟-网页正则站",
+        "kind": "indexer",
+        "provider": "html_generic",
+        "url": "https://example.invalid",
+        "enabled": False,
+        "options": {
+            "search_url": "https://example.invalid/search?q={keyword}",
+            "magnet_only": True,
+        },
+    },
+)
+if html_site.get("id"):
+    call("DELETE", f"/sites/{html_site['id']}", token=token)
+
+print("\n" + "=" * 70)
+print("4c) 追新雷达")
+print("=" * 70)
+call("GET", "/radar/jobs", token=token)
+feed = call("GET", "/radar/feed?limit_per_site=5", token=token)
+feed_total = (feed.get("data") or {}).get("total", 0)
+print(f"       最新流 {feed_total} 条（未启用站点时为 0 属正常）")
+radar_run = call("POST", "/radar/run?dry_run=true", token=token)
+radar_data = radar_run.get("data") or {}
+print(
+    f"       预览：资源 {radar_data.get('resources', 0)} / "
+    f"活跃订阅 {radar_data.get('subscribes', 0)} / 命中 {radar_data.get('matched', 0)}"
+)
+
+print("\n" + "=" * 70)
 print("5) 搜索（无启用站点时应优雅返回空）")
 print("=" * 70)
 search = call("GET", "/search?keyword=" + urllib.parse.quote("庆余年") + "&media_type=tv", token=token)

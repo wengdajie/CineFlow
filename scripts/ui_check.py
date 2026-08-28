@@ -16,6 +16,7 @@ PAGES = [
     ("subscribes", "订阅追新"),
     ("downloads", "下载任务"),
     ("library", "媒体库"),
+    ("radar", "追新雷达"),
     ("sites", "站点管理"),
     ("plugins", "插件"),
     ("logs", "运行日志"),
@@ -150,6 +151,76 @@ def main():
             page.wait_for_timeout(2500)
             page.screenshot(path=str(SHOTS / "13-search.png"), full_page=True)
             print(f"   搜索后页面文本长度：{len(page.inner_text('body'))}")
+
+        print("\n" + "=" * 68)
+        print("6b) 交互测试：自定义站点（模板 / 字段映射 / 发现）")
+        print("=" * 68)
+        page.goto(f"{BASE}/#sites", wait_until="networkidle")
+        page.wait_for_timeout(1000)
+
+        tpl = page.get_by_text("从模板添加", exact=False).first
+        if tpl.count():
+            tpl.click()
+            page.wait_for_timeout(700)
+            body = page.inner_text("body")
+            print(f"   模板弹窗含 Mukaku：{'Mukaku' in body}")
+            print(f"   模板弹窗含「已验证」：{'已验证' in body}")
+            use = page.get_by_text("使用此模板", exact=True).first
+            if use.count():
+                use.click()
+                page.wait_for_timeout(700)
+                modal_body = page.inner_text(".modal") if page.locator(".modal").count() else ""
+                print(f"   套用模板后表单含 options：{'options' in modal_body}")
+                page.screenshot(path=str(SHOTS / "15-site-preset.png"))
+            close = page.get_by_text("取消", exact=True).first
+            if not close.count():
+                close = page.get_by_text("关闭", exact=True).first
+            if close.count():
+                close.click()
+                page.wait_for_timeout(400)
+
+        discover = page.get_by_text("发现站点", exact=False).first
+        if discover.count():
+            discover.click()
+            page.wait_for_timeout(600)
+            print(f"   发现弹窗渲染：{page.locator('.modal').count() > 0}")
+            scan = page.get_by_text("开始发现", exact=True).first
+            if scan.count():
+                scan.click()
+                page.wait_for_timeout(6000)
+                modal_text = page.inner_text(".modal") if page.locator(".modal").count() else ""
+                print(f"   发现结果文本长度：{len(modal_text)}")
+                print(f"   含「发现」统计：{'发现' in modal_text}")
+                page.screenshot(path=str(SHOTS / "16-site-discover.png"), full_page=True)
+            close = page.get_by_text("关闭", exact=True).first
+            if close.count():
+                close.click()
+                page.wait_for_timeout(400)
+
+        print("\n" + "=" * 68)
+        print("6c) 交互测试：追新雷达预览")
+        print("=" * 68)
+        page.goto(f"{BASE}/#radar", wait_until="networkidle")
+        page.wait_for_timeout(1200)
+        body = page.inner_text("body")
+        print(f"   雷达页含「定时追新任务」：{'定时追新任务' in body}")
+        print(f"   雷达页含定时任务名：{'追新雷达' in body}")
+
+        dry = page.get_by_text("预览匹配", exact=True).first
+        if dry.count():
+            dry.click()
+            page.wait_for_timeout(4000)
+            body = page.inner_text("body")
+            print(f"   预览匹配后含统计标签：{'活跃订阅' in body}")
+            page.screenshot(path=str(SHOTS / "17-radar.png"), full_page=True)
+
+        feed = page.get_by_text("预览最新流", exact=True).first
+        if feed.count():
+            feed.click()
+            page.wait_for_timeout(4000)
+            body = page.inner_text("body")
+            print(f"   最新流区块渲染：{'最新资源流' in body}")
+            page.screenshot(path=str(SHOTS / "18-radar-feed.png"), full_page=True)
 
         print("\n" + "=" * 68)
         print("7) 响应式检查（移动端 430x900）")

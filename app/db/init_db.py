@@ -33,6 +33,47 @@ DEFAULT_SITES = [
         "options": {"category": "1_2"},
     },
     {
+        "name": "Mukaku 影视站",
+        "kind": ProviderKind.INDEXER.value,
+        "provider": "mukaku",
+        "url": "https://web5.mukaku.com",
+        "enabled": False,
+        "priority": 20,
+        "options": {
+            "note": "内置字段映射，启用后即可搜索（磁力+网盘），支持最新流追新；"
+                    "搜索请使用中文片名"
+        },
+    },
+    {
+        "name": "自定义 JSON API 站点（示例）",
+        "kind": ProviderKind.INDEXER.value,
+        "provider": "api_generic",
+        "url": "https://example.com",
+        "enabled": False,
+        "priority": 40,
+        "options": {
+            "note": "参考 README「自定义站点接入」填写 api_base/search_path/字段映射",
+            "api_base": "https://example.com/api/v1",
+            "search_path": "search",
+            "query_key": "keyword",
+            "list_path": "data.list",
+            "item_map": {"title": "name", "link": "magnet", "size": "size"},
+        },
+    },
+    {
+        "name": "自定义网页站点（示例）",
+        "kind": ProviderKind.INDEXER.value,
+        "provider": "html_generic",
+        "url": "https://example.com",
+        "enabled": False,
+        "priority": 45,
+        "options": {
+            "note": "用正则描述行与字段；只需磁力可开 magnet_only",
+            "search_url": "https://example.com/search?q={keyword}",
+            "magnet_only": True,
+        },
+    },
+    {
         "name": "PanSou 盘搜",
         "kind": ProviderKind.PAN.value,
         "provider": "pansou",

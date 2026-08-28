@@ -18,6 +18,7 @@ logger = get_logger(__name__)
 JOB_SUBSCRIBE = "cineflow.subscribe"
 JOB_DOWNLOAD = "cineflow.download"
 JOB_LIBRARY = "cineflow.library"
+JOB_RADAR = "cineflow.radar"
 _PLUGIN_PREFIX = "plugin."
 
 
@@ -63,6 +64,7 @@ class SchedulerService:
 
         from app.services import download as download_service
         from app.services import library as library_service
+        from app.services import radar as radar_service
         from app.services import subscribe as subscribe_service
 
         self.scheduler.add_job(
@@ -74,6 +76,16 @@ class SchedulerService:
             max_instances=1,
             coalesce=True,
         )
+        if settings.RADAR_ENABLED and settings.RADAR_INTERVAL_MINUTES > 0:
+            self.scheduler.add_job(
+                radar_service.run,
+                trigger=IntervalTrigger(minutes=settings.RADAR_INTERVAL_MINUTES),
+                id=JOB_RADAR,
+                name="追新雷达（站点最新流巡检）",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
         self.scheduler.add_job(
             download_service.sync_tasks,
             trigger=IntervalTrigger(minutes=settings.DOWNLOAD_CHECK_INTERVAL_MINUTES),
@@ -97,8 +109,11 @@ class SchedulerService:
 
         self.scheduler.start()
         logger.info(
-            "调度器已启动：订阅每 %d 分钟、下载每 %d 分钟",
+            "调度器已启动：订阅每 %d 分钟、雷达每 %s 分钟、下载每 %d 分钟",
             settings.SUBSCRIBE_INTERVAL_MINUTES,
+            settings.RADAR_INTERVAL_MINUTES
+            if settings.RADAR_ENABLED and settings.RADAR_INTERVAL_MINUTES > 0
+            else "关闭",
             settings.DOWNLOAD_CHECK_INTERVAL_MINUTES,
         )
 

@@ -101,6 +101,10 @@ class Settings(BaseSettings):
 
     # ---------- 调度 ----------
     SUBSCRIBE_INTERVAL_MINUTES: int = 30
+    #: 追新雷达（站点最新流巡检）间隔，0 表示关闭
+    RADAR_INTERVAL_MINUTES: int = 15
+    RADAR_ENABLED: bool = True
+    RADAR_LIMIT_PER_SITE: int = 100
     DOWNLOAD_CHECK_INTERVAL_MINUTES: int = 5
     LIBRARY_SCAN_CRON: str = "0 4 * * *"
     SCHEDULER_ENABLED: bool = True

@@ -328,6 +328,7 @@
     { key: "subscribes", label: "订阅追新", icon: "★" },
     { key: "downloads", label: "下载任务", icon: "↓" },
     { key: "library", label: "媒体库", icon: "▤" },
+    { key: "radar", label: "追新雷达", icon: "◎" },
     { key: "sites", label: "站点管理", icon: "⚙" },
     { key: "plugins", label: "插件", icon: "✚" },
     { key: "logs", label: "运行日志", icon: "❯" },
@@ -1045,16 +1046,42 @@
     metadata: "元数据",
   };
 
-  function siteForm(providers) {
+  function optionsField(value) {
+    return {
+      key: "options",
+      label: "高级选项 options（JSON，字段映射/接口路径）",
+      type: "textarea",
+      value: value ? JSON.stringify(value, null, 2) : "",
+      hint: "自定义站点的接口路径与字段映射写在这里；留空表示使用默认值",
+    };
+  }
+
+  function parseOptions(raw) {
+    const text = String(raw || "").trim();
+    if (!text) return {};
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch (error) {
+      throw new Error("options 不是合法 JSON：" + error.message);
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("options 必须是 JSON 对象");
+    }
+    return parsed;
+  }
+
+  function siteForm(providers, preset) {
+    const base = preset || {};
     modal(
-      "新增站点",
+      preset ? "添加站点：" + preset.name : "添加站点",
       [
-        { key: "name", label: "站点名称", placeholder: "自定义显示名" },
+        { key: "name", label: "站点名称", value: base.name || "", placeholder: "自定义显示名" },
         {
           key: "kind",
           label: "类别",
           type: "select",
-          value: "indexer",
+          value: base.kind || "indexer",
           options: Object.keys(KIND_LABELS).map((value) => ({
             value: value,
             label: KIND_LABELS[value],
@@ -1064,7 +1091,7 @@
           key: "provider",
           label: "Provider",
           type: "select",
-          value: "torznab",
+          value: base.provider || "torznab",
           options: providers.map((item) => ({
             value: item.name,
             label: item.display_name + "（" + item.kind + "）",
@@ -1073,26 +1100,199 @@
         {
           key: "url",
           label: "地址 URL",
-          placeholder: "如：http://127.0.0.1:9117/api/v2.0/indexers/all/results/torznab",
+          value: base.url || "",
+          placeholder: "例：https://web5.mukaku.com 或 Torznab 地址",
         },
         { key: "api_key", label: "API Key / Token（可选）" },
         { key: "username", label: "用户名（可选）" },
         { key: "password", label: "密码（可选）", type: "password" },
         { key: "cookie", label: "Cookie（可选）", type: "textarea" },
-        { key: "priority", label: "优先级（越小越优先）", type: "number", value: 50 },
-        { key: "enabled", label: "启用", type: "checkbox", value: true },
+        {
+          key: "priority",
+          label: "优先级（越小越优先）",
+          type: "number",
+          value: base.priority || 50,
+        },
+        optionsField(base.options),
+        { key: "enabled", label: "启用", type: "checkbox", value: false },
       ],
       async (values) => {
         if (!values.name || !values.provider) throw new Error("名称与 Provider 必填");
-        await api("/sites", {
-          method: "POST",
-          body: Object.assign({}, values, { priority: values.priority || 50 }),
+        const payload = Object.assign({}, values, {
+          priority: values.priority || 50,
+          options: parseOptions(values.options),
         });
-        toast("站点已添加", "ok");
+        await api("/sites", { method: "POST", body: payload });
+        toast("站点已添加，建议先点「测试」验证连通性", "ok");
         pageSites();
       },
-      "添加站点"
+      "保存站点"
     );
+  }
+
+  function siteEditForm(row) {
+    modal(
+      "编辑站点：" + row.name,
+      [
+        { key: "name", label: "站点名称", value: row.name },
+        { key: "url", label: "地址 URL", value: row.url || "" },
+        { key: "api_key", label: "API Key / Token（留空不改）" },
+        { key: "cookie", label: "Cookie（留空不改）", type: "textarea" },
+        { key: "priority", label: "优先级", type: "number", value: row.priority },
+        { key: "timeout", label: "超时（秒）", type: "number", value: row.timeout },
+        optionsField(row.options),
+      ],
+      async (values) => {
+        const payload = {
+          name: values.name,
+          url: values.url,
+          priority: values.priority || 50,
+          timeout: values.timeout || 25,
+          options: parseOptions(values.options),
+        };
+        if (values.api_key) payload.api_key = values.api_key;
+        if (values.cookie) payload.cookie = values.cookie;
+        await api("/sites/" + row.id, { method: "PATCH", body: payload });
+        toast("站点已更新", "ok");
+        pageSites();
+      },
+      "保存修改"
+    );
+  }
+
+  async function presetPicker(providers) {
+    const presets = await api("/sites/presets");
+    const cards = presets.map((item) =>
+      el("div", { class: "card", style: "margin-bottom:10px" }, [
+        el("div", { class: "row", style: "justify-content:space-between;align-items:center" }, [
+          el("div", {}, [
+            el("div", { text: item.name }),
+            el("div", { class: "muted mono", style: "font-size:11px", text: item.provider }),
+          ]),
+          item.verified
+            ? el("span", { class: "tag ok", text: "已验证" })
+            : el("span", { class: "tag warn", text: "需填映射" }),
+        ]),
+        el("div", { class: "muted", style: "font-size:12px;margin:6px 0", text: item.description }),
+        el("button", {
+          class: "btn sm primary",
+          text: "使用此模板",
+          onclick: () => {
+            document.getElementById("modal-root").innerHTML = "";
+            siteForm(providers, item);
+          },
+        }),
+      ])
+    );
+
+    const root = document.getElementById("modal-root");
+    const close = () => {
+      root.innerHTML = "";
+    };
+    const mask = el("div", { class: "modal-mask" }, [
+      el("div", { class: "modal" }, [
+        el("h3", { text: "选择站点模板" }),
+        el("div", { class: "muted", style: "margin-bottom:10px", text:
+          "模板已预填接口路径与字段映射，选择后可继续微调。" }),
+        ...cards,
+        el("div", { class: "modal-actions" }, [
+          el("button", { class: "btn ghost", text: "关闭", onclick: close }),
+        ]),
+      ]),
+    ]);
+    mask.addEventListener("click", (event) => {
+      if (event.target === mask) close();
+    });
+    root.appendChild(mask);
+  }
+
+  async function discoverDialog() {
+    const urlInput = el("input", {
+      class: "input",
+      placeholder: "导航站地址（留空使用内置：硬核指南）",
+    });
+    const mediaOnly = el("input", { type: "checkbox" });
+    mediaOnly.checked = true;
+    const listBox = el("div", {}, [
+      el("div", { class: "muted", text: "点击「开始发现」抓取导航站收录的资源站清单。" }),
+    ]);
+
+    const scan = el("button", { class: "btn primary", text: "开始发现" });
+    scan.addEventListener("click", async () => {
+      scan.disabled = true;
+      scan.textContent = "抓取中…";
+      try {
+        const params = new URLSearchParams();
+        if (urlInput.value.trim()) params.set("url", urlInput.value.trim());
+        params.set("media_only", mediaOnly.checked ? "true" : "false");
+        const response = await api("/sites/discover?" + params.toString());
+        const data = response.data;
+        listBox.replaceChildren(
+          el("div", { class: "muted", style: "margin-bottom:8px", text:
+            "发现 " + data.total + " 个站点。导航站只提供入口，需配置为自定义站点后才能搜索。" }),
+          table(
+            [
+              { title: "名称", render: (row) => row.name },
+              {
+                title: "域名",
+                render: (row) =>
+                  el("a", {
+                    class: "mono",
+                    href: row.url,
+                    target: "_blank",
+                    rel: "noreferrer",
+                    text: row.domain,
+                  }),
+              },
+              {
+                title: "标签",
+                render: (row) =>
+                  el("div", { class: "row tight" },
+                    (row.tags || []).slice(0, 3).map((tag) => el("span", { class: "tag", text: tag }))),
+              },
+              {
+                title: "状态",
+                render: (row) =>
+                  row.already_added
+                    ? el("span", { class: "tag ok", text: "已添加" })
+                    : el("span", { class: "muted", text: "未添加" }),
+              },
+            ],
+            data.sites,
+            "未发现候选站点"
+          )
+        );
+        toast("发现 " + data.total + " 个站点", "ok");
+      } catch (error) {
+        toast(error.message, "err");
+      }
+      scan.disabled = false;
+      scan.textContent = "开始发现";
+    });
+
+    const root = document.getElementById("modal-root");
+    const close = () => {
+      root.innerHTML = "";
+    };
+    const mask = el("div", { class: "modal-mask" }, [
+      el("div", { class: "modal", style: "max-width:820px" }, [
+        el("h3", { text: "从导航站发现资源站点" }),
+        el("div", { class: "field" }, [el("label", { text: "导航站地址" }), urlInput]),
+        el("label", { class: "field", style: "display:flex;gap:8px;align-items:center" }, [
+          mediaOnly,
+          el("span", { text: "只显示影视相关站点" }),
+        ]),
+        el("div", { class: "row tight", style: "margin-bottom:10px" }, [scan]),
+        listBox,
+        el("div", { class: "modal-actions" }, [
+          el("button", { class: "btn ghost", text: "关闭", onclick: close }),
+        ]),
+      ]),
+    ]);
+    mask.addEventListener("click", (event) => {
+      if (event.target === mask) close();
+    });
+    root.appendChild(mask);
   }
 
   async function pageSites() {
@@ -1143,7 +1343,13 @@
         }
       });
 
-      return el("div", { class: "row tight" }, [test, toggle, remove]);
+      const edit = el("button", {
+        class: "btn sm ghost",
+        text: "编辑",
+        onclick: () => siteEditForm(row),
+      });
+
+      return el("div", { class: "row tight" }, [test, toggle, edit, remove]);
     };
 
     const groups = Object.keys(KIND_LABELS)
@@ -1206,6 +1412,16 @@
       "站点管理",
       "共 " + sites.length + " 个配置",
       [
+        el("button", {
+          class: "btn",
+          text: "◎ 发现站点",
+          onclick: () => discoverDialog(),
+        }),
+        el("button", {
+          class: "btn",
+          text: "▤ 从模板添加",
+          onclick: () => presetPicker(providers),
+        }),
         el("button", {
           class: "btn primary",
           text: "+ 新增站点",
@@ -1421,6 +1637,170 @@
     box.scrollTop = box.scrollHeight;
   }
 
+  // ---------------- 追新雷达 ----------------
+  async function pageRadar() {
+    shell(loading(), "追新雷达", "拉取各站点最新资源，自动匹配订阅并下载");
+    const [jobs, sites] = await Promise.all([
+      api("/radar/jobs"),
+      api("/sites?kind=indexer&enabled_only=true"),
+    ]);
+
+    const feedBox = el("div", { class: "card" }, [
+      el("h3", { text: "最新资源流" }),
+      el("div", { class: "muted", text: "点击「预览最新流」拉取各站点最新发布的资源。" }),
+    ]);
+
+    const renderFeed = (items) => {
+      feedBox.replaceChildren(
+        el("h3", { text: "最新资源流（" + items.length + " 条）" }),
+        table(
+          [
+            {
+              title: "资源名",
+              render: (row) =>
+                el("div", { class: "truncate", title: row.title, text: row.title }),
+            },
+            { title: "站点", render: (row) => el("span", { class: "tag", text: row.site || "-" }) },
+            {
+              title: "类型",
+              render: (row) =>
+                el("span", {
+                  class: "tag " + (row.kind === "pan" ? "brand" : "ok"),
+                  text: row.kind === "pan" ? "网盘" : "BT",
+                }),
+            },
+            { title: "体积", render: (row) => fmtSize(row.size) },
+            { title: "发布", render: (row) => fmtTime(row.publish_at) },
+          ],
+          items,
+          "没有获取到最新资源，请确认已启用支持最新流的站点"
+        )
+      );
+    };
+
+    const resultBox = el("div", { class: "card" }, [
+      el("h3", { text: "匹配结果" }),
+      el("div", {
+        class: "muted",
+        text: "「预览匹配」只做匹配不下载；「立即追新」会真实投递下载任务。",
+      }),
+    ]);
+
+    const renderRun = (data) => {
+      const rows = data.downloads || [];
+      resultBox.replaceChildren(
+        el("h3", { text: data.dry_run ? "预览匹配结果" : "追新执行结果" }),
+        el("div", { class: "row tight", style: "margin-bottom:10px;flex-wrap:wrap" }, [
+          el("span", { class: "tag", text: "资源 " + (data.resources || 0) }),
+          el("span", { class: "tag", text: "活跃订阅 " + (data.subscribes || 0) }),
+          el("span", { class: "tag ok", text: "命中订阅 " + (data.matched || 0) }),
+          el("span", {
+            class: "tag " + (data.dry_run ? "warn" : "brand"),
+            text: (data.dry_run ? "待下载 " : "已投递 ") + rows.length,
+          }),
+          el("span", { class: "muted", text: (data.elapsed_ms || 0) + "ms" }),
+        ]),
+        table(
+          [
+            { title: "订阅", render: (row) => row.subscribe },
+            {
+              title: "资源名",
+              render: (row) =>
+                el("div", { class: "truncate", title: row.title, text: row.title }),
+            },
+            { title: "集数", render: (row) => (row.episodes || []).join(",") || "-" },
+            { title: "站点", render: (row) => el("span", { class: "tag", text: row.site || "-" }) },
+            { title: "评分", render: (row) => (row.score || 0).toFixed(1) },
+          ],
+          rows,
+          "本轮没有命中任何缺集资源"
+        ),
+        (data.skipped || []).length
+          ? el("div", { style: "margin-top:12px" }, [
+              el("h4", { text: "被过滤的订阅" }),
+              table(
+                [
+                  { title: "订阅", render: (row) => row.title },
+                  { title: "候选数", render: (row) => row.candidates },
+                  { title: "原因", render: (row) => el("span", { class: "muted", text: row.reason }) },
+                ],
+                data.skipped
+              ),
+            ])
+          : null
+      );
+    };
+
+    const previewFeed = el("button", { class: "btn", text: "预览最新流" });
+    previewFeed.addEventListener("click", async () => {
+      previewFeed.disabled = true;
+      previewFeed.textContent = "拉取中…";
+      try {
+        const data = await api("/radar/feed?limit_per_site=30");
+        renderFeed(data.data.items);
+        toast("获取 " + data.data.total + " 条最新资源", "ok");
+      } catch (error) {
+        toast(error.message, "err");
+      }
+      previewFeed.disabled = false;
+      previewFeed.textContent = "预览最新流";
+    });
+
+    const dryRun = el("button", { class: "btn", text: "预览匹配" });
+    dryRun.addEventListener("click", async () => {
+      dryRun.disabled = true;
+      dryRun.textContent = "匹配中…";
+      try {
+        const data = await api("/radar/run?dry_run=true", { method: "POST" });
+        renderRun(data.data);
+        toast("命中 " + data.data.matched + " 个订阅", "ok");
+      } catch (error) {
+        toast(error.message, "err");
+      }
+      dryRun.disabled = false;
+      dryRun.textContent = "预览匹配";
+    });
+
+    const runNow = el("button", { class: "btn primary", text: "立即追新" });
+    runNow.addEventListener("click", async () => {
+      if (!confirm("将拉取各站点最新资源并对缺集自动投递下载，确认继续？")) return;
+      runNow.disabled = true;
+      runNow.textContent = "执行中…";
+      try {
+        const data = await api("/radar/run", { method: "POST" });
+        renderRun(data.data);
+        toast("新增 " + (data.data.downloads || []).length + " 个下载任务", "ok");
+      } catch (error) {
+        toast(error.message, "err");
+      }
+      runNow.disabled = false;
+      runNow.textContent = "立即追新";
+    });
+
+    const jobCard = el("div", { class: "card" }, [
+      el("h3", { text: "定时追新任务" }),
+      jobs.data.jobs.length
+        ? table(
+            [
+              { title: "任务", render: (row) => row.name },
+              { title: "触发规则", render: (row) => el("span", { class: "mono muted", text: row.trigger }) },
+              { title: "下次执行", render: (row) => fmtTime(row.next_run_time) },
+            ],
+            jobs.data.jobs
+          )
+        : el("div", { class: "empty", text: "雷达定时任务未启用（CF_RADAR_ENABLED=false 或调度器已关闭）" }),
+      el("div", { class: "muted", style: "margin-top:10px", text:
+        "当前启用的索引站点：" + (sites.length ? sites.map((s) => s.name).join("、") : "无（请先在站点管理启用站点）") }),
+    ]);
+
+    shell(
+      el("div", { class: "grid" }, [jobCard, resultBox, feedBox]),
+      "追新雷达",
+      "以站点最新流驱动的低延迟追新",
+      [previewFeed, dryRun, runNow]
+    );
+  }
+
   // ---------------- 路由 ----------------
   const ROUTES = {
     dashboard: pageDashboard,
@@ -1428,6 +1808,7 @@
     subscribes: pageSubscribes,
     downloads: pageDownloads,
     library: pageLibrary,
+    radar: pageRadar,
     sites: pageSites,
     plugins: pagePlugins,
     logs: pageLogs,

@@ -198,3 +198,142 @@ def test_transfer_dry_run_api(client, auth_headers, tmp_media):
     assert body["success"] is True
     assert body["total"] == 1
     assert body["items"][0]["target"] is not None
+
+
+# ---------------------------------------------------------------- 自定义站点接口
+def test_site_presets_endpoint(client, auth_headers):
+    """预设模板列表可用，且每个 provider 都真实存在。"""
+    response = client.get("/api/v1/sites/presets", headers=auth_headers)
+    assert response.status_code == 200
+    items = response.json()
+    assert items
+    ids = {item["id"] for item in items}
+    assert {"mukaku", "api_generic", "html_generic"} <= ids
+
+    filtered = client.get(
+        "/api/v1/sites/presets", params={"kind": "pan"}, headers=auth_headers
+    ).json()
+    assert filtered and all(item["kind"] == "pan" for item in filtered)
+
+
+def test_apply_preset_creates_site(client, auth_headers):
+    """套用预设可一键创建站点，默认不启用。"""
+    response = client.post(
+        "/api/v1/sites/presets/mukaku/apply",
+        params={"name": "预设测试站"},
+        headers=auth_headers,
+    )
+    assert response.status_code == 200, response.text
+    site = response.json()
+    assert site["provider"] == "mukaku"
+    assert site["enabled"] is False
+
+    # 重名应拒绝
+    again = client.post(
+        "/api/v1/sites/presets/mukaku/apply",
+        params={"name": "预设测试站"},
+        headers=auth_headers,
+    )
+    assert again.status_code == 409
+
+    assert client.post(
+        "/api/v1/sites/presets/不存在/apply", headers=auth_headers
+    ).status_code == 404
+
+    client.delete(f"/api/v1/sites/{site['id']}", headers=auth_headers)
+
+
+def test_custom_api_site_crud(client, auth_headers):
+    """自定义 JSON API 站点：options 字段映射应完整存取。"""
+    options = {
+        "api_base": "https://custom.test/api",
+        "search_path": "search",
+        "query_key": "kw",
+        "list_path": "data.list",
+        "item_map": {"title": "name", "link": "magnet"},
+    }
+    created = client.post(
+        "/api/v1/sites",
+        json={
+            "name": "自定义接口站",
+            "kind": "indexer",
+            "provider": "api_generic",
+            "url": "https://custom.test",
+            "options": options,
+        },
+        headers=auth_headers,
+    )
+    assert created.status_code == 200, created.text
+    site = created.json()
+    assert site["options"]["item_map"]["title"] == "name"
+
+    # 更新字段映射
+    patched = client.patch(
+        f"/api/v1/sites/{site['id']}",
+        json={"options": {**options, "limit": 50}},
+        headers=auth_headers,
+    )
+    assert patched.json()["options"]["limit"] == 50
+
+    client.delete(f"/api/v1/sites/{site['id']}", headers=auth_headers)
+
+
+def test_discover_endpoint(client, auth_headers, monkeypatch):
+    """站点发现接口：解析导航站并标记已添加。"""
+    from app.services import discovery as discovery_service
+
+    html_text = (
+        '<a href="javascript:" data-id="1" data-url="https://movie.test"'
+        ' title="高清影视：追剧资源站"><div class="text-sm overflowClip_1"> 影视站 </div></a>'
+    )
+
+    async def fake_fetch_text(url, **kwargs):
+        return html_text
+
+    monkeypatch.setattr(discovery_service, "fetch_text", fake_fetch_text)
+
+    response = client.get(
+        "/api/v1/sites/discover", params={"media_only": True}, headers=auth_headers
+    )
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["total"] >= 1
+    site = data["sites"][0]
+    assert site["domain"] == "movie.test"
+    assert "already_added" in site
+    assert data["directories_builtin"]
+
+
+def test_radar_endpoints(client, auth_headers, monkeypatch):
+    """追新雷达接口：预览与手动触发。"""
+    from app.services import radar as radar_service
+
+    async def fake_fetch_feed(limit_per_site=100):
+        from app.providers.base import Resource
+
+        return [
+            Resource(
+                title="Some.Show.S01E01.2160p.WEB-DL",
+                link="magnet:?xt=urn:btih:" + "A" * 32,
+                site="假站点",
+                kind="magnet",
+            )
+        ]
+
+    monkeypatch.setattr(radar_service, "fetch_feed", fake_fetch_feed)
+
+    feed = client.get(
+        "/api/v1/radar/feed", params={"limit_per_site": 5}, headers=auth_headers
+    )
+    assert feed.status_code == 200, feed.text
+    assert feed.json()["data"]["total"] == 1
+
+    run = client.post(
+        "/api/v1/radar/run", params={"dry_run": True}, headers=auth_headers
+    )
+    assert run.status_code == 200, run.text
+    assert run.json()["data"]["dry_run"] is True
+
+    jobs = client.get("/api/v1/radar/jobs", headers=auth_headers)
+    assert jobs.status_code == 200
+    assert "radar_enabled" in jobs.json()["data"]

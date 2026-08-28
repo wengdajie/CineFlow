@@ -41,7 +41,10 @@ min_file_size_mb: 100              # 小于此体积的文件视为样片，不�
 
 # ---------- 调度 ----------
 scheduler_enabled: true
-subscribe_interval_minutes: 30     # 订阅巡检（自动追新）间隔
+subscribe_interval_minutes: 30     # 订阅巡检（逐订阅搜索）间隔
+radar_enabled: true                # 追新雷达：拉站点最新流再匹配订阅
+radar_interval_minutes: 15         # 雷达巡检间隔（设 0 也可关闭）
+radar_limit_per_site: 100          # 每个站点最多取多少条最新资源
 download_check_interval_minutes: 5 # 下载进度同步间隔
 library_scan_cron: "0 4 * * *"     # 媒体库全量扫描（5 段 cron）
 

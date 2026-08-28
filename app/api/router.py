@@ -10,6 +10,7 @@ from app.api.routers import (
     library,
     media,
     plugins,
+    radar,
     search,
     sites,
     subscribes,
@@ -20,6 +21,7 @@ api_router = APIRouter()
 api_router.include_router(auth.router)
 api_router.include_router(search.router)
 api_router.include_router(subscribes.router)
+api_router.include_router(radar.router)
 api_router.include_router(downloads.router)
 api_router.include_router(library.router)
 api_router.include_router(media.router)

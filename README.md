@@ -9,7 +9,7 @@
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)](#-docker-部署推荐)
-[![Tests](https://img.shields.io/badge/tests-82%20passed-brightgreen)](#-测试)
+[![Tests](https://img.shields.io/badge/tests-136%20passed-brightgreen)](#-测试)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 </div>
@@ -72,6 +72,9 @@ CineFlow 是一个**从零实现**的 NAS 影视自动化项目，设计上参�
 | **BT 索引器** | `torznab` | 对接 Jackett / Prowlarr，一个地址接入上百个 PT 与公开站点 |
 | | `rss` | 通用 RSS 订阅，URL 支持 `{keyword}` 占位符实现搜索 |
 | | `nyaa` | Nyaa 动漫站（继承 RSS，预置分类过滤） |
+| **自定义站点** | `api_generic` | **字段映射式，不写代码接入任意 JSON 资源站**；支持「列表直出链接」与「列表+详情两阶段」 |
+| | `html_generic` | **正则映射式，接入没有 API 的网页站**；也可一键抓取页面内全部磁力 |
+| | `mukaku` | 内置预设站点，一次请求同时拿到全部磁力 + 网盘分享，支持最新流追新 |
 | **网盘盘搜** | `pansou` | 对接 PanSou 系 API，聚合夸克/阿里/百度/迅雷/天翼/115/UC/PikPak |
 | | `pan_generic` | **字段映射式，不写代码就能接入任意第三方盘搜 JSON API** |
 
@@ -125,10 +128,24 @@ CineFlow 是一个**从零实现**的 NAS 影视自动化项目，设计上参�
 
 ### 🔁 追新与去重
 
+**两条互补的自动追新链路：**
+
+| | 订阅巡检 | 追新雷达 ⭐ |
+|---|---|---|
+| 驱动方式 | 以订阅为主，逐个订阅去各站**搜索**关键词 | 以站点为主，拉一次各站**最新流**再匹配订阅 |
+| 请求量 | 订阅数 × 站点数 | 站点数（与订阅数无关） |
+| 发现延迟 | 取决于巡检间隔 | 更低，适合日更剧/新番 |
+| 擅长 | 补全历史缺集 | 抢首发、追当天更新 |
+| 默认间隔 | 30 分钟 | 15 分钟 |
+
+两者共用同一套过滤打分与缺集计算，都会写入同一份下载任务，不会重复下载。
+「追新雷达」页可手动 `预览最新流` / `预览匹配`（只匹配不下载）/ `立即追新`。
+
 - **缺集判断双来源**：数据库 `downloaded_episodes` ∪ 媒体库实际扫描到的文件
   → 手动放进去的文件也认，**永不重复下载**
 - **季包优先**：一个季度合集能补齐多集时优先选它
 - **只统计已播出集**：新番不会因为"总集数 12 集"而一直提示缺集
+- **跨站去重**：磁力链按 infohash 归一，同一资源在多站出现只处理一次
 
 ### 🧩 插件系统
 
@@ -162,26 +179,29 @@ CineFlow 是一个**从零实现**的 NAS 影视自动化项目，设计上参�
 ┌──────────────────────────────────────────────────────────────┐
 │  web/  零依赖 Web 控制台（原生 JS，无 CDN）                     │
 └────────────────────────────┬─────────────────────────────────┘
-                             │ REST /api/v1（47 个端点）
+                             │ REST /api/v1（53 个端点）
 ┌────────────────────────────▼─────────────────────────────────┐
-│  app/api/       9 个 router：auth search subscribes downloads │
-│                 library media sites plugins system            │
+│  app/api/      10 个 router：auth search subscribes downloads │
+│                 library media sites plugins system radar      │
 ├──────────────────────────────────────────────────────────────┤
 │  app/services/  业务编排层                                     │
 │    search    多级关键词 · 并发聚合 · 去重                       │
 │    subscribe 缺集计算 · 择优下载 · 巡检                         │
+│    radar     站点最新流 → 匹配订阅 → 自动追新                    │
+│    discovery 导航站解析 → 候选资源站发现                         │
+│    presets   自定义站点配置模板                                 │
 │    download  投递下载器 · 进度同步                             │
 │    library   整理入库 · 扫描 · 刷新媒体服务器                    │
 │    notify    事件总线 + 多渠道推送                              │
-│    scheduler APScheduler（3 内置任务 + 插件任务）                │
+│    scheduler APScheduler（4 内置任务 + 插件任务）                │
 │    sites     DB 配置 → Provider 实例                           │
 ├──────────────────────────────────────────────────────────────┤
 │  app/core/      纯函数内核（无 IO，易测）                        │
 │    meta 解析引擎 · filters 过滤打分 · organizer 命名转移         │
 │    config 三级配置 · security PBKDF2+JWT · logger 环形缓冲       │
 ├──────────────────────────────────────────────────────────────┤
-│  app/providers/ 15 个注册 Provider + TMDB 单例，装饰器自动发现   │
-│    indexer  torznab rss nyaa                                  │
+│  app/providers/ 18 个注册 Provider + TMDB 单例，装饰器自动发现   │
+│    indexer  torznab rss nyaa api_generic html_generic mukaku  │
 │    pan      pansou pan_generic                                │
 │    downloader qbittorrent transmission aria2                  │
 │    mediaserver emby jellyfin plex                             │
@@ -261,6 +281,9 @@ YAML 里的二级 key 会拍平成 `CF_<父>_<子>`，例如 `tmdb.api_key` → 
 | 密钥 | `CF_SECRET_KEY` | — | **务必改成随机串** |
 | 转移模式 | `CF_TRANSFER_MODE` | `link` | `link`/`copy`/`move`/`softlink`/`strm` |
 | 订阅巡检 | `CF_SUBSCRIBE_INTERVAL_MINUTES` | `30` | 分钟 |
+| 追新雷达 | `CF_RADAR_ENABLED` | `true` | 站点最新流巡检总开关 |
+| 雷达间隔 | `CF_RADAR_INTERVAL_MINUTES` | `15` | 分钟，设 0 亦可关闭 |
+| 雷达取量 | `CF_RADAR_LIMIT_PER_SITE` | `100` | 每站最多取多少条最新资源 |
 | 下载同步 | `CF_DOWNLOAD_CHECK_INTERVAL_MINUTES` | `5` | 分钟 |
 | 媒体库扫描 | `CF_LIBRARY_SCAN_CRON` | `0 4 * * *` | 5 段 cron |
 | 画质偏好 | `CF_PREFER_RESOLUTIONS` | `2160p,1080p,720p` | 越靠前优先级越高 |
@@ -274,7 +297,7 @@ YAML 里的二级 key 会拍平成 `CF_<父>_<子>`，例如 `tmdb.api_key` → 
 
 ## 🔌 接入你自己的站点
 
-首次启动会写入 5 条**默认全部禁用**的示例站点（避免启动就对外发请求）。
+首次启动会写入 8 条**默认全部禁用**的示例站点（避免启动就对外发请求）。
 在 **站点管理** 页填好地址后点「启用」即可。
 
 ### BT 站点（Jackett / Prowlarr）
@@ -336,6 +359,138 @@ Provider 选 `pan_generic`，在站点的 `options` 里描述字段映射：
 
 > 💡 网盘资源**不会**进 BT 下载器，而是登记为 `pending` 任务并保留分享链接与提取码。
 > 前端「下载任务」页提供 `打开网盘(码:xxxx)` 按钮；想全自动可启用 `pan_transfer` 插件对接转存服务。
+
+### 自定义资源站点（不写代码接入任意站点）⭐
+
+除了 Torznab / RSS，CineFlow 提供三个**字段映射式**通用 Provider，
+让你把任意资源站描述成配置即可接入，无需改动代码：
+
+| Provider | 适用站点 | 描述方式 |
+|---|---|---|
+| `api_generic` | 返回 JSON 的资源站 | 接口路径 + 字段映射 |
+| `html_generic` | 只有网页、没有 API 的站点 | 正则规则 |
+| `pan_generic` | 第三方盘搜 API | 字段映射 |
+
+站点管理页提供三个入口：
+
+- **`▤ 从模板添加`** —— 选预设模板，接口路径与字段映射已预填
+- **`◎ 发现站点`** —— 从导航站抓取候选资源站清单（见下文）
+- **`+ 新增站点`** —— 完全手工填写
+
+#### 内置预设：Mukaku 影视站（开箱可用）
+
+Provider 选 `mukaku`，地址填 `https://web5.mukaku.com`，其余留空即可。
+该站点的字段映射已内置并验证：**一次详情请求即可同时拿到该片的全部
+BT 磁力与网盘分享链接**，并支持「最新流」用于追新雷达。
+
+| 能力 | 说明 |
+|---|---|
+| 搜索 | `getVideoList` → `getVideoDetail`，返回磁力 + 夸克/百度/迅雷等网盘分享 |
+| 追新 | `getTList`（电影/剧集最新种子流），供追新雷达低延迟发现新集 |
+| 注意 | 中文站，搜索请用**中文片名**（英文原名命中率极低） |
+
+> 实测：搜索《师兄太稳健》返回 66 条资源（60 磁力 + 6 网盘）；
+> 换域名（如 `web9.mukaku.com`）时 API 路径会自动跟随。
+
+#### `api_generic`：JSON API 站点
+
+支持两种形态。**形态一**，列表接口直接带下载链接：
+
+```json
+{
+  "api_base": "https://example.com/api/v1",
+  "fixed_params": { "app_id": "xxx", "identity": "yyy" },
+  "success_key": "code",
+  "success_value": 200,
+  "search_path": "search",
+  "query_key": "keyword",
+  "page_key": "page",
+  "page_base": 1,
+  "limit_key": "limit",
+  "limit": 20,
+  "list_path": "data.list",
+  "item_map": {
+    "title": "name",
+    "link": "magnet",
+    "size": "size",
+    "seeders": "seeders",
+    "publish_at": "created_at",
+    "page_url": "detail_url"
+  }
+}
+```
+
+**形态二**，列表只有影视条目、链接要再请求详情（很常见）：
+
+```json
+{
+  "api_base": "https://example.com/api/v1",
+  "search_path": "getVideoList",
+  "query_key": "sb",
+  "list_path": "data.data",
+  "item_map": { "title": "title", "alias": "alias", "detail_id": "idcode" },
+
+  "detail_path": "getVideoDetail",
+  "detail_query_key": "id",
+  "max_detail_items": 3,
+  "detail_extract": [
+    {
+      "list_path": "data.all_seeds",
+      "kind": "magnet",
+      "label": "BT",
+      "map": { "title": "zname", "link": "zlink", "size": "zsize", "publish_at": "ezt" }
+    },
+    {
+      "list_path": "data.movies_online_seed",
+      "kind": "pan",
+      "label": "网盘",
+      "map": { "title": "seed_name", "link": "link", "password": "code" }
+    }
+  ]
+}
+```
+
+要点：
+
+- **`list_path` / `map` 的值都支持 `a.b.c` 路径**，也能取列表下标（`data.list.0.name`）
+- `detail_extract` 的 `list_path` 若指向**字典套列表**（如网盘按 `quark`/`baidu` 分组），会自动压平
+- `max_detail_items` 限制二次请求数量；候选条目会**先按标题相关性排序**，
+  避免搜「沙丘」时把请求浪费在「沙丘战将」上
+- `kind` 可显式声明 `magnet`/`torrent`/`pan`/`direct`，不写则按链接特征自动推断
+- 追新流用 `latest_path` + `latest_params`（多组参数各请求一次）+ `latest_map`
+
+#### `html_generic`：网页站点（正则）
+
+```json
+{
+  "search_url": "https://example.com/search?q={keyword}&page={page}",
+  "latest_url": "https://example.com/latest",
+  "row_pattern": "<tr class=\"item\">(.*?)</tr>",
+  "field_patterns": {
+    "title": "title=\"([^\"]+)\"",
+    "link": "href=\"(magnet:[^\"]+)\"",
+    "size": "<td class=\"size\">([^<]+)</td>",
+    "seeders": "<td class=\"se\">(\\d+)</td>"
+  },
+  "max_rows": 100
+}
+```
+
+`row_pattern` 先切出每一行，`field_patterns` 再从行内取字段（取第一个捕获组）。
+偷懒方案：只设 `"magnet_only": true`，会直接抓取页面内所有磁力链并按 infohash 去重
+（磁力链 `dn` 参数里的资源名会被还原为标题）。写错的正则只会让该站返回空，不会影响其他站点。
+
+#### 从导航站发现站点
+
+`◎ 发现站点` 会抓取导航站收录的站点清单，供你挑选后添加。内置
+[硬核指南](https://yinghezhinan.com/)（WordPress + OneNav 主题）。
+
+> ⚠️ **导航站本身不提供影视资源与磁力链接**，它只是资源站入口的集合。
+> 因此它不能作为搜索源，只用于「发现」——实测可解析出 123 个站点、
+> 其中 60 个标记为影视相关。发现结果需你自行判断并配置为上面的自定义
+> 站点后才能参与搜索与追新。已配置过的域名会标记「已添加」。
+
+也可以在弹窗里填任意其他导航站地址；非 OneNav 结构会退化为抓取页面外链。
 
 ### 下载器
 
@@ -488,7 +643,7 @@ curl -X POST -H "X-API-Token: your-token" \
      http://127.0.0.1:8611/api/v1/subscribes/run-all
 ```
 
-主要端点分组（共 47 个）：
+主要端点分组（共 53 个）：
 
 | 前缀 | 用途 |
 |---|---|
@@ -498,7 +653,8 @@ curl -X POST -H "X-API-Token: your-token" \
 | `/api/v1/downloads` | 任务列表、手动添加、暂停恢复、删除、同步 |
 | `/api/v1/library` | 统计、文件列表、扫描、手动整理、整理记录、刷新 |
 | `/api/v1/media` | 资源名识别、TMDB 搜索/详情/分集/热榜 |
-| `/api/v1/sites` | 站点 CRUD、连通性测试、Provider 清单 |
+| `/api/v1/sites` | 站点 CRUD、连通性测试、Provider 清单、预设模板、导航站发现 |
+| `/api/v1/radar` | 追新雷达：手动追新、预览匹配、最新流预览、任务状态 |
 | `/api/v1/plugins` | 列表、启停、配置、执行动作 |
 | `/api/v1/system` | 仪表盘、系统信息、调度任务、日志、通知 |
 
@@ -508,7 +664,7 @@ curl -X POST -H "X-API-Token: your-token" \
 
 ```bash
 pip install -r requirements-dev.txt
-pytest -q                 # 82 passed
+pytest -q                 # 136 passed
 ruff check app tests      # 静态检查
 ```
 
@@ -521,19 +677,23 @@ ruff check app tests      # 静态检查
 | `test_api.py` | 端点鉴权与响应结构 |
 | `test_automation.py` | **端到端**：订阅→巡检→下载→同步→入库→缺集收敛→重复巡检不重下 |
 | `test_plugins.py` | 插件发现、启停、配置、动作、事件、cron/interval 注册 |
+| `test_custom_sites.py` | **自定义站点**：JSON 字段映射、两阶段详情抓取、正则解析、导航站发现、预设 |
+| `test_radar.py` | **追新雷达**：标题匹配、跨站去重、缺集命中、过滤规则、dry-run |
 
 全部测试使用内存假 Provider，**全程不触网**。
 
 ### 额外验证脚本
 
-`scripts/` 下另有三个开发期验证工具（详见 [`scripts/README.md`](scripts/README.md)）：
+`scripts/` 下另有五个开发期验证工具（详见 [`scripts/README.md`](scripts/README.md)）：
 
 ```bash
 python -m app.main &                  # 先起服务
 
-python scripts/smoke_test.py          # 56 项真实 HTTP 接口用例
-python scripts/ui_check.py            # Playwright 真浏览器逐页点检 8 个页面，捕获 JS 报错
+python scripts/smoke_test.py          # 67 项真实 HTTP 接口用例
+python scripts/ui_check.py            # Playwright 真浏览器逐页点检 9 个页面，捕获 JS 报错
 python scripts/demo_pipeline.py       # 真实文件演示解析→硬链入库→缺集收敛（无需服务）
+python scripts/live_check.py          # 真实站点端到端：启用 mukaku→搜索→订阅→雷达匹配（联网）
+python scripts/verify_docs.py         # 校验 README 事实声明与代码一致
 ```
 
 ---
@@ -547,14 +707,15 @@ cineflow/
 │   ├── db/            session base models init_db
 │   ├── providers/     base registry + indexer/ pan/ downloader/ mediaserver/ notify/ metadata/
 │   ├── services/      sites search notify download library subscribe scheduler
+│   │                  radar discovery presets
 │   ├── plugins/       base manager
-│   ├── api/           deps router + routers/(9) 
+│   ├── api/           deps router + routers/(10)
 │   ├── schemas/       enums models
 │   ├── utils/         http strings
 │   └── main.py        应用入口（lifespan / CORS / 静态资源）
 ├── web/               index.html + assets/(app.js style.css)  ← 零依赖前端
 ├── plugins/           auto_cleanup pan_transfer daily_digest  ← 示例插件
-├── tests/             7 个测试文件
+├── tests/             9 个测试文件
 ├── scripts/           smoke_test / ui_check / demo_pipeline 验证脚本
 ├── config/            config.yaml.example
 ├── docker/            entrypoint.sh
