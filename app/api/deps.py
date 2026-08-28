@@ -13,6 +13,7 @@ from app.core.security import decode_access_token
 from app.core.version import API_PREFIX
 from app.db.models import User
 from app.db.session import get_db
+from app.schemas.enums import UserRole
 
 oauth2_scheme = OAuth2PasswordBearer(
     tokenUrl=f"{API_PREFIX}/auth/login", auto_error=False
@@ -65,3 +66,48 @@ def require_superuser(user: CurrentUser) -> User:
 
 
 SuperUser = Annotated[User, Depends(require_superuser)]
+
+
+#: 角色显示名（403 提示里用，避免用户看到英文标识一头雾水）
+ROLE_LABELS = {
+    UserRole.ADMIN.value: "管理员",
+    UserRole.OPERATOR.value: "操作员",
+    UserRole.VIEWER.value: "访客",
+}
+
+
+def role_of(user: User) -> UserRole:
+    """取用户角色，非法/缺失时按 ``is_superuser`` 兜底。
+
+    老库补列默认是 ``admin``，但仍可能出现历史脏值；这里做最后一道保险，
+    保证鉴权永远有确定结果（既不放行也不 500）。
+    """
+    try:
+        return UserRole(user.role)
+    except (ValueError, TypeError):
+        return UserRole.ADMIN if user.is_superuser else UserRole.VIEWER
+
+
+def require_role(minimum: UserRole):
+    """生成"至少需要某个角色"的依赖。
+
+    只比较 ``UserRole.rank``（viewer 1 < operator 2 < admin 3），
+    不做细粒度 ACL —— 家用场景真实需求就三档（ADR-19）。
+    """
+
+    def dependency(user: CurrentUser) -> User:
+        if role_of(user).rank < minimum.rank:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"需要{ROLE_LABELS[minimum.value]}及以上权限"
+                f"（当前身份：{ROLE_LABELS[role_of(user).value]}）",
+            )
+        return user
+
+    return dependency
+
+
+#: 可执行「搜索/订阅/下载/整理」等写操作，但改不了系统配置与用户
+OperatorUser = Annotated[User, Depends(require_role(UserRole.OPERATOR))]
+#: 可改系统配置、站点、用户
+AdminUser = Annotated[User, Depends(require_role(UserRole.ADMIN))]

@@ -6,7 +6,7 @@ from typing import Any
 
 from fastapi import APIRouter, Query
 
-from app.api.deps import CurrentUser
+from app.api.deps import CurrentUser, OperatorUser
 from app.core.filters import FilterRule
 from app.schemas.enums import ResourceKind
 from app.schemas.models import SearchRequest
@@ -35,7 +35,7 @@ def _build_rule(payload: SearchRequest) -> FilterRule:
 
 
 @router.post("", summary="聚合搜索（BT 站点 + 网盘）")
-async def do_search(payload: SearchRequest, user: CurrentUser) -> dict[str, Any]:
+async def do_search(payload: SearchRequest, user: OperatorUser) -> dict[str, Any]:
     results = await search_service.search(
         payload.keyword,
         media_type=payload.media_type.value if payload.media_type else None,

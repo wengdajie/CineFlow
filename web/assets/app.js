@@ -17,9 +17,15 @@
   const store = {
     token: localStorage.getItem("cf_token") || "",
     username: localStorage.getItem("cf_user") || "",
+    // 角色只用于**隐藏没权限的入口**（少点误操作），真正的鉴权在服务端
+    role: localStorage.getItem("cf_role") || "admin",
     page: location.hash.replace("#", "") || "dashboard",
     theme: localStorage.getItem(THEME_KEY) || "auto",
   };
+
+  const ROLE_RANK = { viewer: 1, operator: 2, admin: 3 };
+  const ROLE_LABEL = { viewer: "访客", operator: "操作员", admin: "管理员" };
+  const canDo = (minimum) => (ROLE_RANK[store.role] || 3) >= (ROLE_RANK[minimum] || 3);
 
   // ---------------- 主题（暗色 / 浅色 / 跟随系统） ----------------
   const media = window.matchMedia ? window.matchMedia("(prefers-color-scheme: light)") : null;
@@ -90,6 +96,10 @@
     robot: '<rect x="4" y="8" width="16" height="11" rx="3"/><path d="M12 4v4"/><circle cx="9" cy="13" r="1.2"/><circle cx="15" cy="13" r="1.2"/><path d="M9.5 16.5h5"/>',
     folder: '<path d="M3.5 6.5h5l2 2.5h9.5v9.5h-16.5z"/>',
     dot: '<circle cx="12" cy="12" r="4"/>',
+    users: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6"/><path d="M16.5 5.2a3.5 3.5 0 0 1 0 6.6"/><path d="M18 14.4c2.1.7 3.5 2.4 3.5 4.6"/>',
+    pulse: '<path d="M2.5 12.5h4L9 7l3.5 10L15 12h6.5"/>',
+    trophy: '<path d="M7 4h10v4a5 5 0 0 1-10 0z"/><path d="M7 5.5H4.5A3.5 3.5 0 0 0 8 9"/><path d="M17 5.5h2.5A3.5 3.5 0 0 1 16 9"/><path d="M12 13v4"/><path d="M8.5 20h7"/>',
+    layers: '<path d="M12 3.5 3.5 8 12 12.5 20.5 8z"/><path d="m3.5 12.5 8.5 4.5 8.5-4.5"/><path d="m3.5 16.5 8.5 4.5 8.5-4.5"/>',
   };
 
   function icon(name, cls) {
@@ -438,6 +448,7 @@
     store.username = "";
     localStorage.removeItem("cf_token");
     localStorage.removeItem("cf_user");
+    localStorage.removeItem("cf_role");
     render();
     if (!silent) toast("已退出登录");
   }
@@ -462,8 +473,10 @@
         const data = await api("/auth/login", { method: "POST", body: form });
         store.token = data.access_token;
         store.username = data.username;
+        store.role = data.role || "admin";
         localStorage.setItem("cf_token", store.token);
         localStorage.setItem("cf_user", store.username);
+        localStorage.setItem("cf_role", store.role);
         toast("欢迎回来，" + data.username, "ok");
         render();
       } catch (error) {
@@ -510,6 +523,8 @@
     { key: "trending", label: "热度排行", icon: "flame", group: "发现" },
     { key: "subscribes", label: "订阅追新", icon: "star", group: "追剧" },
     { key: "radar", label: "追新雷达", icon: "radar", group: "追剧" },
+    { key: "ranking", label: "榜单订阅", icon: "trophy", group: "追剧" },
+    { key: "rules", label: "过滤规则组", icon: "layers", group: "追剧" },
     { key: "schedules", label: "定时任务", icon: "clock", group: "追剧" },
     { key: "downloads", label: "下载任务", icon: "download", group: "入库" },
     { key: "library", label: "媒体库", icon: "library", group: "入库" },
@@ -517,16 +532,21 @@
     { key: "pansub", label: "分享追更", icon: "link", group: "入库" },
     { key: "strm", label: "STRM 同步", icon: "film", group: "入库" },
     { key: "sites", label: "站点管理", icon: "server", group: "系统" },
+    { key: "sitehealth", label: "站点健康", icon: "pulse", group: "系统" },
     { key: "chatops", label: "机器人", icon: "robot", group: "系统" },
     { key: "plugins", label: "插件", icon: "plugin", group: "系统" },
+    { key: "users", label: "用户权限", icon: "users", group: "系统", role: "admin" },
     { key: "logs", label: "运行日志", icon: "logs", group: "系统" },
     { key: "settings", label: "设置", icon: "settings", group: "系统" },
   ];
 
+  /** 当前角色可见的页面（admin 专属页对访客/操作员直接不出现在导航里）。 */
+  const visiblePages = () => PAGES.filter((page) => !page.role || canDo(page.role));
+
   function shell(content, title, subtitle, actions) {
     const nav = [];
     let lastGroup = null;
-    PAGES.forEach((page) => {
+    visiblePages().forEach((page) => {
       if (page.group !== lastGroup) {
         lastGroup = page.group;
         nav.push(el("div", { class: "nav-label", text: page.group }));
@@ -556,9 +576,14 @@
           ...nav,
           el("div", { class: "nav-spacer" }),
           el("div", { class: "nav-foot" }, [
+            el("div", { class: "nav-role" }, [
+              icon("users", "sm"),
+              el("span", { text: store.username }),
+              el("span", { class: "tag tiny", text: ROLE_LABEL[store.role] || store.role }),
+            ]),
             el("button", { class: "nav-item", onclick: () => logout() }, [
               icon("logout"),
-              el("span", { text: "退出（" + store.username + "）" }),
+              el("span", { text: "退出登录" }),
             ]),
           ]),
         ]),
@@ -4040,30 +4065,959 @@
     );
   }
 
-  // ---------------- 设置 ----------------
+  // ---------------- 站点健康 ----------------
+  const HEALTH_TAGS = {
+    ok: ["正常", "ok"],
+    degraded: ["亚健康", "warn"],
+    down: ["掉线", "err"],
+    unknown: ["未探测", ""],
+  };
+
+  function healthTag(status) {
+    const pair = HEALTH_TAGS[status] || [status, ""];
+    return el("span", { class: "tag dot " + pair[1], text: pair[0] });
+  }
+
+  async function pageSiteHealth() {
+    shell(loading(), "站点健康", "主动探测站点，提前发现 Cookie 过期与掉线");
+    const [data, records] = await Promise.all([
+      api("/site-health"),
+      api("/site-health/records?limit=60").catch(() => ({ items: [] })),
+    ]);
+    const counts = data.counts || {};
+    const items = data.items || [];
+    const history = records.items || [];
+
+    const stats = el("div", { class: "grid cols-4" }, [
+      statCard("正常", String(counts.ok || 0), "搜索有结果、响应正常", "check"),
+      statCard(
+        "亚健康",
+        String(counts.degraded || 0),
+        counts.degraded ? "能连通但 0 结果或极慢，多半是 Cookie 过期" : "没有异常站点",
+        "alert"
+      ),
+      statCard("掉线", String(counts.down || 0), counts.down ? "连不通或报错，检查地址与网络" : "全部可连通", "close"),
+      statCard("未探测", String(counts.unknown || 0), "还没跑过巡检的站点", "info"),
+    ]);
+
+    const configCard = el("div", { class: "card" }, [
+      el("div", { class: "card-head" }, [
+        el("h3", {}, [icon("pulse", "sm"), el("span", { text: "巡检策略" })]),
+        el("span", { class: "tag " + (data.enabled ? "brand" : "warn"), text: data.enabled ? "已启用" : "已关闭" }),
+      ]),
+      el("div", { class: "kv" }, [
+        el("div", { class: "kv-item" }, [
+          el("div", { class: "kv-label", text: "巡检间隔" }),
+          el("div", { text: (data.interval_minutes || 0) + " 分钟" }),
+        ]),
+        el("div", { class: "kv-item" }, [
+          el("div", { class: "kv-label", text: "告警阈值" }),
+          el("div", { text: "连续 " + (data.fail_threshold || 3) + " 次异常才通知" }),
+        ]),
+        el("div", { class: "kv-item" }, [
+          el("div", { class: "kv-label", text: "自动停用" }),
+          el("div", { text: data.auto_disable ? "开启（连续失败自动禁用站点）" : "关闭" }),
+        ]),
+        el("div", { class: "kv-item" }, [
+          el("div", { class: "kv-label", text: "历史记录" }),
+          el("div", { text: String(data.total_records || 0) + " 条" }),
+        ]),
+      ]),
+      el("div", { class: "muted", style: "margin-top:12px" }, [
+        el("span", {
+          text:
+            "搜索类站点会真的搜一次（而不是只探首页）——Cookie 过期时首页照样能打开，" +
+            "只有搜索结果会变成 0 条，这才是最难发现的故障。",
+        }),
+      ]),
+    ]);
+
+    const listCard = el("div", { class: "card flush" }, [
+      el("div", { class: "card-head" }, [
+        el("h3", {}, [icon("server", "sm"), el("span", { text: "站点状态（" + items.length + "）" })]),
+      ]),
+      table(
+        [
+          {
+            title: "站点",
+            render: (row) =>
+              el("div", {}, [
+                el("div", { class: "row tight center" }, [
+                  el("span", { text: row.site }),
+                  row.enabled ? null : el("span", { class: "tag", text: "已禁用" }),
+                ]),
+                el("div", { class: "cell-sub mono tiny", text: row.kind + " · " + row.provider }),
+              ]),
+          },
+          { title: "状态", render: (row) => healthTag(row.status) },
+          { title: "耗时", class: "num", render: (row) => (row.latency_ms ? row.latency_ms + " ms" : "-") },
+          { title: "结果数", class: "num", render: (row) => String(row.result_count || 0) },
+          {
+            title: "说明",
+            render: (row) => el("span", { class: "tiny truncate", title: row.message, text: row.message || "-" }),
+          },
+          { title: "最近探测", render: (row) => fmtRelative(row.checked_at) },
+          {
+            title: "操作",
+            render: (row) =>
+              canDo("operator")
+                ? iconButton("探测", "play", async () => {
+                    try {
+                      const result = await api("/site-health/check/" + row.site_id, { method: "POST" });
+                      toast(result.message || "探测完成", result.status === "ok" ? "ok" : "err");
+                      pageSiteHealth();
+                    } catch (error) {
+                      toast(error.message, "err");
+                    }
+                  }, "sm")
+                : el("span", { class: "dim tiny", text: "无权限" }),
+          },
+        ],
+        items,
+        "还没有站点。先到「站点管理」添加并启用站点"
+      ),
+    ]);
+
+    const historyCard = el("div", { class: "card flush" }, [
+      el("div", { class: "card-head" }, [
+        el("h3", {}, [icon("logs", "sm"), el("span", { text: "探测历史（最近 " + history.length + " 条）" })]),
+      ]),
+      table(
+        [
+          { title: "时间", render: (row) => el("span", { class: "tiny", text: fmtTime(row.created_at) }) },
+          { title: "站点", render: (row) => row.site },
+          { title: "状态", render: (row) => healthTag(row.status) },
+          { title: "耗时", class: "num", render: (row) => (row.latency_ms ? row.latency_ms + " ms" : "-") },
+          {
+            title: "说明",
+            render: (row) => el("span", { class: "tiny truncate", title: row.message, text: row.message || "-" }),
+          },
+        ],
+        history,
+        "还没有探测记录，点右上角「立即巡检」跑一次"
+      ),
+    ]);
+
+    const actions = [iconButton("刷新", "refresh", () => pageSiteHealth())];
+    if (canDo("operator")) {
+      actions.unshift(
+        iconButton("立即巡检", "play", async () => {
+          toast("正在逐站探测，可能需要十几秒…");
+          try {
+            const result = await api("/site-health/check", { method: "POST" });
+            toast(
+              "巡检完成：" + result.checked + " 个站点，异常 " + result.unhealthy + " 个",
+              result.unhealthy ? "err" : "ok"
+            );
+            pageSiteHealth();
+          } catch (error) {
+            toast(error.message, "err");
+          }
+        }, "primary")
+      );
+    }
+
+    shell(
+      el("div", { class: "grid" }, [stats, configCard, listCard, historyCard]),
+      "站点健康",
+      items.length
+        ? items.length + " 个站点 · 异常 " + ((counts.degraded || 0) + (counts.down || 0)) + " 个"
+        : "主动探测站点可用性",
+      actions
+    );
+  }
+
+  // ---------------- 榜单自动订阅 ----------------
+  function rankingForm(row, sources, onDone) {
+    const current = row || {};
+    const defaults = current.subscribe_defaults || {};
+    modal(
+      row ? "编辑榜单规则 · " + row.name : "新建榜单规则",
+      [
+        { key: "name", label: "规则名称", value: current.name || "", placeholder: "如：每周高分新剧" },
+        {
+          key: "source",
+          label: "榜单来源",
+          type: "select",
+          value: current.source || "tmdb_trending",
+          options: sources.map((item) => ({ value: item.value, label: item.label })),
+          hint: "TMDB 榜需要配置 CF_TMDB_API_KEY；没配就用「本地资源热度榜」",
+        },
+        {
+          key: "media_type",
+          label: "类型",
+          type: "select",
+          value: current.media_type || "tv",
+          options: [
+            { value: "tv", label: "剧集" },
+            { value: "movie", label: "电影" },
+          ],
+        },
+        { key: "limit", label: "取榜单前 N 条", type: "number", value: current.limit || 10, hint: "1~100" },
+        { key: "min_vote", label: "评分下限", type: "number", value: current.min_vote || 0, hint: "0 表示不限；TMDB 评分 0~10" },
+        { key: "min_year", label: "年份下限", type: "number", value: current.min_year || "", hint: "留空不限，填 2024 就只要今年之后的" },
+        { key: "include", label: "标题必须包含", value: current.include || "", placeholder: "留空不限，多个用 | 分隔" },
+        { key: "exclude", label: "标题命中即跳过", value: current.exclude || "", placeholder: "真人秀|综艺" },
+        {
+          key: "best_version",
+          label: "自动订阅时开启「最优版本」",
+          type: "checkbox",
+          value: !!defaults.best_version,
+          hint: "会参与洗版（默认关闭，洗版会删旧文件）",
+        },
+        { key: "enabled", label: "启用（参与定时巡检）", type: "checkbox", value: row ? !!current.enabled : true },
+        row
+          ? {
+              key: "reset_handled",
+              label: "清空已处理记录",
+              type: "checkbox",
+              value: false,
+              hint: "默认不会把你删掉的订阅再加回来；勾选后会重新扫一遍全榜",
+            }
+          : null,
+      ].filter(Boolean),
+      async (values) => {
+        const payload = {
+          name: values.name,
+          source: values.source,
+          media_type: values.media_type,
+          limit: Number(values.limit) || 10,
+          min_vote: Number(values.min_vote) || 0,
+          min_year: values.min_year === null || values.min_year === "" ? null : Number(values.min_year),
+          include: values.include || null,
+          exclude: values.exclude || null,
+          subscribe_defaults: { best_version: !!values.best_version },
+          enabled: !!values.enabled,
+        };
+        if (row) {
+          payload.reset_handled = !!values.reset_handled;
+          await api("/ranking-rules/" + row.id, { method: "PATCH", body: payload });
+          toast("已保存", "ok");
+        } else {
+          if (!payload.name) throw new Error("规则名称必填");
+          await api("/ranking-rules", { method: "POST", body: payload });
+          toast("榜单规则已创建", "ok");
+        }
+        if (onDone) onDone();
+      },
+      row ? "保存" : "创建",
+      {
+        wide: true,
+        lead:
+          "让「最近有什么好剧」自动变成订阅。单次最多新建的数量由 CF_RANKING_MAX_PER_RUN 限制，" +
+          "避免一次刷进上百个订阅。",
+      }
+    );
+  }
+
+  /** 试算结果弹窗：先看清会订阅哪些，再决定要不要真的执行。 */
+  function showRankingPreview(rule, result) {
+    const listOf = (rows) =>
+      el(
+        "div",
+        { class: "list" },
+        rows.slice(0, 12).map((item) =>
+          el("div", { class: "list-row" }, [
+            el("span", { class: "tiny", text: item.title }),
+            el("span", { class: "dim tiny", text: item.reason || "" }),
+          ])
+        )
+      );
+
+    panelModal(
+      "试算 · " + rule.name,
+      result.message,
+      el("div", { class: "grid" }, [
+        (result.items || []).length
+          ? el("div", { class: "card soft" }, [
+              el("div", { class: "card-head" }, [el("h3", { text: "将新增订阅（" + result.items.length + "）" })]),
+              el(
+                "div",
+                { class: "list" },
+                result.items.map((item) =>
+                  el("div", { class: "list-row" }, [
+                    el("span", { text: item.title }),
+                    el("span", { class: "dim tiny", text: (item.year || "-") + " · 评分 " + (item.vote_average || "-") }),
+                  ])
+                )
+              ),
+            ])
+          : emptyBox("这一轮不会新增订阅", "info"),
+        (result.skipped || []).length
+          ? el("div", { class: "card soft" }, [
+              el("div", { class: "card-head" }, [el("h3", { text: "跳过（" + result.skipped.length + "）" })]),
+              listOf(result.skipped),
+            ])
+          : null,
+        (result.rejected || []).length
+          ? el("div", { class: "card soft" }, [
+              el("div", { class: "card-head" }, [el("h3", { text: "未通过条件（" + result.rejected.length + "）" })]),
+              listOf(result.rejected),
+            ])
+          : null,
+      ]),
+      true
+    );
+  }
+
+  async function pageRanking() {
+    shell(loading(), "榜单订阅", "把热门榜/高分榜自动变成订阅");
+    const [data, schedules] = await Promise.all([
+      api("/ranking-rules"),
+      api("/schedules").catch(() => ({ items: [] })),
+    ]);
+    const list = data.items || [];
+    const sources = data.sources || [];
+    const job = (schedules.items || []).find((item) => item.key === "ranking");
+
+    const enabled = list.filter((item) => item.enabled).length;
+    const created = list.reduce((sum, item) => sum + (item.created_count || 0), 0);
+
+    const stats = el("div", { class: "grid cols-4" }, [
+      statCard("榜单规则", String(list.length), "配置好的自动订阅规则", "trophy"),
+      statCard("启用中", String(enabled), "会被定时任务执行", "play"),
+      statCard("累计新增订阅", String(created), "由榜单自动创建的订阅数", "star"),
+      statCard(
+        "巡检周期",
+        job ? (job.trigger === "cron" ? job.cron : (job.minutes || 0) + " 分钟") : "-",
+        job && job.enabled ? "下次 " + fmtRelative(job.next_run_at) : "任务未启用",
+        "clock"
+      ),
+    ]);
+
+    const jobCard = el("div", { class: "card" }, [
+      el("div", { class: "card-head" }, [
+        el("h3", {}, [icon("clock", "sm"), el("span", { text: "定时执行" })]),
+        job ? el("span", { class: "tag " + (job.enabled ? "brand" : "warn"), text: job.enabled ? "已启用" : "已关闭" }) : null,
+      ]),
+      el("div", { class: "muted" }, [
+        el("span", {
+          text: job
+            ? "内置任务「" + job.name + "」按周期跑全部启用规则；周期可在这里或「定时任务」页修改。"
+            : "调度信息不可用，请检查调度器状态。",
+        }),
+      ]),
+      job && canDo("admin")
+        ? el("div", { class: "row tight", style: "margin-top:12px" }, [
+            iconButton("修改周期", "edit", () => scheduleForm(job, pageRanking), "sm primary"),
+            iconButton("立即执行", "play", () => runSchedule(job, pageRanking), "sm"),
+          ])
+        : null,
+    ]);
+
+    const listCard = el("div", { class: "card flush" }, [
+      el("div", { class: "card-head" }, [
+        el("h3", {}, [icon("trophy", "sm"), el("span", { text: "规则（" + list.length + "）" })]),
+        canDo("admin") ? iconButton("新建", "plus", () => rankingForm(null, sources, pageRanking), "sm primary") : null,
+      ]),
+      table(
+        [
+          {
+            title: "规则",
+            render: (row) =>
+              el("div", {}, [
+                el("div", { class: "row tight center" }, [
+                  el("span", { text: row.name }),
+                  row.enabled ? null : el("span", { class: "tag", text: "已停用" }),
+                ]),
+                el("div", { class: "cell-sub tiny", text: row.source_label }),
+              ]),
+          },
+          { title: "类型", render: (row) => typeLabel(row.media_type) },
+          {
+            title: "条件",
+            render: (row) =>
+              el("div", { class: "stack tiny" }, [
+                el("div", { class: "dim", text: "取前 " + row.limit + " 条" }),
+                row.min_vote ? el("div", { class: "dim", text: "评分 ≥ " + row.min_vote }) : null,
+                row.min_year ? el("div", { class: "dim", text: "年份 ≥ " + row.min_year }) : null,
+                row.include ? el("div", { class: "dim", text: "含 " + row.include }) : null,
+                row.exclude ? el("div", { class: "dim", text: "排除 " + row.exclude }) : null,
+              ]),
+          },
+          { title: "已建订阅", class: "num", render: (row) => String(row.created_count || 0) },
+          { title: "已处理", class: "num", render: (row) => String(row.handled_count || 0) },
+          {
+            title: "最近执行",
+            render: (row) =>
+              el("div", {}, [
+                el("div", { text: fmtRelative(row.last_run_at) }),
+                row.last_result
+                  ? el("div", { class: "cell-sub truncate", title: row.last_result, text: row.last_result })
+                  : null,
+              ]),
+          },
+          {
+            title: "操作",
+            render: (row) =>
+              el("div", { class: "row tight" }, [
+                iconButton("试算", "info", async () => {
+                  try {
+                    const result = await api("/ranking-rules/" + row.id + "/preview", { method: "POST" });
+                    showRankingPreview(row, result);
+                  } catch (error) {
+                    toast(error.message, "err");
+                  }
+                }, "sm ghost"),
+                canDo("operator")
+                  ? iconButton("执行", "play", async () => {
+                      if (!confirm("立即执行「" + row.name + "」？会真的创建订阅。")) return;
+                      try {
+                        const result = await api("/ranking-rules/" + row.id + "/run", { method: "POST" });
+                        toast(result.message || "执行完成", "ok");
+                        pageRanking();
+                      } catch (error) {
+                        toast(error.message, "err");
+                      }
+                    }, "sm")
+                  : null,
+                canDo("admin") ? iconButton("编辑", "edit", () => rankingForm(row, sources, pageRanking), "sm ghost") : null,
+                canDo("admin")
+                  ? iconButton("删除", "trash", async () => {
+                      if (!confirm("确定删除榜单规则「" + row.name + "」？已创建的订阅不受影响。")) return;
+                      try {
+                        await api("/ranking-rules/" + row.id, { method: "DELETE" });
+                        toast("已删除", "ok");
+                        pageRanking();
+                      } catch (error) {
+                        toast(error.message, "err");
+                      }
+                    }, "sm danger")
+                  : null,
+              ]),
+          },
+        ],
+        list,
+        "还没有榜单规则。点「新建」选一个榜单来源，之后会自动把上榜作品变成订阅"
+      ),
+    ]);
+
+    const actions = [iconButton("刷新", "refresh", () => pageRanking())];
+    if (canDo("operator") && list.length) {
+      actions.unshift(
+        iconButton("执行全部", "play", async () => {
+          if (!confirm("立即执行所有启用规则？会真的创建订阅。")) return;
+          try {
+            const result = await api("/ranking-rules/run-all", { method: "POST" });
+            toast((result.rules || 0) + " 条规则执行完成，新增 " + (result.created || 0) + " 个订阅", "ok");
+            pageRanking();
+          } catch (error) {
+            toast(error.message, "err");
+          }
+        }, "primary")
+      );
+    }
+    if (canDo("admin")) {
+      actions.unshift(iconButton("新建规则", "plus", () => rankingForm(null, sources, pageRanking), "primary"));
+    }
+
+    shell(
+      el("div", { class: "grid" }, [stats, jobCard, listCard]),
+      "榜单订阅",
+      list.length ? list.length + " 条规则 · 累计新增 " + created + " 个订阅" : "把榜单变成自动订阅",
+      actions
+    );
+  }
+
+  // ---------------- 过滤规则组 ----------------
+  /** 层级用「每行一层」的文本编辑：字段少、可复制粘贴，比动态表单更好用也更耐改。 */
+  function levelsToText(levels) {
+    return (levels || [])
+      .map((level) =>
+        [level.name || "", level.resolution || "", level.quality || "", level.include || "", level.exclude || ""].join(" | ")
+      )
+      .join("\n");
+  }
+
+  function textToLevels(text) {
+    return String(text || "")
+      .split(/\n+/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const cols = line.split("|").map((item) => item.trim());
+        return {
+          name: cols[0] || "",
+          resolution: cols[1] || "",
+          quality: cols[2] || "",
+          include: cols[3] || "",
+          exclude: cols[4] || "",
+        };
+      });
+  }
+
+  function ruleGroupForm(row, onDone) {
+    const current = row || {};
+    modal(
+      row ? "编辑规则组 · " + row.name : "新建规则组",
+      [
+        { key: "name", label: "名称", value: current.name || "", placeholder: "如：1080p 中字优先" },
+        { key: "description", label: "说明", value: current.description || "", placeholder: "这个规则组适合什么场景" },
+        {
+          key: "levels",
+          label: "层级（每行一层，越靠前越优先）",
+          type: "textarea",
+          rows: 6,
+          value: levelsToText(current.levels),
+          hint: "格式：层名 | 分辨率 | 质量 | 必含 | 排除，留空即不限。示例：1080p中字 | 1080p | | 中字,简繁 |",
+        },
+        {
+          key: "accept_unmatched",
+          label: "接受未命中任何层的资源",
+          type: "checkbox",
+          value: row ? !!current.accept_unmatched : true,
+          hint: "关掉就是「宁可不下，也不要不合规的版本」",
+        },
+        { key: "is_default", label: "设为默认组（全局生效）", type: "checkbox", value: !!current.is_default },
+        { key: "enabled", label: "启用", type: "checkbox", value: row ? !!current.enabled : true },
+      ],
+      async (values) => {
+        const payload = {
+          name: values.name,
+          description: values.description || null,
+          levels: textToLevels(values.levels),
+          accept_unmatched: !!values.accept_unmatched,
+          is_default: !!values.is_default,
+          enabled: !!values.enabled,
+        };
+        if (!payload.levels.length) throw new Error("至少写一行层级");
+        if (row) {
+          await api("/rule-groups/" + row.id, { method: "PATCH", body: payload });
+          toast("已保存", "ok");
+        } else {
+          if (!payload.name) throw new Error("名称必填");
+          await api("/rule-groups", { method: "POST", body: payload });
+          toast("规则组已创建", "ok");
+        }
+        if (onDone) onDone();
+      },
+      row ? "保存" : "创建",
+      {
+        wide: true,
+        lead:
+          "全局评分只能表达「4K 比 1080p 好」这种单调偏好；规则组用有序分层表达" +
+          "「宁可 1080p 中字，也不要没字幕的 4K」——层间定优先，层内仍按评分排序。",
+      }
+    );
+  }
+
+  /** 用固定样例试算：不联网、不跑搜索，纯看这组规则会怎么排序。 */
+  async function previewRuleGroup(row) {
+    const GB = 1024 * 1024 * 1024;
+    const samples = [
+      { title: "示例剧 S01E01.2160p.WEB-DL.H265.mkv", size: 6 * GB, seeders: 30, kind: "torrent" },
+      { title: "示例剧 S01E01.1080p.BluRay.中字.mkv", size: 4 * GB, seeders: 80, kind: "torrent" },
+      { title: "示例剧 S01E01.1080p.WEB-DL.mkv", size: 2 * GB, seeders: 50, kind: "torrent" },
+      { title: "示例剧 S01E01.720p.HDTV.mp4", size: 0.9 * GB, seeders: 10, kind: "torrent" },
+    ];
+    try {
+      const result = await api("/rule-groups/" + row.id + "/preview", {
+        method: "POST",
+        body: { resources: samples },
+      });
+      panelModal(
+        "试算 · " + result.group,
+        "用 4 个典型样例看排序结果（命中层号越小越优先）",
+        el("div", { class: "grid" }, [
+          el("div", { class: "card soft" }, [
+            el("div", { class: "card-head" }, [el("h3", { text: "规则说明" })]),
+            el(
+              "div",
+              { class: "stack tiny" },
+              (result.summary || []).map((line) => el("div", { class: "dim", text: line }))
+            ),
+          ]),
+          table(
+            [
+              { title: "排序", class: "num", render: (item, index) => String(index + 1) },
+              { title: "资源", render: (item) => el("span", { class: "tiny", text: item.title }) },
+              {
+                title: "命中层",
+                render: (item) =>
+                  item.rule_level >= 9999
+                    ? el("span", { class: "tag warn", text: "未命中（兜底）" })
+                    : el("span", {
+                        class: "tag brand",
+                        text: "第 " + (item.rule_level + 1) + " 层 " + (item.rule_level_name || ""),
+                      }),
+              },
+              { title: "评分", class: "num", render: (item) => String(item.score) },
+            ],
+            result.items || [],
+            "全部被剔除"
+          ),
+          result.dropped
+            ? el("div", {
+                class: "muted",
+                text: "有 " + result.dropped + " 个样例因未命中任何层被剔除（已关闭兜底接受）",
+              })
+            : null,
+        ]),
+        true
+      );
+    } catch (error) {
+      toast(error.message, "err");
+    }
+  }
+
+  async function pageRuleGroups() {
+    shell(loading(), "过滤规则组", "有序分层的偏好，比单一评分更贴近真实需求");
+    const data = await api("/rule-groups");
+    const list = data.items || [];
+
+    const stats = el("div", { class: "grid cols-4" }, [
+      statCard("规则组", String(list.length), "可复用的偏好模板", "layers"),
+      statCard("启用中", String(list.filter((item) => item.enabled).length), "可被订阅引用", "check"),
+      statCard("默认组", data.default || "未设置", data.default ? "搜索与订阅默认套用" : "当前只按全局评分排序", "star"),
+      statCard(
+        "层级总数",
+        String(list.reduce((sum, item) => sum + (item.level_count || 0), 0)),
+        "所有规则组的层数合计",
+        "chart"
+      ),
+    ]);
+
+    const listCard = el("div", { class: "card flush" }, [
+      el("div", { class: "card-head" }, [
+        el("h3", {}, [icon("layers", "sm"), el("span", { text: "规则组（" + list.length + "）" })]),
+        canDo("admin") ? iconButton("新建", "plus", () => ruleGroupForm(null, pageRuleGroups), "sm primary") : null,
+      ]),
+      table(
+        [
+          {
+            title: "规则组",
+            render: (row) =>
+              el("div", {}, [
+                el("div", { class: "row tight center" }, [
+                  el("span", { text: row.name }),
+                  row.is_default ? el("span", { class: "tag brand", text: "默认" }) : null,
+                  row.enabled ? null : el("span", { class: "tag", text: "已停用" }),
+                ]),
+                row.description ? el("div", { class: "cell-sub tiny", text: row.description }) : null,
+              ]),
+          },
+          {
+            title: "层级",
+            render: (row) =>
+              el(
+                "div",
+                { class: "stack tiny" },
+                (row.summary || []).slice(0, 5).map((line) => el("div", { class: "dim", text: line }))
+              ),
+          },
+          { title: "层数", class: "num", render: (row) => String(row.level_count || 0) },
+          {
+            title: "兜底",
+            render: (row) =>
+              row.accept_unmatched
+                ? el("span", { class: "tag", text: "接受其它" })
+                : el("span", { class: "tag warn", text: "只要命中的" }),
+          },
+          {
+            title: "操作",
+            render: (row) =>
+              el("div", { class: "row tight" }, [
+                iconButton("试算", "info", () => previewRuleGroup(row), "sm ghost"),
+                canDo("admin") && !row.is_default
+                  ? iconButton("设为默认", "check", async () => {
+                      try {
+                        await api("/rule-groups/" + row.id, { method: "PATCH", body: { is_default: true } });
+                        toast("已设为默认规则组", "ok");
+                        pageRuleGroups();
+                      } catch (error) {
+                        toast(error.message, "err");
+                      }
+                    }, "sm")
+                  : null,
+                canDo("admin") ? iconButton("编辑", "edit", () => ruleGroupForm(row, pageRuleGroups), "sm ghost") : null,
+                canDo("admin")
+                  ? iconButton("删除", "trash", async () => {
+                      if (!confirm("确定删除规则组「" + row.name + "」？引用它的订阅会自动解绑。")) return;
+                      try {
+                        await api("/rule-groups/" + row.id, { method: "DELETE" });
+                        toast("已删除", "ok");
+                        pageRuleGroups();
+                      } catch (error) {
+                        toast(error.message, "err");
+                      }
+                    }, "sm danger")
+                  : null,
+              ]),
+          },
+        ],
+        list,
+        "还没有规则组"
+      ),
+    ]);
+
+    const helpCard = el("div", { class: "card" }, [
+      el("div", { class: "card-head" }, [el("h3", {}, [icon("info", "sm"), el("span", { text: "怎么用" })])]),
+      el(
+        "div",
+        { class: "stack" },
+        [
+          "1. 层级是有序的：命中靠前层的资源整体优于靠后层，层内再按既有评分排序。",
+          "2. 设为「默认组」后，手动搜索与所有未单独绑定规则组的订阅都会套用它。",
+          "3. 关掉「接受未命中」= 宁可这轮不下载，也不要不合规的版本。",
+          "4. 点「试算」可以先看排序效果，不用真的跑一次搜索。",
+        ].map((line) => el("div", { class: "muted", text: line }))
+      ),
+    ]);
+
+    shell(
+      el("div", { class: "grid" }, [stats, listCard, helpCard]),
+      "过滤规则组",
+      list.length ? list.length + " 个规则组 · 默认：" + (data.default || "未设置") : "配置有序的画质偏好",
+      canDo("admin")
+        ? [
+            iconButton("新建规则组", "plus", () => ruleGroupForm(null, pageRuleGroups), "primary"),
+            iconButton("刷新", "refresh", () => pageRuleGroups()),
+          ]
+        : [iconButton("刷新", "refresh", () => pageRuleGroups())]
+    );
+  }
+
+  // ---------------- 用户与权限 ----------------
+  function userForm(row, roles, onDone) {
+    const current = row || {};
+    modal(
+      row ? "编辑用户 · " + row.username : "新增用户",
+      [
+        row ? null : { key: "username", label: "用户名", value: "", placeholder: "2~64 个字符" },
+        {
+          key: "password",
+          label: row ? "重置密码" : "密码",
+          type: "password",
+          value: "",
+          hint: row ? "留空表示不改密码" : "至少 6 位",
+        },
+        {
+          key: "role",
+          label: "角色",
+          type: "select",
+          value: current.role || "viewer",
+          options: roles.map((item) => ({ value: item.value, label: item.label })),
+          hint: "访客只读；操作员可搜索/订阅/下载；管理员可改配置与用户",
+        },
+        { key: "note", label: "备注", value: current.note || "", placeholder: "如：客厅电视用的账号" },
+        { key: "is_active", label: "启用", type: "checkbox", value: row ? !!current.is_active : true },
+      ].filter(Boolean),
+      async (values) => {
+        if (row) {
+          const payload = { role: values.role, note: values.note || null, is_active: !!values.is_active };
+          if (values.password) payload.password = values.password;
+          await api("/users/" + row.id, { method: "PATCH", body: payload });
+          toast("已保存", "ok");
+        } else {
+          if (!values.username || !values.password) throw new Error("用户名与密码必填");
+          await api("/users", {
+            method: "POST",
+            body: {
+              username: values.username,
+              password: values.password,
+              role: values.role,
+              note: values.note || null,
+              is_active: !!values.is_active,
+            },
+          });
+          toast("用户已创建", "ok");
+        }
+        if (onDone) onDone();
+      },
+      row ? "保存" : "创建",
+      { lead: "三档权限刻意做得很简单：管理员 / 操作员 / 访客。给家人开号建议选「操作员」。" }
+    );
+  }
+
+  async function pageUsers() {
+    shell(loading(), "用户权限", "多用户与三档角色");
+    const data = await api("/users");
+    const list = data.items || [];
+    const roles = data.roles || [];
+
+    const stats = el("div", { class: "grid cols-4" }, [
+      statCard("用户", String(list.length), "本地账号总数", "users"),
+      statCard("管理员", String(list.filter((item) => item.role === "admin").length), "可改配置与用户", "check"),
+      statCard("操作员", String(list.filter((item) => item.role === "operator").length), "可订阅下载，不能改配置", "play"),
+      statCard("访客", String(list.filter((item) => item.role === "viewer").length), "只读", "info"),
+    ]);
+
+    const listCard = el("div", { class: "card flush" }, [
+      el("div", { class: "card-head" }, [
+        el("h3", {}, [icon("users", "sm"), el("span", { text: "账号（" + list.length + "）" })]),
+        iconButton("新增用户", "plus", () => userForm(null, roles, pageUsers), "sm primary"),
+      ]),
+      table(
+        [
+          {
+            title: "用户",
+            render: (row) =>
+              el("div", {}, [
+                el("div", { class: "row tight center" }, [
+                  el("span", { text: row.username }),
+                  row.username === store.username ? el("span", { class: "tag brand", text: "当前登录" }) : null,
+                  row.is_active ? null : el("span", { class: "tag warn", text: "已停用" }),
+                ]),
+                row.note ? el("div", { class: "cell-sub tiny", text: row.note }) : null,
+              ]),
+          },
+          {
+            title: "角色",
+            render: (row) =>
+              el("span", {
+                class: "tag " + (row.role === "admin" ? "brand" : row.role === "operator" ? "ok" : ""),
+                text: row.role_label,
+              }),
+          },
+          { title: "上次登录", render: (row) => fmtRelative(row.last_login_at) },
+          { title: "创建时间", render: (row) => el("span", { class: "tiny", text: fmtTime(row.created_at) }) },
+          {
+            title: "操作",
+            render: (row) =>
+              el("div", { class: "row tight" }, [
+                iconButton("编辑", "edit", () => userForm(row, roles, pageUsers), "sm ghost"),
+                row.username === store.username
+                  ? el("span", { class: "dim tiny", text: "不能删自己" })
+                  : iconButton("删除", "trash", async () => {
+                      if (!confirm("确定删除用户「" + row.username + "」？")) return;
+                      try {
+                        await api("/users/" + row.id, { method: "DELETE" });
+                        toast("已删除", "ok");
+                        pageUsers();
+                      } catch (error) {
+                        toast(error.message, "err");
+                      }
+                    }, "sm danger"),
+              ]),
+          },
+        ],
+        list,
+        "没有用户"
+      ),
+    ]);
+
+    const helpCard = el("div", { class: "card" }, [
+      el("div", { class: "card-head" }, [el("h3", {}, [icon("info", "sm"), el("span", { text: "权限说明" })])]),
+      el(
+        "div",
+        { class: "stack" },
+        [
+          "管理员：全部权限，包括改配置、管站点、管用户、改定时任务周期。",
+          "操作员：搜索、订阅、下载、整理入库、转存、执行任务；不能改系统配置与用户。",
+          "访客：只能查看各页面数据，任何写操作都会被服务端以 403 拒绝。",
+          "自我保护：不能删除或停用自己，也不能把最后一个启用中的管理员降级。",
+        ].map((line) => el("div", { class: "muted", text: line }))
+      ),
+    ]);
+
+    shell(
+      el("div", { class: "grid" }, [stats, listCard, helpCard]),
+      "用户权限",
+      list.length + " 个账号 · 三档角色（管理员/操作员/访客）",
+      [
+        iconButton("新增用户", "plus", () => userForm(null, roles, pageUsers), "primary"),
+        iconButton("刷新", "refresh", () => pageUsers()),
+      ]
+    );
+  }
+
+  // ---------------- 设置（v1.5.0 起可在线编辑） ----------------
+  /** 按字段元信息渲染一个控件，返回 { node, get, dirty }。 */
+  function settingControl(item) {
+    if (!item.editable) {
+      return {
+        node: el("div", { class: "row tight center" }, [
+          el("span", {
+            class: "mono" + (item.secret ? " dim" : ""),
+            text: typeof item.value === "boolean" ? (item.value ? "开启" : "关闭") : String(item.value === "" ? "（空）" : item.value),
+          }),
+          el("span", { class: "tag tiny", text: "需重启" }),
+        ]),
+        get: () => undefined,
+      };
+    }
+
+    const initial = item.raw;
+    if (item.type === "bool") {
+      const input = el("input", { type: "checkbox" });
+      input.checked = !!initial;
+      return {
+        node: el("label", { class: "field-check inline" }, [input, el("span", { text: input.checked ? "开启" : "关闭" })]),
+        get: () => input.checked,
+        changed: () => input.checked !== !!initial,
+      };
+    }
+    if (item.type === "choice") {
+      const input = el(
+        "select",
+        { class: "input sm" },
+        (item.choices || []).map((value) => el("option", { value: value, selected: value === initial }, value))
+      );
+      return { node: input, get: () => input.value, changed: () => input.value !== initial };
+    }
+    const input = el("input", {
+      class: "input sm",
+      type: item.type === "int" || item.type === "float" ? "number" : "text",
+    });
+    if (item.type === "int" || item.type === "float") {
+      if (item.minimum !== null && item.minimum !== undefined) input.min = String(item.minimum);
+      if (item.maximum !== null && item.maximum !== undefined) input.max = String(item.maximum);
+      if (item.type === "float") input.step = "0.1";
+    }
+    input.value = initial === null || initial === undefined ? "" : String(initial);
+    return {
+      node: input,
+      get: () => input.value.trim(),
+      changed: () => input.value.trim() !== (initial === null || initial === undefined ? "" : String(initial)),
+    };
+  }
+
   async function pageSettings() {
-    shell(loading(), "设置", "生效配置总览与账号安全");
+    shell(loading(), "设置", "在线修改配置并立即生效");
     const [data, info, me] = await Promise.all([
       api("/system/settings"),
       api("/system/info"),
       api("/auth/me").catch(() => null),
     ]);
+    const isAdmin = canDo("admin");
+    const controls = {};
 
     const groups = (data.groups || []).map((group) =>
       el("div", { class: "card flush" }, [
         el("div", { class: "card-head" }, [
           el("h3", {}, [icon("settings", "sm"), el("span", { text: group.title })]),
+          el("span", {
+            class: "tag tiny",
+            text: group.items.filter((item) => item.editable).length + " 项可改",
+          }),
         ]),
         table(
           [
-            { title: "配置项", render: (row) => el("span", { class: "mono", text: row.env }) },
             {
-              title: "当前值",
+              title: "配置项",
               render: (row) =>
-                el("span", {
-                  class: "mono" + (row.secret ? " dim" : ""),
-                  text: typeof row.value === "boolean" ? (row.value ? "开启" : "关闭") : String(row.value === "" ? "（空）" : row.value),
-                }),
+                el("div", {}, [
+                  el("div", { text: row.label || row.key }),
+                  el("div", { class: "cell-sub mono tiny", text: row.env }),
+                ]),
+            },
+            {
+              title: "值",
+              render: (row) => {
+                // 非管理员一律只读展示：即使前端放开了，服务端也会 403
+                const control = isAdmin ? settingControl(row) : settingControl({ ...row, editable: false });
+                if (row.editable && isAdmin) controls[row.key] = control;
+                return control.node;
+              },
+            },
+            {
+              title: "说明",
+              render: (row) =>
+                el("div", { class: "stack tiny" }, [
+                  row.hint ? el("div", { class: "dim", text: row.hint }) : null,
+                  row.reschedule ? el("div", { class: "dim", text: "改动后会重建定时任务触发器" }) : null,
+                  row.overridden ? el("span", { class: "tag brand tiny", text: "已被在线修改" }) : null,
+                ]),
             },
           ],
           group.items,
@@ -4072,10 +5026,60 @@
       ])
     );
 
+    const saveBar = isAdmin
+      ? el("div", { class: "card" }, [
+          el("div", { class: "card-head" }, [
+            el("h3", {}, [icon("check", "sm"), el("span", { text: "保存改动" })]),
+            el("span", { class: "tag tiny", text: data.editable_total + " 项可在线修改" }),
+          ]),
+          el("div", { class: "muted", text: data.note }),
+          el("div", { class: "row tight", style: "margin-top:14px" }, [
+            iconButton("保存并生效", "check", async () => {
+              const values = {};
+              Object.keys(controls).forEach((key) => {
+                const control = controls[key];
+                // 只提交真正改过的项：整份提交会把「界面显示的旧值」当成用户意图写回去
+                if (!control.changed || control.changed()) values[key] = control.get();
+              });
+              if (!Object.keys(values).length) {
+                toast("没有改动");
+                return;
+              }
+              try {
+                const result = await api("/system/settings", { method: "PUT", body: { values: values } });
+                toast(result.message, "ok");
+                pageSettings();
+              } catch (error) {
+                toast(error.message, "err");
+              }
+            }, "primary"),
+            (data.overridden || []).length
+              ? iconButton("全部恢复默认", "refresh", async () => {
+                  if (!confirm("把 " + data.overridden.length + " 项在线修改全部恢复为配置文件里的值？")) return;
+                  try {
+                    const result = await api("/system/settings/reset", { method: "POST", body: { keys: null } });
+                    toast(result.message, "ok");
+                    pageSettings();
+                  } catch (error) {
+                    toast(error.message, "err");
+                  }
+                }, "ghost")
+              : null,
+          ]),
+          (data.overridden || []).length
+            ? el("div", { class: "row tight wrap", style: "margin-top:12px" },
+                data.overridden.map((key) => el("span", { class: "tag brand tiny", text: key })))
+            : null,
+        ])
+      : el("div", { class: "card" }, [
+          el("div", { class: "card-head" }, [el("h3", {}, [icon("info", "sm"), el("span", { text: "只读模式" })])]),
+          el("div", { class: "muted", text: "当前角色（" + (ROLE_LABEL[store.role] || store.role) + "）不能修改配置，请联系管理员。" }),
+        ]);
+
     const accountCard = el("div", { class: "card" }, [
       el("div", { class: "card-head" }, [
-        el("h3", {}, [icon("logout", "sm"), el("span", { text: "账号" })]),
-        me && me.is_superuser ? el("span", { class: "tag brand", text: "管理员" }) : null,
+        el("h3", {}, [icon("users", "sm"), el("span", { text: "账号" })]),
+        el("span", { class: "tag brand", text: (me && me.role_label) || ROLE_LABEL[store.role] || "-" }),
       ]),
       el("div", { class: "kv" }, [
         el("div", { class: "kv-item" }, [
@@ -4117,22 +5121,29 @@
             "更新"
           );
         }, "sm primary"),
-        iconButton("测试通知渠道", "info", async () => {
-          try {
-            const result = await api("/system/notify/test", { method: "POST" });
-            toast(result.message, result.success ? "ok" : "err");
-          } catch (error) {
-            toast(error.message, "err");
-          }
-        }, "sm"),
+        isAdmin
+          ? iconButton("测试通知渠道", "info", async () => {
+              try {
+                const result = await api("/system/notify/test", { method: "POST" });
+                toast(result.message, result.success ? "ok" : "err");
+              } catch (error) {
+                toast(error.message, "err");
+              }
+            }, "sm")
+          : null,
+        isAdmin ? iconButton("用户管理", "users", () => go("users"), "sm ghost") : null,
       ]),
     ]);
 
     const noteCard = el("div", { class: "card" }, [
       el("div", { class: "card-head" }, [
-        el("h3", {}, [icon("info", "sm"), el("span", { text: "如何修改配置" })]),
+        el("h3", {}, [icon("info", "sm"), el("span", { text: "配置优先级" })]),
       ]),
-      el("div", { class: "muted", text: data.note }),
+      el("div", { class: "stack" }, [
+        el("div", { class: "muted", text: "1. 界面在线修改（存数据库，最高优先级，重启仍在）" }),
+        el("div", { class: "muted", text: "2. 环境变量 CF_xxx / .env" }),
+        el("div", { class: "muted", text: "3. config/config.yaml" }),
+      ]),
       el("div", { class: "divider" }),
       el("div", { class: "kv" }, [
         el("div", { class: "kv-item" }, [
@@ -4141,9 +5152,7 @@
         ]),
         el("div", { class: "kv-item" }, [
           el("div", { class: "kv-label", text: "文件状态" }),
-          el("div", {
-            text: data.config_file_exists ? "已存在（优先级低于环境变量）" : "不存在（全部走默认值/.env）",
-          }),
+          el("div", { text: data.config_file_exists ? "已存在" : "不存在（走默认值/.env）" }),
         ]),
       ]),
     ]);
@@ -4151,10 +5160,11 @@
     shell(
       el("div", { class: "grid" }, [
         el("div", { class: "grid cols-2" }, [accountCard, noteCard]),
+        saveBar,
         ...groups,
       ]),
       "设置",
-      "共 " + (data.groups || []).length + " 组配置 · 敏感项已脱敏",
+      (data.groups || []).length + " 组配置 · " + data.editable_total + " 项可在线改 · 敏感项已脱敏",
       [iconButton("刷新", "refresh", () => pageSettings())]
     );
   }
@@ -4170,6 +5180,10 @@
     library: pageLibrary,
     radar: pageRadar,
     sites: pageSites,
+    sitehealth: pageSiteHealth,
+    ranking: pageRanking,
+    rules: pageRuleGroups,
+    users: pageUsers,
     plugins: pagePlugins,
     logs: pageLogs,
     storage: pageStorage,

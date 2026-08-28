@@ -5,7 +5,7 @@ from typing import Any
 
 from fastapi import APIRouter, Query
 
-from app.api.deps import CurrentUser
+from app.api.deps import CurrentUser, OperatorUser
 from app.services import radar as radar_service
 from app.services.scheduler import scheduler_service
 
@@ -14,7 +14,7 @@ router = APIRouter(prefix="/radar", tags=["追新雷达"])
 
 @router.post("/run", summary="手动触发一轮追新雷达")
 async def run_radar(
-    user: CurrentUser,
+    user: OperatorUser,
     dry_run: bool = Query(False, description="仅预览匹配结果，不发起下载"),
 ) -> dict[str, Any]:
     """立即执行一轮追新雷达。"""
@@ -24,7 +24,7 @@ async def run_radar(
 
 @router.get("/feed", summary="最新资源流预览")
 async def feed_preview(
-    user: CurrentUser,
+    user: OperatorUser,
     limit_per_site: int = Query(20, ge=1, le=200),
 ) -> dict[str, Any]:
     """拉取各站点最新资源列表（不订阅匹配，仅预览）。"""

@@ -8,9 +8,9 @@ from app.core.config import settings
 from app.core.logger import get_logger
 from app.core.security import hash_password
 from app.db.base import Base
-from app.db.models import SiteConfig, User
+from app.db.models import FilterRuleGroup, SiteConfig, User
 from app.db.session import engine, session_scope
-from app.schemas.enums import ProviderKind
+from app.schemas.enums import ProviderKind, UserRole
 
 logger = get_logger(__name__)
 
@@ -160,6 +160,82 @@ DEFAULT_SITES = [
 ]
 
 
+#: 内置过滤规则组模板（有序偏好；默认只启用「均衡」那一组）
+#: 内置过滤规则组模板。
+#: **刻意全部不设为默认组**：规则组会改变搜索结果的排序，
+#: 升级后悄悄换掉用户熟悉的排序是很糟糕的体验——让用户自己去「规则组」页点一下设为默认。
+DEFAULT_RULE_GROUPS = [
+    {
+        "name": "画质优先（4K 优先）",
+        "description": "先要 4K REMUX/BluRay，其次 4K WEB-DL，再退 1080p；适合大容量存储",
+        "levels": [
+            {"name": "4K REMUX", "resolution": "2160p", "quality": "REMUX|BluRay"},
+            {"name": "4K WEB-DL", "resolution": "2160p", "quality": "WEB-DL|WEBRip"},
+            {"name": "1080p 高码", "resolution": "1080p", "quality": "REMUX|BluRay"},
+            {"name": "1080p", "resolution": "1080p"},
+        ],
+        "accept_unmatched": False,
+        "is_default": False,
+        "enabled": True,
+    },
+    {
+        "name": "均衡（1080p 中字优先）",
+        "description": "优先 1080p 且带中文字幕，再退 4K，最后接受其它；日常追剧推荐，"
+                       "想全局启用就把它设为默认组",
+        "levels": [
+            {"name": "1080p 中字", "resolution": "1080p", "include": "中字|简繁|简体|繁体|中文"},
+            {"name": "1080p", "resolution": "1080p"},
+            {"name": "2160p", "resolution": "2160p"},
+            {"name": "720p 兜底", "resolution": "720p"},
+        ],
+        "accept_unmatched": True,
+        "is_default": False,
+        "enabled": True,
+    },
+    {
+        "name": "省空间（1080p 以下）",
+        "description": "只要 1080p/720p 且排除 REMUX 等大体积版本；适合小容量 NAS",
+        "levels": [
+            {"name": "1080p WEB", "resolution": "1080p", "quality": "WEB-DL|WEBRip|HDTV"},
+            {"name": "720p", "resolution": "720p"},
+        ],
+        "accept_unmatched": False,
+        "is_default": False,
+        "enabled": True,
+    },
+    {
+        "name": "动漫（简繁内封优先）",
+        "description": "优先内封简繁字幕的 1080p 番剧资源",
+        "levels": [
+            {"name": "1080p 内封简繁", "resolution": "1080p", "include": "简繁|内封|简日|繁日"},
+            {"name": "1080p", "resolution": "1080p"},
+            {"name": "其它", "resolution": ""},
+        ],
+        "accept_unmatched": True,
+        "is_default": False,
+        "enabled": True,
+    },
+]
+
+
+def create_default_rule_groups() -> None:
+    """写入内置过滤规则组（按名字补齐，不覆盖用户改动）。
+
+    与示例站点同样的策略（ADR-06）：升级时补新增的模板，
+    已存在的同名规则组保持用户自己的调整。
+    """
+    with session_scope() as session:
+        existing = {name for (name,) in session.query(FilterRuleGroup.name).all()}
+        added = 0
+        for item in DEFAULT_RULE_GROUPS:
+            if item["name"] in existing:
+                continue
+            session.add(FilterRuleGroup(**item))
+            added += 1
+    if added:
+        logger.info("已写入 %d 个内置过滤规则组（共 %d 个模板）", added, len(DEFAULT_RULE_GROUPS))
+
+
 def create_tables() -> None:
     """建表。"""
     Base.metadata.create_all(bind=engine)
@@ -174,6 +250,14 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
     "library_files": [
         ("quality_score", "FLOAT DEFAULT 0"),
         ("upgrade_count", "INTEGER DEFAULT 0"),
+    ],
+    # v1.5.0：多用户角色 + 订阅引用规则组
+    "users": [
+        ("role", "VARCHAR(16) DEFAULT 'admin'"),
+        ("note", "VARCHAR(255)"),
+    ],
+    "subscribes": [
+        ("rule_group_id", "INTEGER"),
     ],
 }
 
@@ -195,6 +279,33 @@ def migrate_columns() -> None:
                 logger.info("数据库升级：%s 表补充列 %s", table, name)
             except Exception as exc:  # 补列失败不该让服务起不来
                 logger.warning("为 %s 补列 %s 失败：%s", table, name, exc)
+
+
+def sync_user_roles() -> None:
+    """老库升级后把 ``role`` 与 ``is_superuser`` 对齐一次。
+
+    v1.5.0 之前只有 ``is_superuser`` 布尔位。补列时默认值只能是常量，
+    所以这里按布尔位回填角色，避免老库里的普通用户被当成管理员
+    （补列默认 'admin' 是为了保证**唯一的老管理员**不会把自己锁在外面）。
+    """
+    with session_scope() as session:
+        rows = session.query(User).all()
+        fixed = 0
+        for user in rows:
+            expected = UserRole.ADMIN.value if user.is_superuser else UserRole.OPERATOR.value
+            if user.role not in (UserRole.ADMIN.value, UserRole.OPERATOR.value, UserRole.VIEWER.value):
+                user.role = expected
+                fixed += 1
+            elif user.is_superuser and user.role != UserRole.ADMIN.value:
+                # is_superuser 为真但角色不是 admin：以角色为准并修正布尔位，
+                # 因为角色是 v1.5.0 起的权威来源
+                user.is_superuser = False
+                fixed += 1
+            elif not user.is_superuser and user.role == UserRole.ADMIN.value:
+                user.is_superuser = True
+                fixed += 1
+    if fixed:
+        logger.info("已对齐 %d 个用户的角色与超级用户标记", fixed)
 
 
 def create_superuser() -> None:
@@ -245,4 +356,6 @@ def init_db() -> None:
     create_tables()
     migrate_columns()
     create_superuser()
+    sync_user_roles()
     create_default_sites()
+    create_default_rule_groups()

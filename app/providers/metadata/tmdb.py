@@ -210,6 +210,32 @@ class TmdbClient:
             return []
         return [self._normalize(item, media_type) for item in payload.get("results", [])[:30]]
 
+    async def ranking(
+        self, source: str, media_type: str = MediaType.TV.value, limit: int = 20
+    ) -> list[dict[str, Any]]:
+        """榜单数据（供「榜单自动订阅」使用）。
+
+        ``source`` 取值：``tmdb_trending`` / ``tmdb_popular`` / ``tmdb_top_rated``。
+        未配置 API Key 时返回空列表（全量降级，不抛错）。
+        """
+        kind = "movie" if media_type == MediaType.MOVIE.value else "tv"
+        if source == "tmdb_popular":
+            payload = await self._get(f"/{kind}/popular")
+        elif source == "tmdb_top_rated":
+            payload = await self._get(f"/{kind}/top_rated")
+        else:
+            payload = await self._get(f"/trending/{kind}/week")
+        if not payload:
+            return []
+        items = []
+        for item in payload.get("results", []):
+            if item.get("media_type") == "person":
+                continue
+            items.append(self._normalize(item, media_type))
+            if len(items) >= max(1, limit):
+                break
+        return items
+
     async def health_check(self) -> tuple[bool, str]:
         if not self.available:
             return False, "未配置 TMDB_API_KEY"

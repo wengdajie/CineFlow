@@ -75,22 +75,41 @@ async def add_download(
     pan_saved: dict[str, Any] | None = None
 
     if kind in (ResourceKind.TORRENT.value, ResourceKind.MAGNET.value):
-        downloader = site_service.default_downloader(downloader_name)
-        if not downloader:
+        # 多下载器时按策略排序，投递失败自动换下一个（CF_DOWNLOADER_FAILOVER）
+        candidates = site_service.downloader_candidates(downloader_name)
+        if not candidates:
             error = "未配置下载器"
             status = TaskStatus.FAILED.value
             logger.error("添加下载失败：%s（%s）", error, truncate(title, 80))
         else:
-            external_id = await downloader.add(
-                link,
-                save_path=target_path,
-                cookie=resource.get("cookie"),
-            )
-            if external_id:
-                status = TaskStatus.DOWNLOADING.value
-            else:
+            attempts: list[str] = []
+            for candidate in candidates:
+                try:
+                    external_id = await candidate.add(
+                        link,
+                        save_path=target_path,
+                        cookie=resource.get("cookie"),
+                    )
+                except Exception as exc:  # 下载器抛错也算这一个失败，继续换源
+                    external_id = None
+                    attempts.append(f"{candidate.site_name}: {exc}"[:120])
+                else:
+                    if not external_id:
+                        attempts.append(f"{candidate.site_name}: 拒绝或超时")
+                if external_id:
+                    downloader = candidate
+                    status = TaskStatus.DOWNLOADING.value
+                    if attempts:
+                        logger.info(
+                            "已自动换源投递到 %s（前序失败：%s）",
+                            candidate.site_name,
+                            "；".join(attempts),
+                        )
+                    break
+            if not external_id:
+                downloader = candidates[0]
                 status = TaskStatus.FAILED.value
-                error = "下载器拒绝或超时"
+                error = ("下载器投递失败 → " + "；".join(attempts))[:500]
     elif kind == ResourceKind.DIRECT.value:
         downloader = site_service.default_downloader(downloader_name or "aria2")
         if downloader and downloader.name == "aria2":

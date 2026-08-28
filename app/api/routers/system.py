@@ -8,7 +8,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import func, select
 
-from app.api.deps import CurrentUser
+from app.api.deps import AdminUser, CurrentUser, OperatorUser
 from app.core.config import DEFAULT_CONFIG_FILE as CONFIG_FILE
 from app.core.config import settings
 from app.core.logger import recent_logs
@@ -22,7 +22,8 @@ from app.db.models import (
 from app.db.session import session_scope
 from app.providers.metadata.tmdb import tmdb
 from app.schemas.enums import SubscribeStatus, TaskStatus
-from app.schemas.models import Message
+from app.schemas.models import Message, SettingsReset, SettingsUpdate
+from app.services import config_store
 from app.services import library as library_service
 from app.services import notify as notify_service
 from app.services.scheduler import scheduler_service
@@ -120,9 +121,10 @@ def dashboard(user: CurrentUser) -> dict[str, Any]:
     }
 
 
-#: 设置页展示的配置分组。只读展示，敏感项脱敏——
-#: 静态配置只能通过 .env / config.yaml 修改（改后需重启），
-#: 这样避免出现"界面能改但重启就丢"的假功能。
+#: 设置页展示的配置分组，敏感项脱敏。
+#: v1.5.0 起**白名单内的项可以在线修改并立即生效**（见 ``config_store.EDITABLE``），
+#: 白名单外的（目录/端口/密钥/数据库）依旧只能改 .env / config.yaml 并重启——
+#: 界面会明确标注「需重启」，而不是给一个改了没用的输入框（ADR-18）。
 SETTING_GROUPS: list[dict[str, Any]] = [
     {
         "title": "服务",
@@ -164,6 +166,23 @@ SETTING_GROUPS: list[dict[str, Any]] = [
     {
         "title": "网盘管理",
         "keys": ["PAN_AUTO_SAVE", "PAN_TRANSFER_INTERVAL_MINUTES", "PAN_TRANSFER_BATCH"],
+    },
+    {
+        "title": "站点健康巡检",
+        "keys": [
+            "SITE_HEALTH_ENABLED",
+            "SITE_HEALTH_INTERVAL_MINUTES",
+            "SITE_HEALTH_FAIL_THRESHOLD",
+            "SITE_AUTO_DISABLE",
+        ],
+    },
+    {
+        "title": "下载器调度",
+        "keys": ["DOWNLOADER_STRATEGY", "DOWNLOADER_FAILOVER"],
+    },
+    {
+        "title": "榜单自动订阅",
+        "keys": ["RANKING_INTERVAL_MINUTES", "RANKING_MAX_PER_RUN"],
     },
     {
         "title": "刮削与分类",
@@ -234,10 +253,16 @@ def _mask(key: str, value: Any) -> Any:
     return value
 
 
-@router.get("/settings", summary="生效配置总览（敏感项脱敏）")
+@router.get("/settings", summary="生效配置总览（含可编辑元信息，敏感项脱敏）")
 def effective_settings(user: CurrentUser) -> dict[str, Any]:
-    """把当前生效的静态配置分组返回，供设置页展示与排障。"""
+    """把当前生效的配置分组返回，并标明每一项能不能在线改。
+
+    ``editable=True`` 的项前端渲染成表单控件（按 ``type``/``choices``/``min``/``max``），
+    其余渲染成只读文本并标注「需重启」。
+    """
+    overrides = config_store.overrides()
     groups: list[dict[str, Any]] = []
+    editable_count = 0
     for group in SETTING_GROUPS:
         items = []
         for key in group["keys"]:
@@ -245,14 +270,24 @@ def effective_settings(user: CurrentUser) -> dict[str, Any]:
                 continue
             raw = getattr(settings, key)
             value = str(raw) if isinstance(raw, Path) else raw
+            display = value
             if isinstance(value, list):
-                value = "、".join(str(item) for item in value) or "（空）"
+                display = "、".join(str(item) for item in value) or "（空）"
+            meta = config_store.describe(key)
+            if meta.get("editable"):
+                editable_count += 1
             items.append(
                 {
                     "key": key,
                     "env": f"CF_{key}",
-                    "value": _mask(key, value),
+                    "value": _mask(key, display),
+                    # 表单需要原始值（列表给成逗号串，便于直接放进 input）
+                    "raw": None
+                    if any(word in key for word in _SECRET_WORDS)
+                    else ("、".join(str(item) for item in value) if isinstance(value, list) else value),
                     "secret": any(word in key for word in _SECRET_WORDS),
+                    "overridden": key in overrides,
+                    **meta,
                 }
             )
         groups.append({"title": group["title"], "items": items})
@@ -260,8 +295,38 @@ def effective_settings(user: CurrentUser) -> dict[str, Any]:
         "success": True,
         "config_file": str(CONFIG_FILE),
         "config_file_exists": CONFIG_FILE.exists(),
-        "note": "静态配置通过 .env 或 config/config.yaml 修改，保存后重启服务生效；定时周期与 ChatOps 可在对应页面在线修改",
+        "editable_total": editable_count,
+        "overridden": sorted(overrides),
+        "note": "带输入框的项可在线保存并立即生效（覆盖值存数据库，重启仍在）；"
+                "标注「需重启」的项请改 .env 或 config/config.yaml",
         "groups": groups,
+    }
+
+
+@router.put("/settings", summary="在线修改配置（白名单内立即生效）")
+def update_settings(payload: SettingsUpdate, user: AdminUser) -> dict[str, Any]:
+    """保存一批配置。一项非法则整体拒绝，不留半吊子状态。"""
+    try:
+        applied = config_store.update(payload.values)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "success": True,
+        "message": f"已保存 {len(applied)} 项并立即生效",
+        "applied": {
+            key: ("、".join(str(item) for item in value) if isinstance(value, list) else value)
+            for key, value in applied.items()
+        },
+    }
+
+
+@router.post("/settings/reset", summary="恢复为配置文件里的静态值")
+def reset_settings(payload: SettingsReset, user: AdminUser) -> dict[str, Any]:
+    keys = config_store.reset(payload.keys)
+    return {
+        "success": True,
+        "message": f"已重置 {len(keys)} 项" if keys else "没有需要重置的项",
+        "keys": keys,
     }
 
 
@@ -280,7 +345,7 @@ def jobs(user: CurrentUser) -> dict[str, Any]:
 
 
 @router.post("/jobs/{job_id}/run", response_model=Message, summary="立即执行任务")
-async def run_job(job_id: str, user: CurrentUser) -> Message:
+async def run_job(job_id: str, user: OperatorUser) -> Message:
     if not await scheduler_service.run_job_now(job_id):
         raise HTTPException(status_code=404, detail="任务不存在")
     return Message(message="任务已触发")
@@ -315,7 +380,7 @@ def notifications(
 
 
 @router.post("/notify/test", response_model=Message, summary="测试通知渠道")
-async def test_notify(user: CurrentUser) -> Message:
+async def test_notify(user: AdminUser) -> Message:
     count = await notify_service.send(
         "CineFlow 测试通知", "如果你收到这条消息，说明通知渠道配置正确。"
     )

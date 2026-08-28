@@ -198,3 +198,159 @@ def test_resource_size_parsing():
     """体积字符串自动转字节。"""
     resource = Resource(title="A", link="http://x", size="1.5 GB")
     assert resource.size == int(1.5 * 1024**3)
+
+
+# ---------------- 下载器调度策略（v1.5.0） ----------------
+class _FakeDownloader:
+    """只带 name/site_name/priority 的假下载器，够 healthy_downloaders 排序用。"""
+
+    def __init__(self, site_name: str, priority: int) -> None:
+        self.name = site_name
+        self.site_name = site_name
+        self.priority = priority
+
+    def __repr__(self) -> str:  # 断言失败时好读
+        return f"<{self.site_name} p{self.priority}>"
+
+
+@pytest.fixture
+def fake_downloaders(monkeypatch):
+    """注入三个假下载器，并默认让健康数据为空（全健康）。"""
+    from app.services import site_health, sites
+
+    items = [
+        _FakeDownloader("qb-a", 3),
+        _FakeDownloader("qb-b", 1),
+        _FakeDownloader("tr-c", 2),
+    ]
+    monkeypatch.setattr(sites, "downloaders", lambda: list(items))
+    monkeypatch.setattr(site_health, "downloader_health", lambda: {})
+    monkeypatch.setattr(sites, "_task_counts", lambda: {})
+    return items
+
+
+def test_priority_strategy_sorts_by_priority(monkeypatch, fake_downloaders):
+    from app.core.config import settings
+    from app.services import sites
+
+    monkeypatch.setattr(settings, "DOWNLOADER_STRATEGY", "priority")
+    names = [item.site_name for item in sites.healthy_downloaders()]
+    # priority 数字越小越优先，与其它 Provider 的约定一致
+    assert names == ["qb-b", "tr-c", "qb-a"]
+
+
+def test_least_tasks_strategy_prefers_idle(monkeypatch, fake_downloaders):
+    from app.core.config import settings
+    from app.services import sites
+
+    monkeypatch.setattr(settings, "DOWNLOADER_STRATEGY", "least_tasks")
+    # qb-b 虽然 priority 最高，但它手上活最多，应该让给空闲的
+    monkeypatch.setattr(sites, "_task_counts", lambda: {"qb-b": 9, "tr-c": 4})
+    names = [item.site_name for item in sites.healthy_downloaders()]
+    assert names[0] == "qb-a"
+    assert names == ["qb-a", "tr-c", "qb-b"]
+
+
+def test_least_tasks_breaks_ties_by_priority(monkeypatch, fake_downloaders):
+    from app.core.config import settings
+    from app.services import sites
+
+    monkeypatch.setattr(settings, "DOWNLOADER_STRATEGY", "least_tasks")
+    monkeypatch.setattr(sites, "_task_counts", lambda: {})
+    # 任务数相同时退回 priority，保证结果稳定可预期
+    assert [item.site_name for item in sites.healthy_downloaders()] == ["qb-b", "tr-c", "qb-a"]
+
+
+def test_round_robin_strategy_rotates(monkeypatch, fake_downloaders):
+    from app.core.config import settings
+    from app.services import sites
+
+    monkeypatch.setattr(settings, "DOWNLOADER_STRATEGY", "round_robin")
+    monkeypatch.setattr(sites, "_ROUND_ROBIN_CURSOR", 0)
+    first = [item.site_name for item in sites.healthy_downloaders()]
+    second = [item.site_name for item in sites.healthy_downloaders()]
+    # 轮询的意义就是连续两次首选不同，把压力摊开
+    assert first[0] != second[0]
+    assert sorted(first) == sorted(second)
+
+
+def test_unhealthy_downloaders_go_last_not_removed(monkeypatch, fake_downloaders):
+    """不健康的排到最后但不剔除——健康数据可能过期（ADR-21）。"""
+    from app.core.config import settings
+    from app.services import site_health, sites
+
+    monkeypatch.setattr(settings, "DOWNLOADER_STRATEGY", "priority")
+    monkeypatch.setattr(
+        site_health, "downloader_health", lambda: {"qb-b": "down", "tr-c": "degraded"}
+    )
+    names = [item.site_name for item in sites.healthy_downloaders()]
+    assert names[0] == "qb-a"
+    # 三个都还在，只是坏的靠后
+    assert set(names) == {"qb-a", "qb-b", "tr-c"}
+    assert names.index("qb-a") < names.index("qb-b")
+
+
+def test_health_lookup_failure_falls_back(monkeypatch, fake_downloaders):
+    """健康数据取不到时不能抛异常，退回策略排序即可。"""
+    from app.core.config import settings
+    from app.services import site_health, sites
+
+    def _boom():
+        raise RuntimeError("健康表还没建好")
+
+    monkeypatch.setattr(settings, "DOWNLOADER_STRATEGY", "priority")
+    monkeypatch.setattr(site_health, "downloader_health", _boom)
+    assert [item.site_name for item in sites.healthy_downloaders()] == ["qb-b", "tr-c", "qb-a"]
+
+
+def test_default_downloader_respects_prefer(monkeypatch, fake_downloaders):
+    from app.core.config import settings
+    from app.services import sites
+
+    monkeypatch.setattr(settings, "DOWNLOADER_STRATEGY", "priority")
+    assert sites.default_downloader().site_name == "qb-b"
+    assert sites.default_downloader(prefer="tr-c").site_name == "tr-c"
+    # 指定的名字不存在时退回策略首选，而不是返回 None
+    assert sites.default_downloader(prefer="不存在").site_name == "qb-b"
+
+
+def test_default_downloader_without_any(monkeypatch):
+    from app.services import sites
+
+    monkeypatch.setattr(sites, "downloaders", lambda: [])
+    assert sites.default_downloader() is None
+    assert sites.downloader_candidates() == []
+
+
+def test_candidates_include_backups_when_failover_on(monkeypatch, fake_downloaders):
+    from app.core.config import settings
+    from app.services import sites
+
+    monkeypatch.setattr(settings, "DOWNLOADER_STRATEGY", "priority")
+    monkeypatch.setattr(settings, "DOWNLOADER_FAILOVER", True)
+    candidates = [item.site_name for item in sites.downloader_candidates(prefer="tr-c")]
+    # 首选在前，其余作为失败自动换源的备选
+    assert candidates[0] == "tr-c"
+    assert len(candidates) == 3
+
+
+def test_candidates_single_when_failover_off(monkeypatch, fake_downloaders):
+    """关掉 failover 时行为与 v1.4.0 一致：只投首选，不擅自换源。"""
+    from app.core.config import settings
+    from app.services import sites
+
+    monkeypatch.setattr(settings, "DOWNLOADER_STRATEGY", "priority")
+    monkeypatch.setattr(settings, "DOWNLOADER_FAILOVER", False)
+    candidates = sites.downloader_candidates()
+    assert len(candidates) == 1 and candidates[0].site_name == "qb-b"
+
+
+def test_single_downloader_skips_strategy(monkeypatch):
+    """只有一个下载器时直接返回，不做任何排序与健康查询。"""
+    from app.core.config import settings
+    from app.services import sites
+
+    only = _FakeDownloader("solo", 9)
+    monkeypatch.setattr(sites, "downloaders", lambda: [only])
+    monkeypatch.setattr(settings, "DOWNLOADER_STRATEGY", "round_robin")
+    assert [item.site_name for item in sites.healthy_downloaders()] == ["solo"]

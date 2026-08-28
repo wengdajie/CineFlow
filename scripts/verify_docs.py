@@ -38,9 +38,10 @@ for expected in ("api_generic", "html_generic", "mukaku", "pan_generic",
 # ---- 数据库表 ----
 from app.db.models import Base  # noqa: E402
 
-check("16 张表", len(Base.metadata.tables) == 16, f"实际 {len(Base.metadata.tables)}")
-check("README 声明 16 张表", "16 张表" in README)
-for table in ("audit_logs", "pan_saves", "pan_subscribes", "strm_records"):
+check("19 张表", len(Base.metadata.tables) == 19, f"实际 {len(Base.metadata.tables)}")
+check("README 声明 19 张表", "19 张表" in README)
+for table in ("audit_logs", "pan_saves", "pan_subscribes", "strm_records",
+              "site_health", "ranking_rules", "filter_rule_groups"):
     check(f"新增表 {table} 存在", table in Base.metadata.tables)
 
 # ---- 默认站点 ----
@@ -67,10 +68,11 @@ for key, default in (("RADAR_ENABLED", True), ("RADAR_INTERVAL_MINUTES", 15),
 # ---- 调度任务 ----
 scheduler_src = pathlib.Path("app/services/scheduler.py").read_text(encoding="utf-8")
 job_ids = re.findall(r'^JOB_\w+ = "([^"]+)"', scheduler_src, re.M)
-check("内置调度任务 9 个", len(job_ids) == 9, str(job_ids))
-check("README 声明 9 内置任务", "9 内置任务" in README)
+check("内置调度任务 11 个", len(job_ids) == 11, str(job_ids))
+check("README 声明 11 内置任务", "11 内置任务" in README)
 for job in ("cineflow.radar", "cineflow.pan_transfer", "cineflow.pan_subscribe",
-            "cineflow.strm_sync", "cineflow.scrape", "cineflow.upgrade"):
+            "cineflow.strm_sync", "cineflow.scrape", "cineflow.upgrade",
+            "cineflow.site_health", "cineflow.ranking"):
     check(f"任务已注册 {job}", job in job_ids)
 
 # ---- API 端点 ----
@@ -83,10 +85,19 @@ try:
         for m in methods
         if m.lower() in ("get", "post", "patch", "delete", "put")
     )
-    check("API 端点 95 个", total == 95, f"实际 {total}")
-    check("README 声明 95 个端点", "95 个端点" in README and "共 95 个" in README)
+    check("API 端点 118 个", total == 118, f"实际 {total}")
+    check("README 声明 118 个端点", "118 个端点" in README and "共 118 个" in README)
     paths = set(spec["paths"])
-    for path in ("/api/v1/radar/run", "/api/v1/radar/feed", "/api/v1/radar/jobs",
+    for path in ("/api/v1/users", "/api/v1/users/{user_id}",
+                 "/api/v1/system/settings", "/api/v1/system/settings/reset",
+                 "/api/v1/site-health", "/api/v1/site-health/records",
+                 "/api/v1/site-health/check", "/api/v1/site-health/check/{site_id}",
+                 "/api/v1/ranking-rules", "/api/v1/ranking-rules/{rule_id}",
+                 "/api/v1/ranking-rules/{rule_id}/preview",
+                 "/api/v1/ranking-rules/{rule_id}/run", "/api/v1/ranking-rules/run-all",
+                 "/api/v1/rule-groups", "/api/v1/rule-groups/{group_id}",
+                 "/api/v1/rule-groups/{group_id}/preview",
+                 "/api/v1/radar/run", "/api/v1/radar/feed", "/api/v1/radar/jobs",
                  "/api/v1/sites/presets", "/api/v1/sites/discover",
                  "/api/v1/trending", "/api/v1/trending/resources",
                  "/api/v1/trending/live", "/api/v1/trending/keywords",
@@ -100,21 +111,22 @@ except Exception as exc:
 # ---- router 数量 ----
 router_src = pathlib.Path("app/api/router.py").read_text(encoding="utf-8")
 router_count = router_src.count("api_router.include_router(")
-check("router 16 个", router_count == 16, f"实际 {router_count}")
-check("README 声明 16 个 router", "16 个 router" in README)
-for name in ("trending", "schedules", "pan", "chatops", "strm", "pan_subscribes"):
+check("router 20 个", router_count == 20, f"实际 {router_count}")
+check("README 声明 20 个 router", "20 个 router" in README)
+for name in ("trending", "schedules", "pan", "chatops", "strm", "pan_subscribes",
+             "users", "site_health", "ranking", "rule_groups"):
     check(f"router {name} 已挂载", f"{name}.router" in router_src)
 
 # ---- 前端页面 ----
 app_js = pathlib.Path("web/assets/app.js").read_text(encoding="utf-8")
 pages_block = app_js[app_js.index("const PAGES"): app_js.index("];", app_js.index("const PAGES"))]
 page_count = pages_block.count("{ key:")
-check("前端页面 16 个", page_count == 16, f"实际 {page_count}")
-check("README 声明点检 16 个页面", "16 个页面" in README)
-check("scripts/README 声明 16 个页面", "16 个前端页面" in SCRIPTS_README)
+check("前端页面 20 个", page_count == 20, f"实际 {page_count}")
+check("README 声明点检 20 个页面", "20 个页面" in README)
+check("scripts/README 声明 20 个页面", "20 个前端页面" in SCRIPTS_README)
 check("前端含热度排行页", '"trending"' in app_js and "pageTrending" in app_js)
 check("前端含定时任务页", '"schedules"' in app_js and "pageSchedules" in app_js)
-check("README 声明 16 个功能页", "16 个功能页" in README)
+check("README 声明 20 个功能页", "20 个功能页" in README)
 check("前端含追新雷达页", '"radar"' in app_js and "pageRadar" in app_js)
 check("前端含站点发现弹窗", "discoverDialog" in app_js)
 check("前端含预设选择器", "presetPicker" in app_js)
@@ -166,12 +178,14 @@ check("README 说明定时任务可改期", "定时任务" in README and "cron" 
 
 # ---- 测试文件 ----
 test_files = sorted(p.name for p in pathlib.Path("tests").glob("test_*.py"))
-check("测试文件 19 个", len(test_files) == 19, str(test_files))
-check("README 声明 19 个测试文件", "19 个测试文件" in README)
+check("测试文件 25 个", len(test_files) == 25, str(test_files))
+check("README 声明 25 个测试文件", "25 个测试文件" in README)
 for name in ("test_custom_sites.py", "test_radar.py", "test_trending.py",
              "test_panstorage.py", "test_chatops.py", "test_nfo.py",
              "test_scraper.py", "test_webdav.py", "test_strm_sync.py",
-             "test_pan_subscribe.py", "test_upgrade.py", "test_categories.py"):
+             "test_pan_subscribe.py", "test_upgrade.py", "test_categories.py",
+             "test_config_store.py", "test_rules.py", "test_site_health.py",
+             "test_ranking.py", "test_rule_groups.py", "test_users.py"):
     check(f"README 提及 {name}", name in README)
 
 # ---- 脚本 ----
@@ -180,16 +194,17 @@ for script in ("smoke_test.py", "ui_check.py", "demo_pipeline.py", "live_check.p
     check(f"脚本存在 {script}", pathlib.Path("scripts", script).exists())
     check(f"scripts/README 提及 {script}", script in SCRIPTS_README)
 check("README 声明六个验证脚本", "六个开发期验证工具" in README)
-check("README 测试徽章 370", "tests-370%20passed" in README)
-check("README 版本号 1.4.0", "1.4.0" in README)
+check("README 测试徽章 537", "tests-537%20passed" in README)
+check("README 版本号 1.5.0", "1.5.0" in README)
 version_src = pathlib.Path("app/core/version.py").read_text(encoding="utf-8")
-check("代码版本号为 1.4.0", 'APP_VERSION = "1.4.0"' in version_src)
-check("README 声明 141 项接口用例", "141 项真实 HTTP 接口用例" in README)
-check("scripts/README 声明 141 项", "141 项接口用例" in SCRIPTS_README)
+check("代码版本号为 1.5.0", 'APP_VERSION = "1.5.0"' in version_src)
+check("README 声明 207 项接口用例", "207 项真实 HTTP 接口用例" in README)
+check("scripts/README 声明 207 项", "207 项接口用例" in SCRIPTS_README)
 
 # ---- 服务模块 ----
 for module in ("radar", "discovery", "presets", "trending", "settings_store",
-               "pan_storage", "scraper", "strm_sync", "pan_subscribe", "upgrade"):
+               "pan_storage", "scraper", "strm_sync", "pan_subscribe", "upgrade",
+               "config_store", "site_health", "ranking", "rule_groups"):
     check(f"服务模块 app/services/{module}.py 存在",
           pathlib.Path(f"app/services/{module}.py").exists())
     check(f"README 提及 {module} 服务", module in README)
@@ -225,15 +240,16 @@ roadmap = (docs_dir / "03-升级路线图.md")
 if roadmap.exists():
     roadmap_text = roadmap.read_text(encoding="utf-8")
     check("路线图无「待实测」占位", "待实测" not in roadmap_text)
-    check("路线图无「未开始」残留（v1.4.0 已交付）", "未开始" not in roadmap_text)
-    for milestone in ("M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8", "M9", "M10"):
+    check("路线图无「未开始」残留（v1.5.0 已交付）", "未开始" not in roadmap_text)
+    for milestone in ("M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8", "M9", "M10",
+                      "M11", "M12", "M13", "M14", "M15", "M16"):
         check(f"路线图含里程碑 {milestone}", milestone in roadmap_text)
 
 # 变更日志必须记录到当前版本
 changelog = (docs_dir / "08-变更日志.md")
 if changelog.exists():
     changelog_text = changelog.read_text(encoding="utf-8")
-    for version in ("1.0.0", "1.1.0", "1.2.0", "1.3.0", "1.4.0"):
+    for version in ("1.0.0", "1.1.0", "1.2.0", "1.3.0", "1.4.0", "1.5.0"):
         check(f"变更日志含 v{version}", version in changelog_text)
 
 # ---- 网盘管理（M2） ----
@@ -425,6 +441,10 @@ check("老库自动补新增列", "def migrate_columns" in initdb_src and "ADD C
 check("补列在 init_db 里调用", "migrate_columns()" in initdb_src)
 check("补列覆盖 v1.4.0 新字段",
       "quality_score" in initdb_src and "upgrade_count" in initdb_src)
+check("补列覆盖 v1.5.0 新字段",
+      all(word in initdb_src for word in ("role", "note", "rule_group_id")))
+check("老库 role 默认 admin（不把老管理员锁在外面）",
+      "'admin'" in initdb_src and "def sync_user_roles" in initdb_src)
 
 # ---- 竞品对标文档 ----
 gap_doc = docs_dir / "09-竞品对标与差距分析.md"
@@ -436,6 +456,132 @@ if gap_doc.exists():
     check("对标文档写明不做的事与原因", "不做" in gap_text)
 check("复查脚本存在", pathlib.Path("scripts/research_refs.py").exists())
 check("scripts/README 提及 research_refs.py", "research_refs.py" in SCRIPTS_README)
+
+# ---- 可编辑运行期配置（M11） ----
+from app.services import config_store  # noqa: E402
+
+cfgstore_src = pathlib.Path("app/services/config_store.py").read_text(encoding="utf-8")
+check("可编辑配置白名单存在", "EDITABLE" in cfgstore_src)
+check("可编辑配置项 51 个", len(config_store.EDITABLE) == 51, f"实际 {len(config_store.EDITABLE)}")
+for func in ("coerce", "update", "reset", "apply_overrides", "describe"):
+    check(f"配置仓库函数 {func}", f"def {func}" in cfgstore_src)
+# 不可热改的键绝不能进白名单：改了不生效比改不了更糟
+for forbidden in ("DATA_DIR", "PORT", "SECRET_KEY", "DB_URL", "HOST"):
+    check(f"白名单排除 {forbidden}", forbidden not in config_store.EDITABLE)
+check("配置改动先全校验再落库", "先全部校验" in cfgstore_src or "全部校验" in cfgstore_src)
+check("配置热生效写回 settings 单例", "object.__setattr__" in cfgstore_src)
+check("cron 校验复用 scheduler.validate_cron", "validate_cron" in cfgstore_src)
+check("启动时应用配置覆盖",
+      "apply_overrides" in pathlib.Path("app/main.py").read_text(encoding="utf-8"))
+system_src = pathlib.Path("app/api/routers/system.py").read_text(encoding="utf-8")
+check("设置页可提交修改", '@router.put("/settings"' in system_src)
+check("设置可恢复默认", '/settings/reset' in system_src)
+check("前端设置页按类型渲染控件", "settingControl" in app_js)
+check("前端只提交改过的项", "changed" in app_js)
+check("README 说明设置可在线修改", "在线修改" in README or "界面改配置" in README)
+
+# ---- 多用户权限（M12） ----
+from app.schemas.enums import UserRole  # noqa: E402
+
+deps_src = pathlib.Path("app/api/deps.py").read_text(encoding="utf-8")
+check("角色枚举三档", len(list(UserRole)) == 3, str([r.value for r in UserRole]))
+check("角色带 rank 排序",
+      UserRole.VIEWER.rank < UserRole.OPERATOR.rank < UserRole.ADMIN.rank)
+for func in ("role_of", "require_role"):
+    check(f"鉴权依赖 {func}", f"def {func}" in deps_src)
+check("OperatorUser/AdminUser 依赖存在",
+      "OperatorUser" in deps_src and "AdminUser" in deps_src)
+check("role_of 对脏值兜底", "except (ValueError, TypeError)" in deps_src)
+users_src = pathlib.Path("app/api/routers/users.py").read_text(encoding="utf-8")
+check("不能删除自己", "不能删除自己" in users_src)
+check("不能停用自己", "不能停用自己" in users_src)
+check("最后一个管理员不能降级", "最后一个" in users_src)
+check("is_superuser 由 role 推导", "is_superuser=role is UserRole.ADMIN" in users_src)
+check("登录返回角色", '"role"' in pathlib.Path("app/api/routers/auth.py").read_text(encoding="utf-8"))
+check("服务端不信 JWT 里的 role 副本",
+      "不信任令牌" in pathlib.Path("app/api/routers/auth.py").read_text(encoding="utf-8"))
+check("前端含用户权限页", '"users"' in app_js and "pageUsers" in app_js)
+check("前端按角色隐藏入口", "canDo" in app_js and "visiblePages" in app_js)
+check("README 说明三档角色", "operator" in README and "viewer" in README)
+
+# ---- 站点健康巡检（M13） ----
+health_src = pathlib.Path("app/services/site_health.py").read_text(encoding="utf-8")
+for func in ("check_site", "check_all", "overview", "list_records",
+             "unhealthy_sites", "downloader_health"):
+    check(f"健康服务函数 {func}", f"def {func}" in health_src)
+check("健康三档状态", all(word in health_src for word in ("ok", "degraded", "down")))
+check("搜索类站点真搜一次（Cookie 过期只体现在搜索上）",
+      "PROBE_KEYWORD" in health_src)
+check("0 结果算 degraded 而非 ok", "degraded" in health_src and "PROBE_KEYWORD" in health_src)
+check("慢站点有阈值", "SLOW_MS" in health_src)
+check("历史记录有上限", "KEEP_PER_SITE" in health_src)
+check("裁剪历史前先 flush（否则永远多留一条）", "flush()" in health_src)
+check("只在状态翻转时通知", "alert" in health_src)
+check("手动探测不发通知", "notify" in health_src)
+for key in ("SITE_HEALTH_ENABLED", "SITE_HEALTH_INTERVAL_MINUTES",
+            "SITE_HEALTH_FAIL_THRESHOLD", "SITE_AUTO_DISABLE"):
+    check(f"配置项 {key} 存在", hasattr(settings, key))
+    check(f"README 提及 CF_{key}", f"CF_{key}" in README)
+check("自动禁用默认关闭（别擅自停掉用户的站点）", settings.SITE_AUTO_DISABLE is False)
+check("前端含站点健康页", '"sitehealth"' in app_js and "pageSiteHealth" in app_js)
+
+# ---- 下载器负载均衡（M14） ----
+sites_src = pathlib.Path("app/services/sites.py").read_text(encoding="utf-8")
+for func in ("_task_counts", "healthy_downloaders", "downloader_candidates"):
+    check(f"下载器调度函数 {func}", f"def {func}" in sites_src)
+check("三种调度策略", all(word in sites_src for word in ("priority", "least_tasks", "round_robin")))
+check("不健康下载器排后而不剔除", "排后" in sites_src or "而不是" in sites_src)
+check("投递失败自动换下一个下载器",
+      "downloader_candidates" in pathlib.Path("app/services/download.py").read_text(encoding="utf-8"))
+for key in ("DOWNLOADER_STRATEGY", "DOWNLOADER_FAILOVER"):
+    check(f"配置项 {key} 存在", hasattr(settings, key))
+    check(f"README 提及 CF_{key}", f"CF_{key}" in README)
+check("策略默认 priority（与旧行为一致）", settings.DOWNLOADER_STRATEGY == "priority")
+
+# ---- 榜单自动订阅（M15） ----
+from app.services import ranking as ranking_service  # noqa: E402
+
+ranking_src = pathlib.Path("app/services/ranking.py").read_text(encoding="utf-8")
+for func in ("list_rules", "create", "update", "delete", "fetch_candidates",
+             "filter_candidates", "run_rule", "run"):
+    check(f"榜单服务函数 {func}", f"def {func}" in ranking_src)
+check("榜单来源 4 个", len(ranking_service.SOURCES) == 4, str(list(ranking_service.SOURCES)))
+check("榜单记 handled_ids（用户删掉的订阅不该被加回来）", "handled_ids" in ranking_src)
+check("handled_ids 有截断上限", "500" in ranking_src)
+check("榜单单次有上限", "RANKING_MAX_PER_RUN" in ranking_src)
+check("榜单支持 dry_run 试算", "dry_run" in ranking_src)
+check("筛选逻辑是纯函数（可离线单测）", "def filter_candidates" in ranking_src)
+for key in ("RANKING_INTERVAL_MINUTES", "RANKING_MAX_PER_RUN"):
+    check(f"配置项 {key} 存在", hasattr(settings, key))
+    check(f"README 提及 CF_{key}", f"CF_{key}" in README)
+check("TMDB Provider 提供榜单接口",
+      "def ranking" in pathlib.Path("app/providers/metadata/tmdb.py").read_text(encoding="utf-8"))
+check("前端含榜单订阅页", '"ranking"' in app_js and "pageRanking" in app_js)
+
+# ---- 自定义过滤规则组（M16） ----
+rules_src = pathlib.Path("app/core/rules.py").read_text(encoding="utf-8")
+for func in ("level_matches", "match_level", "annotate", "describe"):
+    check(f"规则组函数 {func}", f"def {func}" in rules_src)
+check("core/rules 无 IO", "httpx" not in rules_src and "async def" not in rules_src
+      and "session_scope" not in rules_src)
+check("未命中层号足够大（兜底资源排最后）", "UNMATCHED_LEVEL" in rules_src)
+check("层级有序、层内按分排序", "rule_level" in rules_src and "score" in rules_src)
+groups_src = pathlib.Path("app/services/rule_groups.py").read_text(encoding="utf-8")
+for func in ("default_group", "load_group", "preview"):
+    check(f"规则组服务函数 {func}", f"def {func}" in groups_src)
+check("默认组唯一", "_clear_other_defaults" in groups_src)
+check("删除规则组时解绑订阅", "rule_group_id = None" in groups_src)
+check("过滤链接入规则组",
+      "group" in pathlib.Path("app/core/filters.py").read_text(encoding="utf-8"))
+check("搜索侧传入规则组",
+      "rule_group_id" in pathlib.Path("app/services/search.py").read_text(encoding="utf-8"))
+from app.db.init_db import DEFAULT_RULE_GROUPS  # noqa: E402
+
+check("内置规则组模板 4 个", len(DEFAULT_RULE_GROUPS) == 4, f"实际 {len(DEFAULT_RULE_GROUPS)}")
+check("内置模板均不设为默认（不悄悄改用户的排序）",
+      all(not g.get("is_default") for g in DEFAULT_RULE_GROUPS))
+check("前端含过滤规则组页", '"rules"' in app_js and "pageRuleGroups" in app_js)
+check("前端可试算规则组", "previewRuleGroup" in app_js)
 
 # ---- 文档中的 JSON 示例必须合法 ----
 blocks = re.findall(r"```json\n(.*?)```", README, re.S)

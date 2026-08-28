@@ -7,7 +7,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 
-from app.api.deps import CurrentUser, DbSession
+from app.api.deps import CurrentUser, DbSession, role_of
 from app.core.security import create_access_token, hash_password, verify_password
 from app.db.base import utcnow
 from app.db.models import User
@@ -32,20 +32,33 @@ def login(
     user.last_login_at = utcnow()
     session.commit()
 
+    role = role_of(user)
     return TokenResponse(
         access_token=create_access_token(
-            user.username, {"is_superuser": user.is_superuser}
+            # role 一起写进 JWT，前端拿到令牌即可决定隐藏哪些按钮；
+            # 但**服务端仍然按数据库里的角色鉴权**，不信任令牌里的这份副本
+            # （否则改角色后要等旧令牌过期才生效）
+            user.username,
+            {"is_superuser": user.is_superuser, "role": role.value},
         ),
         username=user.username,
         is_superuser=user.is_superuser,
+        role=role.value,
     )
 
 
 @router.get("/me", summary="当前用户信息")
 def me(user: CurrentUser) -> dict:
+    from app.api.deps import ROLE_LABELS
+
+    role = role_of(user)
     return {
         "username": user.username,
         "is_superuser": user.is_superuser,
+        "role": role.value,
+        "role_label": ROLE_LABELS[role.value],
+        "rank": role.rank,
+        "note": user.note,
         "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
     }
 

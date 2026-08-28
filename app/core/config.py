@@ -181,6 +181,28 @@ class Settings(BaseSettings):
     #: 每个剧集/电影最多洗版几次，用尽后不再替换
     UPGRADE_MAX_TIMES: int = 2
 
+    # ---------- 站点健康探测 ----------
+    #: 是否启用站点健康巡检（Cookie 过期表现为静默 0 结果，必须主动探测）
+    SITE_HEALTH_ENABLED: bool = True
+    #: 健康巡检间隔（分钟），0 表示关闭
+    SITE_HEALTH_INTERVAL_MINUTES: int = 180
+    #: 连续失败多少次后发出掉线告警
+    SITE_HEALTH_FAIL_THRESHOLD: int = 3
+    #: 达到告警阈值后是否自动停用该站点（默认不停用，只告警）
+    SITE_AUTO_DISABLE: bool = False
+
+    # ---------- 下载器调度 ----------
+    #: 多下载器时的选择策略：priority（按站点优先级）/ least_tasks（最少任务）/ round_robin（轮询）
+    DOWNLOADER_STRATEGY: str = "priority"
+    #: 投递失败时是否自动换下一个健康的下载器重试
+    DOWNLOADER_FAILOVER: bool = True
+
+    # ---------- 榜单订阅 ----------
+    #: 榜单自动订阅巡检间隔（分钟），0 表示关闭
+    RANKING_INTERVAL_MINUTES: int = 720
+    #: 单次巡检最多自动创建多少个订阅（防止一次刷进上百个）
+    RANKING_MAX_PER_RUN: int = 5
+
     # ---------- 网盘管理 ----------
     #: 盘搜命中网盘资源时是否自动转存进已配置的网盘存储
     PAN_AUTO_SAVE: bool = True
@@ -215,6 +237,14 @@ class Settings(BaseSettings):
     def _split_list(cls, value: Any) -> Any:
         if isinstance(value, str):
             return [item.strip() for item in value.split(",") if item.strip()]
+        return value
+
+    @field_validator("DOWNLOADER_STRATEGY", "STRM_LINK_MODE", mode="before")
+    @classmethod
+    def _normalize_choice(cls, value: Any) -> Any:
+        """取值型配置统一小写去空格，避免 .env 里写成 Priority 就失效。"""
+        if isinstance(value, str):
+            return value.strip().lower()
         return value
 
     @field_validator("TRANSFER_MODE", mode="before")

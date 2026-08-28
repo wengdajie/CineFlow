@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import select
 
-from app.api.deps import CurrentUser, DbSession
+from app.api.deps import CurrentUser, DbSession, OperatorUser
 from app.db.models import DownloadTask
 from app.schemas.enums import TaskStatus
 from app.schemas.models import DownloadRequest, DownloadTaskOut, Message
@@ -34,7 +34,7 @@ def list_tasks(
 
 
 @router.post("", summary="添加下载")
-async def add_download(payload: DownloadRequest, user: CurrentUser) -> dict[str, Any]:
+async def add_download(payload: DownloadRequest, user: OperatorUser) -> dict[str, Any]:
     resource = {
         "title": payload.title,
         "link": payload.link,
@@ -57,12 +57,12 @@ async def add_download(payload: DownloadRequest, user: CurrentUser) -> dict[str,
 
 
 @router.post("/sync", summary="同步下载状态并整理已完成任务")
-async def sync_tasks(user: CurrentUser) -> dict[str, Any]:
+async def sync_tasks(user: OperatorUser) -> dict[str, Any]:
     return {"success": True, **(await download_service.sync_tasks())}
 
 
 @router.post("/{task_id}/{action}", response_model=Message, summary="暂停/恢复任务")
-async def control(task_id: int, action: str, user: CurrentUser) -> Message:
+async def control(task_id: int, action: str, user: OperatorUser) -> Message:
     if action not in ("pause", "resume"):
         raise HTTPException(status_code=400, detail="action 只能是 pause 或 resume")
     ok = await download_service.control_task(task_id, action)
@@ -73,7 +73,7 @@ async def control(task_id: int, action: str, user: CurrentUser) -> Message:
 
 @router.delete("/{task_id}", response_model=Message, summary="删除任务")
 async def remove(
-    task_id: int, user: CurrentUser, delete_files: bool = False
+    task_id: int, user: OperatorUser, delete_files: bool = False
 ) -> Message:
     ok = await download_service.remove_task(task_id, delete_files=delete_files)
     if not ok:

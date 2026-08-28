@@ -7,7 +7,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.schemas.enums import MediaType, ProviderKind, SubscribeStatus
+from app.schemas.enums import MediaType, ProviderKind, SubscribeStatus, UserRole
 
 
 class ORMModel(BaseModel):
@@ -28,6 +28,7 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
     username: str
     is_superuser: bool = False
+    role: str = UserRole.ADMIN.value
 
 
 class LoginRequest(BaseModel):
@@ -88,6 +89,7 @@ class SubscribeCreate(BaseModel):
     allow_pan: bool = True
     allow_torrent: bool = True
     best_version: bool = False
+    rule_group_id: int | None = Field(default=None, description="绑定的过滤规则组，留空用全局默认组")
     save_path: str | None = None
     note: str | None = None
 
@@ -106,6 +108,7 @@ class SubscribeUpdate(BaseModel):
     allow_pan: bool | None = None
     allow_torrent: bool | None = None
     best_version: bool | None = None
+    rule_group_id: int | None = None
     save_path: str | None = None
     note: str | None = None
 
@@ -130,6 +133,7 @@ class SubscribeOut(ORMModel):
     allow_pan: bool = True
     allow_torrent: bool = True
     best_version: bool = False
+    rule_group_id: int | None = None
     save_path: str | None = None
     note: str | None = None
     last_check_at: datetime | None = None
@@ -370,3 +374,118 @@ class PluginConfigUpdate(BaseModel):
 class PluginActionRequest(BaseModel):
     action: str
     params: dict[str, Any] = Field(default_factory=dict)
+
+
+# ---------------- 用户与权限（v1.5.0） ----------------
+class UserCreate(BaseModel):
+    """新建本地用户。"""
+
+    username: str = Field(min_length=2, max_length=64)
+    password: str = Field(min_length=6, description="至少 6 位")
+    role: UserRole = Field(default=UserRole.VIEWER, description="默认给最小权限，避免误开管理员")
+    note: str | None = Field(default=None, description="备注，例如「老婆的账号」")
+    is_active: bool = True
+
+
+class UserUpdate(BaseModel):
+    """更新用户，只提交要改的字段。"""
+
+    password: str | None = Field(default=None, min_length=6)
+    role: UserRole | None = None
+    note: str | None = None
+    is_active: bool | None = None
+
+
+class UserOut(ORMModel):
+    id: int
+    username: str
+    role: str
+    role_label: str = ""
+    note: str | None = None
+    is_active: bool = True
+    is_superuser: bool = False
+    last_login_at: datetime | None = None
+    created_at: datetime | None = None
+
+
+# ---------------- 运行期配置（v1.5.0） ----------------
+class SettingsUpdate(BaseModel):
+    """在线修改配置。只接受白名单内的键，一项非法则整体拒绝。"""
+
+    values: dict[str, Any] = Field(default_factory=dict, description="配置键 -> 新值")
+
+
+class SettingsReset(BaseModel):
+    """把配置恢复为 .env / config.yaml 里的静态值。"""
+
+    keys: list[str] | None = Field(default=None, description="要重置的键，留空表示全部")
+
+
+# ---------------- 榜单自动订阅（v1.5.0） ----------------
+class RankingRuleCreate(BaseModel):
+    """一条榜单订阅规则：从哪个榜、取多少、满足什么条件就自动订阅。"""
+
+    name: str = Field(min_length=1)
+    source: str = Field(default="tmdb_trending", description="tmdb_trending/tmdb_popular/tmdb_top_rated/local_trending")
+    media_type: MediaType = MediaType.TV
+    limit: int = Field(default=10, ge=1, le=100, description="从榜单取前 N 条")
+    min_vote: float = Field(default=0, ge=0, le=10, description="TMDB 评分下限")
+    min_year: int | None = Field(default=None, description="年份下限，过滤老片")
+    include: str | None = Field(default=None, description="标题必须包含（任一）")
+    exclude: str | None = Field(default=None, description="标题命中即跳过")
+    subscribe_defaults: dict[str, Any] = Field(default_factory=dict, description="自动建订阅时套用的默认字段")
+    enabled: bool = True
+
+
+class RankingRuleUpdate(BaseModel):
+    name: str | None = None
+    source: str | None = None
+    media_type: MediaType | None = None
+    limit: int | None = Field(default=None, ge=1, le=100)
+    min_vote: float | None = Field(default=None, ge=0, le=10)
+    min_year: int | None = None
+    include: str | None = None
+    exclude: str | None = None
+    subscribe_defaults: dict[str, Any] | None = None
+    enabled: bool | None = None
+    reset_handled: bool = Field(default=False, description="清空已处理记录，让规则重新扫全榜")
+
+
+# ---------------- 过滤规则组（v1.5.0） ----------------
+class RuleLevelIn(BaseModel):
+    """规则组里的一层。所有条件都可留空，留空即不限制。"""
+
+    name: str = ""
+    resolution: str = ""
+    quality: str = ""
+    effect: str = ""
+    video_codec: str = ""
+    include: str = ""
+    exclude: str = ""
+    min_seeders: int = 0
+    min_size_gb: float = 0
+    max_size_gb: float = 0
+
+
+class RuleGroupCreate(BaseModel):
+    name: str = Field(min_length=1)
+    description: str | None = None
+    levels: list[RuleLevelIn] = Field(default_factory=list, description="有序：越靠前越优先")
+    accept_unmatched: bool = Field(default=True, description="关掉即「宁可不下也不要不合规的」")
+    enabled: bool = True
+    is_default: bool = False
+
+
+class RuleGroupUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    levels: list[RuleLevelIn] | None = None
+    accept_unmatched: bool | None = None
+    enabled: bool | None = None
+    is_default: bool | None = None
+
+
+class RuleGroupPreviewRequest(BaseModel):
+    """用一批样例资源试算规则组效果。"""
+
+    resources: list[dict[str, Any]] = Field(default_factory=list)

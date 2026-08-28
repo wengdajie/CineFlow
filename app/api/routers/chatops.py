@@ -13,7 +13,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
-from app.api.deps import CurrentUser, SuperUser
+from app.api.deps import AdminUser, CurrentUser, OperatorUser
 from app.core.logger import get_logger
 from app.schemas.models import ChatOpsConfigUpdate, ChatOpsTestRequest
 from app.services.chatops import adapters as chat_adapters
@@ -95,7 +95,7 @@ def _is_secret(key: str) -> bool:
 
 
 @router.put("/config", summary="更新 ChatOps 配置")
-def update_config(payload: ChatOpsConfigUpdate, user: SuperUser) -> dict[str, Any]:
+def update_config(payload: ChatOpsConfigUpdate, user: AdminUser) -> dict[str, Any]:
     """更新配置。平台密钥提交 ``******`` 表示保持原值不变。"""
     data = payload.model_dump(exclude_unset=True)
 
@@ -120,7 +120,7 @@ def update_config(payload: ChatOpsConfigUpdate, user: SuperUser) -> dict[str, An
 
 
 @router.post("/test", summary="本地模拟一条指令（不经过平台）")
-async def test_command(payload: ChatOpsTestRequest, user: SuperUser) -> dict[str, Any]:
+async def test_command(payload: ChatOpsTestRequest, user: OperatorUser) -> dict[str, Any]:
     """在界面上直接试指令，便于验证解析与执行是否符合预期。"""
     message = chat_adapters.InboundMessage(
         platform=payload.platform or "console",

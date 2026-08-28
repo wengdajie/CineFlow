@@ -9,8 +9,8 @@
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)](#-docker-部署推荐)
-[![Tests](https://img.shields.io/badge/tests-370%20passed-brightgreen)](#-测试)
-[![Version](https://img.shields.io/badge/version-1.4.0-blue)](docs/08-变更日志.md)
+[![Tests](https://img.shields.io/badge/tests-537%20passed-brightgreen)](#-测试)
+[![Version](https://img.shields.io/badge/version-1.5.0-blue)](docs/08-变更日志.md)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 </div>
@@ -214,7 +214,7 @@ heat = min(做种数, 5000) ^ 0.5 × 3      # 做种数（开方避免头部通�
 
 ### ⏱ 定时任务可视化设置
 
-**9 内置任务**的触发规则都能在界面上改，**不用改配置文件、不用重启**：
+**11 内置任务**的触发规则都能在界面上改，**不用改配置文件、不用重启**：
 
 | 任务 | 默认 | 作用 |
 |---|---|---|
@@ -226,6 +226,8 @@ heat = min(做种数, 5000) ^ 0.5 × 3      # 做种数（开方避免头部通�
 | 网盘 STRM 同步 | 关闭（`0`） | 把网盘目录映射成 `.strm`，媒体库直接能播 |
 | 媒体库补刮（NFO + 图片） | 每天 `30 4 * * *` | 给缺 NFO 的历史文件补刮元数据与海报 |
 | 洗版巡检（更优版本替换） | 关闭 | 发现明显更优版本时替换已入库文件 |
+| 站点健康巡检 | 每 180 分钟 | 逐站真搜一次，Cookie 过期/掉线时告警 |
+| 榜单自动订阅 | 每 720 分钟 | 把热门榜/高分榜里符合条件的新片自动加成订阅 |
 | 媒体库全量扫描 | 每天 `0 4 * * *` | 重建入库索引，用于缺集计算与去重 |
 
 - 两种触发方式：**interval**（1 ~ 10080 分钟）与 **cron**（标准 5 段表达式）
@@ -384,16 +386,107 @@ http://<你的地址>:6060/api/v1/chatops/webhook/telegram
 
 详细配置步骤见 [`docs/05-ChatOps-机器人.md`](docs/05-ChatOps-机器人.md)。
 
-### ⚙️ 设置页
+### ⚙️ 设置页：**51 项配置可在线改，改完立刻生效**
 
-**设置页**把当前**真正生效**的配置按 **12 组 62 项**列出来（服务 / 目录 / 整理入库 /
+**设置页**把当前**真正生效**的配置按 **15 组**列出来（服务 / 目录 / 整理入库 /
 搜索与订阅策略 / 调度 / 网盘管理 / **刮削与分类** / **STRM 同步** /
-**分享追更与洗版** / ChatOps 机器人 / 元数据与网络 / 安全），
+**分享追更与洗版** / **站点健康** / **下载器调度** / **榜单订阅** /
+ChatOps 机器人 / 元数据与网络 / 安全），
 每项都标出对应的 `CF_XXX` 环境变量名，密钥类只显示「已设置」而不回显明文。
 
-> 这里刻意**只读**：静态配置改了必须重启才生效，做成可编辑就会出现
-> 「界面上改了、重启后丢了」的假功能。需要在线改的东西（定时任务周期、
-> ChatOps 配置、站点、插件）都在各自页面里，并且**持久化到数据库**。
+v1.5.0 起其中 **51 项支持在线修改**，直接在界面改完即生效：
+
+- 表单按类型渲染控件（开关 / 数字带 min-max / 下拉枚举 / cron 文本框），
+  **只提交你改过的项**，其余不动
+- 保存前**一次性全部校验**，任一项非法则整体拒绝——不会出现
+  「改了 5 项，第 3 项报错，前 2 项已经生效」的半吊子状态
+- 校验通过后写回 settings 单例，所有既有 `settings.XXX` 读取点**当场读到新值**，
+  不用重启；涉及周期的改动会自动给调度器改期
+- 改过的项标 `已覆盖` 徽标，可单项或**全部恢复默认**（回到 `.env` / `config.yaml` 的值）
+
+> **为什么不是全部可改**：只有「运行期读取即生效」的键进白名单。
+> 目录、端口、密钥、数据库 URL 这类进程启动时就固定的配置留在只读区并标注**需重启**——
+> 让它们可编辑就是造一个「界面上改了、其实没生效」的假功能（这也是退掉早期
+> 「设置页一律只读」决定的正确方式：不是全放开，而是**只放开真能生效的**）。
+
+### 👥 多用户与三档权限
+
+以前只有一个管理员账号；家里人要用就得共享密码，谁都能改站点、删订阅。
+v1.5.0 引入**三档角色**：
+
+| 角色 | 能做 | 不能做 |
+|---|---|---|
+| `admin` 管理员 | 全部：改配置、站点、用户、规则组、榜单规则 | — |
+| `operator` 操作员 | 搜索、订阅、下载、整理入库、手动巡检、网盘转存 | 改系统配置、站点、用户 |
+| `viewer` 访客 | 只读：看仪表盘、订阅、媒体库、日志 | 任何写操作 |
+
+- 前端按角色**隐藏没权限的入口与按钮**（访客看不到「用户权限」页），
+  但**服务端仍逐个端点校验**——界面隐藏只是体验，不是安全边界
+- 鉴权读**数据库里的角色**而不是 JWT 里的副本：改完角色立即生效，
+  不用等对方旧令牌过期
+- 两条自我保护：**不能删除/停用自己**，**最后一个启用中的管理员不能被降级或停用**
+  （否则谁都进不了后台）
+- 老库升级：`users` 表补 `role` 列默认 `admin`，保证原来那个唯一管理员不会被锁在外面，
+  启动时再按 `is_superuser` 对齐一次
+
+### 🩺 站点健康巡检
+
+站点最难发现的故障不是「打不开」，而是 **Cookie 过期后首页照样能开、搜索永远 0 条**——
+订阅静默不更新，你以为是没资源。
+
+- 对搜索类站点**真的搜一次**（而不是只探首页），三档判定：
+  `ok` 有结果 / `degraded` 能连通但 0 结果或极慢 / `down` 连不通或报错
+- **0 结果算降级而不是正常**，这正是要抓的那类故障
+- 连续失败达阈值（默认 3 次）才告警，且**只在状态翻转时通知**——不刷屏
+- 你手点「立即巡检」时不发通知（你正看着屏幕）
+- 每站保留最近 50 条历史，可看状态变化趋势与耗时
+- 可选**连续失败自动停用站点**（默认关闭：不擅自停掉用户的站点）
+
+### 🎯 过滤规则组（分层择优）
+
+全局评分只能表达「4K 比 1080p 好」这种**单调偏好**，表达不了
+**「宁可要 1080p 中字，也不要没字幕的 4K」**——而后者才是中文用户的真实需求。
+
+规则组是一个**有序**的层级列表：
+
+```
+第 1 层  1080p + 含「中字|简繁」     ← 命中就优先，哪怕分数低
+第 2 层  1080p                      ← 退而求其次
+第 3 层  2160p                      ← 没字幕的 4K 排在中字 1080p 之后
+兜底     接受其它 / 一个都不要
+```
+
+- 层间定优先级，**层内仍用原来的加权评分排序** → 既有偏好层级又保留细粒度打分
+- 每层条件全部**可留空**（分辨率/质量/特效/编码/包含/排除/做种数/体积区间），留空即不限
+- 可绑定到**单个订阅**，也可设一个**全局默认组**
+- 内置 4 个模板：画质优先（4K）/ 均衡（1080p 中字）/ 省空间 / 动漫（简繁内封）
+- **模板默认都不启用为默认组**：规则组会改变搜索排序，升级后悄悄换掉你熟悉的顺序很糟糕
+- 「试算」可以拿一批样例资源当场看分层结果，先看效果再保存
+- 删除规则组时会把引用它的订阅**自动解绑**，而不是留一个指向不存在组的悬空 ID
+
+### 🏆 榜单自动订阅
+
+不用自己盯榜：配一条规则，让「TMDB 本周趋势里评分 ≥7.5 的剧」自动变成订阅。
+
+- 4 个来源：TMDB 本周趋势 / TMDB 热门 / TMDB 高分 / **本地资源热度榜（无需 TMDB Key）**
+- 筛选条件：媒体类型、取前 N 条、最低评分、最低票数、最早年份、标题包含/排除关键词
+- **单次执行有上限**（默认 5 个）：否则一次能刷进上百个订阅，把下载器塞满
+- 记录已处理的条目 ID（截断 500 条）：**你手动删掉的订阅不会被下次巡检又加回来**
+- 支持 `dry_run` 试算：先看会建哪些订阅，确认了再真跑
+
+### 🔀 下载器负载均衡与失败换源
+
+多个下载器时不再永远只投第一个：
+
+| 策略 | 行为 | 适合 |
+|---|---|---|
+| `priority`（默认） | 按站点 priority 升序，与旧行为一致 | 有明确主备 |
+| `least_tasks` | 优先投给当前任务数最少的 | 多机分摊 |
+| `round_robin` | 轮流投递 | 均摊压力 |
+
+- 结合站点健康数据，把**已知不健康的下载器排到最后**——但**不剔除**：
+  健康数据可能过期（比如刚重启还没探测），剔除会导致「明明能用却不投递」
+- 投递失败自动换下一个候选下载器（`CF_DOWNLOADER_FAILOVER`，默认开）
 
 ### 🧩 插件系统
 
@@ -422,7 +515,8 @@ NAS 离线内网直接可用，整个前端只有 `index.html` + `app.js` + `sty
 - **完整 token 化设计系统**：所有颜色走语义变量
   （`--surface-0..3` / `--text` / `--accent` / `--ok|warn|err` / `--ring` / `--shadow-1..3`），
   两套主题各自一份取值，组件代码零改动即可换肤
-- **16 个功能页**分五组导航（总览 / 发现 / 追剧 / 入库 / 系统），侧边栏按组折行
+- **20 个功能页**分五组导航（总览 / 发现 / 追剧 / 入库 / 系统），侧边栏按组折行；
+  入口按当前账号角色显示（访客看不到「用户权限」）
 - **约 35 个内联 SVG 线性图标**，无字体图标、无图片请求
 - **骨架屏加载**（不再是白屏转圈）、空态插画、热度条、排名徽标、
   分段控件（segment）、标签云（chips）等组件
@@ -459,7 +553,7 @@ NAS 离线内网直接可用，整个前端只有 `index.html` + `app.js` + `sty
 | [`docs/05-ChatOps-机器人.md`](docs/05-ChatOps-机器人.md) | 三平台配置步骤、验签算法、指令表 |
 | [`docs/06-网盘管理.md`](docs/06-网盘管理.md) | 盘搜 vs 网盘、三种存储配置、转存流程 |
 | [`docs/07-运维手册.md`](docs/07-运维手册.md) | 部署、备份、排障、验证脚本 |
-| [`docs/08-变更日志.md`](docs/08-变更日志.md) | v1.0.0 → v1.4.0 逐版本记录 |
+| [`docs/08-变更日志.md`](docs/08-变更日志.md) | v1.0.0 → v1.5.0 逐版本记录 |
 | [`docs/09-竞品对标与差距分析.md`](docs/09-竞品对标与差距分析.md) | 对标 MoviePilot / quark-auto-save / SmartStrm / MediaWarp / TgtoDrive，**差距与不做的事** |
 
 ---
@@ -470,12 +564,13 @@ NAS 离线内网直接可用，整个前端只有 `index.html` + `app.js` + `sty
 ┌──────────────────────────────────────────────────────────────┐
 │  web/  零依赖 Web 控制台（原生 JS，无 CDN）                     │
 └────────────────────────────┬─────────────────────────────────┘
-                             │ REST /api/v1（95 个端点）
+                             │ REST /api/v1（118 个端点）
 ┌────────────────────────────▼─────────────────────────────────┐
-│  app/api/      16 个 router：auth search trending subscribes  │
-│                 radar schedules downloads library media       │
-│                 sites pan pan-subscribes strm chatops         │
-│                 plugins system                                │
+│  app/api/      20 个 router：auth search trending subscribes  │
+│                 radar ranking rule-groups schedules downloads │
+│                 library media sites site-health pan           │
+│                 pan-subscribes strm chatops plugins users     │
+│                 system                                        │
 ├──────────────────────────────────────────────────────────────┤
 │  app/services/  业务编排层                                     │
 │    search    多级关键词 · 并发聚合 · 去重                       │
@@ -493,12 +588,17 @@ NAS 离线内网直接可用，整个前端只有 `index.html` + `app.js` + `sty
 │    pan_subscribe 网盘分享追更（增量转存新集）                    │
 │    upgrade   洗版：更优版本替换已入库文件                        │
 │    notify    事件总线 + 多渠道推送                              │
-│    scheduler APScheduler（9 内置任务 + 插件任务），可视化改期      │
+│    scheduler APScheduler（11 内置任务 + 插件任务），可视化改期     │
 │    settings_store 运行期设置持久化（settings 表）               │
+│    config_store  可编辑配置白名单 · 校验 · 热生效               │
+│    site_health   站点健康探测（真搜一次）· 告警 · 历史           │
+│    ranking       榜单 → 自动订阅（有上限、记已处理）             │
+│    rule_groups   过滤规则组 CRUD · 默认组解析 · 试算             │
 │    sites     DB 配置 → Provider 实例                           │
 ├──────────────────────────────────────────────────────────────┤
 │  app/core/      纯函数内核（无 IO，易测）                        │
 │    meta 解析引擎 · filters 过滤打分 · organizer 命名转移         │
+│    rules 规则组分层匹配（有序偏好，层内再按分排序）              │
 │    config 三级配置 · security PBKDF2+JWT · logger 环形缓冲       │
 ├──────────────────────────────────────────────────────────────┤
 │  app/providers/ 22 个注册 Provider + TMDB 单例，装饰器自动发现   │
@@ -512,7 +612,7 @@ NAS 离线内网直接可用，整个前端只有 `index.html` + `app.js` + `sty
 ├──────────────────────────────────────────────────────────────┤
 │  app/plugins/   插件基类 + 管理器（发现/热启停/配置/动作）        │
 ├──────────────────────────────────────────────────────────────┤
-│  app/db/        SQLAlchemy 2.0 ORM · SQLite(WAL) · 16 张表     │
+│  app/db/        SQLAlchemy 2.0 ORM · SQLite(WAL) · 19 张表     │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -615,6 +715,17 @@ YAML 里的二级 key 会拍平成 `CF_<父>_<子>`，例如 `tmdb.api_key` → 
 | 指令回复条数 | `CF_CHATOPS_RESULT_LIMIT` | `5` | 搜索结果回复几条 |
 | 指令白名单 | `CF_CHATOPS_ALLOW_USERS` | 空 | 平台用户 ID，逗号分隔；留空=不限制 |
 | 指令会话时长 | `CF_CHATOPS_SESSION_TTL` | `900` | 秒；「搜索」后能回「下载 2」的有效期 |
+| 站点健康巡检 | `CF_SITE_HEALTH_ENABLED` | `true` | 定期探测站点可用性总开关 |
+| 健康巡检周期 | `CF_SITE_HEALTH_INTERVAL_MINUTES` | `180` | 分钟；探测会真搜一次，别调太密 |
+| 健康告警阈值 | `CF_SITE_HEALTH_FAIL_THRESHOLD` | `3` | 连续失败几次才通知，避免抖动刷屏 |
+| 站点自动停用 | `CF_SITE_AUTO_DISABLE` | `false` | 连续失败是否自动禁用站点；默认关闭 |
+| 下载器策略 | `CF_DOWNLOADER_STRATEGY` | `priority` | `priority` / `least_tasks` / `round_robin` |
+| 下载器换源 | `CF_DOWNLOADER_FAILOVER` | `true` | 投递失败时自动换下一个下载器 |
+| 榜单订阅周期 | `CF_RANKING_INTERVAL_MINUTES` | `720` | 分钟，`0`=关闭 |
+| 榜单单次上限 | `CF_RANKING_MAX_PER_RUN` | `5` | 一次最多自动建几个订阅，防刷爆 |
+
+> 上表中**除密钥、目录、端口外的绝大多数项都能在设置页直接改并立即生效**，
+> 不必改文件重启。
 
 完整清单见 [`config/config.yaml.example`](config/config.yaml.example) 与 [`.env.example`](.env.example)。
 
@@ -969,7 +1080,7 @@ curl -X POST -H "X-API-Token: your-token" \
      http://127.0.0.1:6060/api/v1/subscribes/run-all
 ```
 
-主要端点分组（共 95 个）：
+主要端点分组（共 118 个）：
 
 | 前缀 | 用途 |
 |---|---|
@@ -982,13 +1093,17 @@ curl -X POST -H "X-API-Token: your-token" \
 | `/api/v1/media` | 资源名识别、TMDB 搜索/详情/分集/热榜 |
 | `/api/v1/sites` | 站点 CRUD、连通性测试、Provider 清单、预设模板、导航站发现 |
 | `/api/v1/radar` | 追新雷达：手动追新、预览匹配、最新流预览、任务状态 |
+| `/api/v1/ranking-rules` | 榜单自动订阅：规则 CRUD、试算候选、单条/全部执行 |
+| `/api/v1/rule-groups` | 过滤规则组：CRUD、设为默认、样例资源试算分层 |
+| `/api/v1/site-health` | 站点健康：概览、历史记录、单站/批量探测 |
 | `/api/v1/pan` | 网盘管理：总览、目录浏览、转存、批量转存、建目录、删除、直链、记录 |
 | `/api/v1/pan-subscribes` | 网盘分享追更：订阅 CRUD、单个/全部巡检 |
 | `/api/v1/strm` | STRM 同步：概览、记录、手动同步、`play/{id}` 匿名 302 跳转 |
 | `/api/v1/chatops` | 机器人：入站 Webhook、平台清单、配置、指令试跑、解析、审计 |
 | `/api/v1/schedules` | 定时任务：查看、改期（interval/cron）、重置、立即执行 |
 | `/api/v1/plugins` | 列表、启停、配置、执行动作 |
-| `/api/v1/system` | 仪表盘、系统信息、生效配置、调度任务、日志、通知 |
+| `/api/v1/users` | 用户与权限：CRUD、三档角色（仅管理员可访问） |
+| `/api/v1/system` | 仪表盘、系统信息、生效配置、**在线改配置/恢复默认**、调度任务、日志、通知 |
 
 ---
 
@@ -996,7 +1111,7 @@ curl -X POST -H "X-API-Token: your-token" \
 
 ```bash
 pip install -r requirements-dev.txt
-pytest -q                 # 370 passed
+pytest -q                 # 537 passed
 ruff check app tests      # 静态检查
 ```
 
@@ -1021,6 +1136,12 @@ ruff check app tests      # 静态检查
 | `test_strm_sync.py` | **STRM 同步**：`proxy`/`direct` 两种链接、302 播放解析、失效清理、随行文件 |
 | `test_pan_subscribe.py` | **分享追更**：增量文件名去重、包含/排除/正则过滤、错误正则不崩、重命名规则、星期与到期限制、失败达阈值标记失效 |
 | `test_upgrade.py` | **洗版**：评分阈值防横跳、次数上限、仅 `best_version` 生效、先入库后删旧 |
+| `test_config_store.py` | **可编辑配置**：白名单边界、类型/范围/枚举/cron 校验、先全校验再落库、热生效与重置 |
+| `test_rules.py` | **规则组内核**：分层匹配、层内按分排序、未命中兜底、条件留空即不限、纯函数无 IO |
+| `test_rule_groups.py` | **规则组服务**：CRUD、默认组唯一、停用/不存在退回默认、删除时解绑订阅、试算不污染入参 |
+| `test_users.py` | **用户权限**：三档角色鉴权边界、`is_superuser` 由 role 推导、不能删/停自己、最后一个管理员不能降级 |
+| `test_site_health.py` | **站点健康**：三档判定（0 结果=降级）、连续失败告警阈值、历史裁剪、状态翻转才通知 |
+| `test_ranking.py` | **榜单订阅**：候选筛选纯函数、单次上限、`handled_ids` 去重、dry-run 不建订阅 |
 
 全部测试使用内存假 Provider，**全程不触网**。
 
@@ -1031,8 +1152,8 @@ ruff check app tests      # 静态检查
 ```bash
 python -m app.main &                  # 先起服务
 
-python scripts/smoke_test.py          # 141 项真实 HTTP 接口用例
-python scripts/ui_check.py            # Playwright 真浏览器逐页点检 16 个页面 + 主题切换，捕获 JS 报错
+python scripts/smoke_test.py          # 207 项真实 HTTP 接口用例
+python scripts/ui_check.py            # Playwright 真浏览器逐页点检 20 个页面 + 主题切换，捕获 JS 报错
 python scripts/demo_pipeline.py       # 真实文件演示解析→硬链入库→缺集收敛（无需服务）
 python scripts/live_check.py          # 真实站点端到端：启用 mukaku→搜索→订阅→雷达匹配（联网）
 python scripts/verify_docs.py         # 校验 README 事实声明与代码一致
@@ -1047,22 +1168,23 @@ python scripts/research_refs.py       # 抓取同类开源项目特性清单，�
 cineflow/
 ├── app/
 │   ├── core/          config logger security exceptions meta filters organizer
-│   │                  nfo categories version
+│   │                  nfo categories rules version
 │   ├── db/            session base models init_db
 │   ├── providers/     base registry + indexer/ pan/ panstorage/ downloader/
 │   │                  mediaserver/ notify/ metadata/
 │   ├── services/      sites search notify download library subscribe scheduler
 │   │                  radar trending discovery presets settings_store
 │   │                  pan_storage scraper strm_sync pan_subscribe upgrade
+│   │                  config_store site_health ranking rule_groups
 │   │                  chatops/
 │   ├── plugins/       base manager
-│   ├── api/           deps router + routers/(16)
+│   ├── api/           deps router + routers/(20)
 │   ├── schemas/       enums models
 │   ├── utils/         http strings
 │   └── main.py        应用入口（lifespan / CORS / 静态资源）
 ├── web/               index.html + assets/(app.js style.css)  ← 零依赖前端
 ├── plugins/           auto_cleanup pan_transfer daily_digest  ← 示例插件
-├── tests/             19 个测试文件
+├── tests/             25 个测试文件
 ├── scripts/           smoke_test / ui_check / demo_pipeline 验证脚本
 ├── docs/              10 篇维护文档（现状/架构/路线图/决策/运维/变更日志/竞品对标…）
 ├── config/            config.yaml.example

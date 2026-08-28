@@ -295,7 +295,7 @@ def test_trending_requires_auth(client):
 # ---------------- 定时任务设置 ----------------
 def test_builtin_specs_cover_all_jobs():
     keys = [spec.key for spec in builtin_specs()]
-    # v1.4.0 扩到 9 个：新增分享追更 / STRM 同步 / 补刮 / 洗版
+    # v1.5.0 扩到 11 个：v1.4.0 的分享追更/STRM/补刮/洗版 + 本版站点健康/榜单订阅
     assert keys == [
         "subscribe",
         "radar",
@@ -303,6 +303,8 @@ def test_builtin_specs_cover_all_jobs():
         "pan_transfer",
         "pan_subscribe",
         "strm_sync",
+        "site_health",
+        "ranking",
         "scrape",
         "upgrade",
         "library",
@@ -327,6 +329,24 @@ def test_normalize_schedule_validates():
         except ValueError:
             continue
         raise AssertionError(f"非法规则未被拒绝: {bad}")
+
+
+def test_normalize_schedule_validates_cron_even_for_interval():
+    """interval 任务提交的非法 cron 也要当场拒绝。
+
+    真实踩坑：以前只在 trigger==cron 时校验，非法表达式会被静默存下来，
+    等用户哪天把 trigger 切成 cron 才起不来，那时早忘了自己填过什么。
+    """
+    try:
+        normalize_schedule("radar", {"trigger": "interval", "minutes": 30, "cron": "这不是 cron"})
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("interval 任务的非法 cron 未被拒绝")
+
+    # 不提交 cron 字段时沿用旧值，不该因此报错
+    kept = normalize_schedule("radar", {"trigger": "interval", "minutes": 25})
+    assert kept["minutes"] == 25
 
 
 def test_update_and_reset_schedule_persists():
@@ -359,10 +379,10 @@ def test_schedule_api(client, auth_headers):
         listing = client.get("/api/v1/schedules", headers=auth_headers)
         assert listing.status_code == 200
         items = listing.json()["items"]
-        assert len(items) == 9
+        assert len(items) == 11
         assert {item["key"] for item in items} == {
             "subscribe", "radar", "download", "pan_transfer", "pan_subscribe",
-            "strm_sync", "scrape", "upgrade", "library",
+            "strm_sync", "site_health", "ranking", "scrape", "upgrade", "library",
         }
 
         detail = client.get("/api/v1/schedules/radar", headers=auth_headers)

@@ -13,7 +13,8 @@ API = BASE + "/api/v1"
 results = []
 
 
-def call(method, path, *, body=None, form=None, token=None, expect=(200, 201), extra_headers=None):
+def call(method, path, *, body=None, form=None, token=None, expect=(200, 201), extra_headers=None,
+         timeout=45):
     url = path if path.startswith("http") else API + path
     data, headers = None, dict(extra_headers or {})
     if form is not None:
@@ -26,7 +27,7 @@ def call(method, path, *, body=None, form=None, token=None, expect=(200, 201), e
         headers["Authorization"] = "Bearer " + token
     request = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(request, timeout=40) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             status, text = response.status, response.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as exc:
         status, text = exc.code, exc.read().decode("utf-8", "replace")
@@ -246,8 +247,8 @@ if sub_id:
     call("GET", f"/subscribes/{sub_id}/missing", token=token)
     call("PATCH", f"/subscribes/{sub_id}", token=token, body={"status": "paused"})
     call("PATCH", f"/subscribes/{sub_id}", token=token, body={"status": "active"})
-    call("POST", f"/subscribes/{sub_id}/run", token=token)
-call("POST", "/subscribes/run-all", token=token)
+    call("POST", f"/subscribes/{sub_id}/run", token=token, timeout=240)
+call("POST", "/subscribes/run-all", token=token, timeout=240)
 
 print("\n" + "=" * 70)
 print("8) 下载与媒体库")
@@ -536,12 +537,236 @@ for expected in ("刮削与分类", "STRM 同步", "分享追更与洗版"):
     print(f"{'PASS' if ok else 'FAIL'} 200 CHECK  设置分组「{expected}」")
 
 print("\n" + "=" * 70)
+print("9i) 可编辑设置：读取元信息 / 在线修改 / 非法值拒绝 / 恢复默认")
+print("=" * 70)
+settings_body = call("GET", "/system/settings", token=token)
+editable = [
+    item
+    for group in settings_body.get("groups") or []
+    for item in group.get("items") or []
+    if item.get("editable")
+]
+print(f"       可编辑配置 {settings_body.get('editable_total')} 项（分组内 {len(editable)} 项）")
+ok = bool(editable) and all("type" in item for item in editable)
+results.append((ok, "CHECK", "可编辑项均带 type 元信息", 200 if ok else 0))
+print(f"{'PASS' if ok else 'FAIL'} 200 CHECK  可编辑项均带 type 元信息")
+
+# 改一个「运行期读取即生效」的键，然后确认读回来是新值
+updated = call("PUT", "/system/settings", token=token, body={"values": {"RANKING_MAX_PER_RUN": 7}})
+print(f"       改配置：{updated.get('message')}")
+after = call("GET", "/system/settings", token=token)
+current = next(
+    (
+        item
+        for group in after.get("groups") or []
+        for item in group.get("items") or []
+        if item.get("key") == "RANKING_MAX_PER_RUN"
+    ),
+    {},
+)
+ok = str(current.get("value")) == "7" and current.get("overridden") is True
+results.append((ok, "CHECK", "改动已生效且标记为 overridden", 200 if ok else 0))
+print(f"{'PASS' if ok else 'FAIL'} 200 CHECK  改动已生效且标记为 overridden（当前 {current.get('value')}）")
+
+# 白名单外的键、非法枚举值、非法 cron 都必须整体拒绝
+call("PUT", "/system/settings", token=token, body={"values": {"SECRET_KEY": "x"}}, expect=(400,))
+call("PUT", "/system/settings", token=token, body={"values": {"DATA_DIR": "/tmp"}}, expect=(400,))
+call("PUT", "/system/settings", token=token,
+     body={"values": {"DOWNLOADER_STRATEGY": "不存在"}}, expect=(400,))
+call("POST", "/system/settings/reset", token=token, body={"keys": ["RANKING_MAX_PER_RUN"]})
+call("POST", "/system/settings/reset", token=token, body={"keys": None})
+call("GET", "/system/settings", expect=(401,))
+
+print("\n" + "=" * 70)
+print("9j) 用户与权限：CRUD / 三档角色 / 403 边界 / 自我保护")
+print("=" * 70)
+users = call("GET", "/users", token=token)
+print(f"       现有用户 {users.get('total')} 个，角色档位 {[r['value'] for r in users.get('roles') or []]}")
+
+viewer = call("POST", "/users", token=token,
+              body={"username": "cf_smoke_viewer", "password": "smoke-pass", "role": "viewer",
+                    "note": "冒烟测试账号"})
+viewer_id = (viewer.get("data") or {}).get("id")
+operator = call("POST", "/users", token=token,
+                body={"username": "cf_smoke_operator", "password": "smoke-pass", "role": "operator"})
+operator_id = (operator.get("data") or {}).get("id")
+print(f"       新建 viewer id={viewer_id} / operator id={operator_id}")
+
+# is_superuser 必须由 role 推导，不能由前端说了算
+ok = (viewer.get("data") or {}).get("is_superuser") is False
+results.append((ok, "CHECK", "viewer 的 is_superuser 为 false", 200 if ok else 0))
+print(f"{'PASS' if ok else 'FAIL'} 200 CHECK  viewer 的 is_superuser 为 false")
+
+call("POST", "/users", token=token,
+     body={"username": "cf_smoke_viewer", "password": "smoke-pass", "role": "viewer"}, expect=(400,))
+
+viewer_auth = call("POST", "/auth/login", form={"username": "cf_smoke_viewer", "password": "smoke-pass"})
+viewer_token = viewer_auth.get("access_token")
+op_auth = call("POST", "/auth/login", form={"username": "cf_smoke_operator", "password": "smoke-pass"})
+op_token = op_auth.get("access_token")
+ok = viewer_auth.get("role") == "viewer" and op_auth.get("role") == "operator"
+results.append((ok, "CHECK", "登录响应带正确角色", 200 if ok else 0))
+print(f"{'PASS' if ok else 'FAIL'} 200 CHECK  登录响应带正确角色")
+
+if viewer_token:
+    # viewer 只读：能看，不能写
+    call("GET", "/subscribes", token=viewer_token)
+    call("GET", "/rule-groups", token=viewer_token)
+    call("POST", "/subscribes", token=viewer_token, body={"title": "viewer 不该建成功"}, expect=(403,))
+    call("GET", "/users", token=viewer_token, expect=(403,))
+if op_token:
+    # operator 能干活，但改不了系统配置与用户
+    call("GET", "/site-health", token=op_token)
+    call("PUT", "/system/settings", token=op_token,
+         body={"values": {"RANKING_MAX_PER_RUN": 9}}, expect=(403,))
+    call("GET", "/users", token=op_token, expect=(403,))
+    call("POST", "/rule-groups", token=op_token,
+         body={"name": "operator 不该能建", "levels": [{"resolution": "1080p"}]}, expect=(403,))
+
+# 自我保护：不能删自己；最后一个管理员不能降级
+admin_id = next((item["id"] for item in users.get("items") or [] if item["username"] == "admin"), None)
+if admin_id:
+    call("DELETE", f"/users/{admin_id}", token=token, expect=(400,))
+    call("PATCH", f"/users/{admin_id}", token=token, body={"role": "operator"}, expect=(400,))
+if viewer_id:
+    call("PATCH", f"/users/{viewer_id}", token=token, body={"note": "改过备注", "role": "operator"})
+call("PATCH", "/users/999999", token=token, body={"note": "x"}, expect=(404,))
+call("GET", "/users", expect=(401,))
+
+print("\n" + "=" * 70)
+print("9k) 站点健康巡检：概览 / 历史 / 单站探测 / 批量探测")
+print("=" * 70)
+health = call("GET", "/site-health", token=token)
+hdata = health.get("data") or health
+print(
+    f"       健康概览：共 {health.get('total')} 站"
+    f"（正常 {hdata.get('ok')} / 降级 {hdata.get('degraded')} / 故障 {hdata.get('down')}）"
+)
+call("GET", "/site-health/records?limit=10", token=token)
+sites_list = call("GET", "/sites", token=token)
+first_site = next(iter(items_of(sites_list)), {})
+if first_site.get("id"):
+    checked = call("POST", f"/site-health/check/{first_site['id']}", token=token)
+    print(f"       单站探测 #{first_site['id']}：{checked.get('message') or checked.get('status')}")
+call("POST", "/site-health/check/999999", token=token, expect=(404,))
+call("GET", "/site-health", expect=(401,))
+
+print("\n" + "=" * 70)
+print("9l) 榜单自动订阅：规则 CRUD / 试算 / 执行（dry-run 不留垃圾订阅）")
+print("=" * 70)
+rank_created = call(
+    "POST",
+    "/ranking-rules",
+    token=token,
+    body={
+        "name": "冒烟测试榜单",
+        "source": "tmdb_trending",
+        "media_type": "tv",
+        "limit": 3,
+        "min_vote": 7.0,
+        "enabled": False,
+    },
+)
+rank_id = (rank_created.get("data") or {}).get("id")
+print(f"       榜单规则 id={rank_id}")
+rank_list = call("GET", "/ranking-rules", token=token)
+print(f"       榜单规则共 {rank_list.get('total')} 条，来源 {len(rank_list.get('sources') or [])} 个")
+call("POST", "/ranking-rules", token=token, body={"name": "x", "source": "不存在的榜"}, expect=(400,))
+if rank_id:
+    call("PATCH", f"/ranking-rules/{rank_id}", token=token, body={"limit": 5})
+    preview = call("POST", f"/ranking-rules/{rank_id}/preview", token=token)
+    print(f"       榜单试算：候选 {preview.get('total')} 条（无 TMDB Key 时为 0 属正常）")
+    call("POST", f"/ranking-rules/{rank_id}/run", token=token, body={"dry_run": True})
+call("PATCH", "/ranking-rules/999999", token=token, body={"limit": 5}, expect=(404,))
+call("GET", "/ranking-rules", expect=(401,))
+
+print("\n" + "=" * 70)
+print("9m) 过滤规则组：内置模板 / CRUD / 试算分层排序")
+print("=" * 70)
+groups = call("GET", "/rule-groups", token=token)
+print(
+    f"       规则组共 {groups.get('total')} 个，当前默认：{groups.get('default') or '（未设默认组）'}"
+)
+# 内置模板必须至少有一个（init_db 建的 4 个），且默认组最多一个
+builtin = groups.get("items") or []
+ok = len(builtin) >= 4 and sum(1 for item in builtin if item.get("is_default")) <= 1
+results.append((ok, "CHECK", "内置规则组模板存在且默认组唯一", 200 if ok else 0))
+print(f"{'PASS' if ok else 'FAIL'} 200 CHECK  内置规则组模板存在且默认组唯一")
+group_created = call(
+    "POST",
+    "/rule-groups",
+    token=token,
+    body={
+        "name": "冒烟测试规则组",
+        "description": "1080p 中字优先",
+        "levels": [
+            {"name": "1080p 中字", "resolution": "1080p", "include": "中字"},
+            {"name": "1080p", "resolution": "1080p"},
+            {"name": "4K", "resolution": "2160p"},
+        ],
+        "accept_unmatched": True,
+    },
+)
+group_id = (group_created.get("data") or {}).get("id")
+print(f"       规则组 id={group_id}，层数 {(group_created.get('data') or {}).get('level_count')}")
+call("POST", "/rule-groups", token=token, body={"name": "没有层级", "levels": []}, expect=(400,))
+call("POST", "/rule-groups", token=token,
+     body={"name": "冒烟测试规则组", "levels": [{"resolution": "1080p"}]}, expect=(400,))
+if group_id:
+    call("GET", f"/rule-groups/{group_id}", token=token)
+    call("PATCH", f"/rule-groups/{group_id}", token=token, body={"description": "改过说明"})
+    previewed = call(
+        "POST",
+        f"/rule-groups/{group_id}/preview",
+        token=token,
+        body={
+            "resources": [
+                {"title": "某剧 S01E01 2160p WEB-DL", "size": "8GB", "seeders": 50},
+                {"title": "某剧 S01E01 1080p WEB-DL 中字", "size": "2GB", "seeders": 30},
+                {"title": "某剧 S01E01 480p TVRip", "size": "300MB", "seeders": 1},
+            ]
+        },
+    )
+    top = next(iter(previewed.get("items") or []), {})
+    print(f"       试算命中：首位「{top.get('title')}」层级 {top.get('rule_level')}")
+    # 分层的意义：1080p 中字要压过 4K 无字幕
+    ok = top.get("rule_level") == 0 and "中字" in str(top.get("title"))
+    results.append((ok, "CHECK", "1080p 中字排在 4K 之前", 200 if ok else 0))
+    print(f"{'PASS' if ok else 'FAIL'} 200 CHECK  1080p 中字排在 4K 之前")
+call("PATCH", "/rule-groups/999999", token=token, body={"description": "x"}, expect=(404,))
+call("GET", "/rule-groups", expect=(401,))
+
+print("\n" + "=" * 70)
+print("9n) 调度：v1.5.0 两个新任务已注册且可手动执行")
+print("=" * 70)
+schedules = call("GET", "/schedules", token=token)
+keys = [item.get("key") for item in schedules.get("items") or []]
+print(f"       内置任务 {len(keys)} 个：{keys}")
+for expected in ("site_health", "ranking"):
+    ok = expected in keys
+    results.append((ok, "CHECK", f"任务「{expected}」已注册", 200 if ok else 0))
+    print(f"{'PASS' if ok else 'FAIL'} 200 CHECK  任务「{expected}」已注册")
+# cron 非法必须被挡住，而不是等调度器起不来才报错
+call("PUT", "/schedules/site_health", token=token,
+     body={"cron": "这不是 cron"}, expect=(400, 422))
+call("POST", "/schedules/site_health/reset", token=token)
+
+print("\n" + "=" * 70)
 print("10) 清理测试数据")
 print("=" * 70)
 if sub_id:
     call("DELETE", f"/subscribes/{sub_id}", token=token)
 if ps_id:
     call("DELETE", f"/pan-subscribes/{ps_id}", token=token)
+if rank_id:
+    call("DELETE", f"/ranking-rules/{rank_id}", token=token)
+if group_id:
+    call("DELETE", f"/rule-groups/{group_id}", token=token)
+# 测试账号必须删掉，否则下次跑冒烟会撞用户名
+if viewer_id:
+    call("DELETE", f"/users/{viewer_id}", token=token)
+if operator_id:
+    call("DELETE", f"/users/{operator_id}", token=token)
 
 failed = [item for item in results if not item[0]]
 print("\n" + "=" * 70)

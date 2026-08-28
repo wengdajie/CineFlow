@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import APIRouter, Query
 from sqlalchemy import select
 
-from app.api.deps import CurrentUser, DbSession
+from app.api.deps import CurrentUser, DbSession, OperatorUser
 from app.core.organizer import transfer_directory
 from app.db.models import LibraryFile, TransferRecord
 from app.schemas.models import ScrapeRequest, TransferRequest, TransferResultOut
@@ -57,12 +57,12 @@ def files(
 
 
 @router.post("/scan", summary="扫描媒体库")
-def scan(user: CurrentUser, path: str | None = None) -> dict[str, Any]:
+def scan(user: OperatorUser, path: str | None = None) -> dict[str, Any]:
     return {"success": True, **library_service.scan_library(path)}
 
 
 @router.post("/transfer", summary="手动整理目录/文件")
-def transfer(payload: TransferRequest, user: CurrentUser) -> dict[str, Any]:
+def transfer(payload: TransferRequest, user: OperatorUser) -> dict[str, Any]:
     results = transfer_directory(
         payload.source,
         library_dir=payload.library_dir,
@@ -93,7 +93,7 @@ def transfer(payload: TransferRequest, user: CurrentUser) -> dict[str, Any]:
 
 
 @router.post("/scrape", summary="批量补刮 NFO 与图片")
-async def scrape(payload: ScrapeRequest, user: CurrentUser) -> dict[str, Any]:
+async def scrape(payload: ScrapeRequest, user: OperatorUser) -> dict[str, Any]:
     """给媒体库里**缺 NFO** 的文件补刮元数据。
 
     默认不覆盖已有 NFO，因此可以反复执行；TMDB 不可用时会退化成
@@ -108,7 +108,7 @@ async def scrape(payload: ScrapeRequest, user: CurrentUser) -> dict[str, Any]:
 
 
 @router.post("/refresh", summary="刷新媒体服务器")
-async def refresh(user: CurrentUser, path: str | None = None) -> dict[str, Any]:
+async def refresh(user: OperatorUser, path: str | None = None) -> dict[str, Any]:
     count = await library_service.refresh_media_servers(path)
     return {"success": True, "refreshed": count}
 

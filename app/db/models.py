@@ -26,6 +26,7 @@ from app.schemas.enums import (
     ResourceKind,
     SubscribeStatus,
     TaskStatus,
+    UserRole,
 )
 
 
@@ -39,6 +40,11 @@ class User(IdMixin, TimestampMixin, Base):
     is_superuser: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    #: 角色：admin（全权）/ operator（可订阅下载，不可改系统配置）/ viewer（只读）
+    #: 保留 ``is_superuser`` 是为了兼容老库与已签发的 JWT，两者由 role 推导保持一致
+    role: Mapped[str] = mapped_column(String(16), default=UserRole.ADMIN.value, index=True)
+    #: 备注（给家人开号时标记这是谁）
+    note: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
 
 class MediaItem(IdMixin, TimestampMixin, Base):
@@ -104,6 +110,8 @@ class Subscribe(IdMixin, TimestampMixin, Base):
     allow_pan: Mapped[bool] = mapped_column(Boolean, default=True)
     allow_torrent: Mapped[bool] = mapped_column(Boolean, default=True)
     best_version: Mapped[bool] = mapped_column(Boolean, default=False)
+    #: 引用的过滤规则组（有序偏好），为空表示只用全局评分
+    rule_group_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     save_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_check_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -408,3 +416,87 @@ class StrmRecord(IdMixin, TimestampMixin, Base):
     #: 上次校验时源文件是否仍存在
     alive: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     last_synced_at: Mapped[datetime | None] = mapped_column(nullable=True)
+
+
+class SiteHealthRecord(IdMixin, TimestampMixin, Base):
+    """站点健康探测记录。
+
+    为什么单独一张表而不是只更新 ``sites.last_status``：
+    Cookie 过期最典型的表现是**静默返回 0 条结果**而不是报错，
+    要判断"是真没有资源还是站点挂了"必须看**历史趋势**，
+    所以每次探测都留一条，界面上能看出"从哪天开始不行的"。
+    """
+
+    __tablename__ = "site_health"
+
+    site_id: Mapped[int | None] = mapped_column(
+        ForeignKey("sites.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    site_name: Mapped[str] = mapped_column(String(128), index=True)
+    kind: Mapped[str] = mapped_column(String(24), default="", index=True)
+    provider: Mapped[str] = mapped_column(String(64), default="")
+    #: ok / degraded / down
+    status: Mapped[str] = mapped_column(String(16), default="ok", index=True)
+    #: 探测耗时，用于发现"能连但极慢"的站点
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+    #: 探测搜索返回的结果条数（0 结果 + 无报错 = 疑似 Cookie 过期）
+    result_count: Mapped[int] = mapped_column(Integer, default=0)
+    message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class RankingRule(IdMixin, TimestampMixin, Base):
+    """榜单自动订阅规则。
+
+    对标 MoviePilot 的「榜单订阅」：把某个榜单（TMDB 热门/高分/趋势）
+    的前 N 项自动变成订阅，免得每部剧都手动加。
+    """
+
+    __tablename__ = "ranking_rules"
+    __table_args__ = (UniqueConstraint("name", name="uq_ranking_rule_name"),)
+
+    name: Mapped[str] = mapped_column(String(128), index=True)
+    #: 榜单来源：tmdb_trending / tmdb_popular / tmdb_top_rated / local_trending
+    source: Mapped[str] = mapped_column(String(32), default="tmdb_trending", index=True)
+    media_type: Mapped[str] = mapped_column(String(16), default=MediaType.TV.value)
+    #: 取榜单前多少项参与匹配
+    limit: Mapped[int] = mapped_column(Integer, default=10)
+    #: 最低评分门槛（TMDB vote_average），0 表示不限
+    min_vote: Mapped[float] = mapped_column(Float, default=0.0)
+    #: 只要这些年份之后的（避免把老片全刷进来）
+    min_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: 标题包含/排除关键词
+    include: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    exclude: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    #: 创建订阅时套用的过滤条件（resolution/quality/include/exclude 等）
+    subscribe_defaults: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    #: 已由本规则创建过的 tmdb_id，避免用户删掉订阅后又被自动加回来
+    handled_ids: Mapped[list[int]] = mapped_column(JSON, default=list)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_result: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_count: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class FilterRuleGroup(IdMixin, TimestampMixin, Base):
+    """自定义过滤规则组（优先级规则）。
+
+    对标 MoviePilot / nexus-media 的「规则组」：用户把
+    "先要 4K REMUX，没有就要 4K WEB-DL，再没有才要 1080p"
+    这种**有序偏好**表达出来，而不是只能调一个全局评分权重。
+    订阅可以引用某个规则组（``subscribes.rule_group_id``）。
+    """
+
+    __tablename__ = "filter_rule_groups"
+    __table_args__ = (UniqueConstraint("name", name="uq_rule_group_name"),)
+
+    name: Mapped[str] = mapped_column(String(128), index=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: 有序规则层级；每层是一组条件，命中靠前层的资源优先
+    #: [{"name":"4K REMUX","resolution":"2160p","quality":"REMUX","min_seeders":1}, ...]
+    levels: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    #: 任何层都不命中时是否仍然接受（False = 只下命中规则的资源）
+    accept_unmatched: Mapped[bool] = mapped_column(Boolean, default=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    #: 是否为默认规则组（新订阅自动套用）
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+

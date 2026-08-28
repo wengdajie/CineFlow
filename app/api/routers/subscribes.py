@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import select
 
-from app.api.deps import CurrentUser, DbSession
+from app.api.deps import CurrentUser, DbSession, OperatorUser
 from app.db.models import Subscribe
 from app.schemas.enums import SubscribeStatus
 from app.schemas.models import (
@@ -40,7 +40,7 @@ def list_subscribes(
 
 
 @router.post("", response_model=SubscribeOut, summary="新增订阅")
-async def create_subscribe(payload: SubscribeCreate, user: CurrentUser) -> Subscribe:
+async def create_subscribe(payload: SubscribeCreate, user: OperatorUser) -> Subscribe:
     try:
         return await subscribe_service.create_subscribe(payload.model_dump())
     except ValueError as exc:
@@ -60,7 +60,7 @@ def update_subscribe(
     subscribe_id: int,
     payload: SubscribeUpdate,
     session: DbSession,
-    user: CurrentUser,
+    user: OperatorUser,
 ) -> Subscribe:
     record = session.get(Subscribe, subscribe_id)
     if not record:
@@ -77,7 +77,7 @@ def update_subscribe(
 
 
 @router.delete("/{subscribe_id}", response_model=Message, summary="删除订阅")
-def delete_subscribe(subscribe_id: int, session: DbSession, user: CurrentUser) -> Message:
+def delete_subscribe(subscribe_id: int, session: DbSession, user: OperatorUser) -> Message:
     record = session.get(Subscribe, subscribe_id)
     if not record:
         raise HTTPException(status_code=404, detail="订阅不存在")
@@ -87,7 +87,7 @@ def delete_subscribe(subscribe_id: int, session: DbSession, user: CurrentUser) -
 
 
 @router.post("/{subscribe_id}/run", summary="立即搜索该订阅")
-async def run_subscribe(subscribe_id: int, user: CurrentUser) -> dict[str, Any]:
+async def run_subscribe(subscribe_id: int, user: OperatorUser) -> dict[str, Any]:
     result = await subscribe_service.process_subscribe(subscribe_id)
     return {"success": True, **result}
 
@@ -112,7 +112,7 @@ def missing_episodes(
 
 @router.post("/{subscribe_id}/upgrade", summary="洗版：寻找更优版本")
 async def upgrade_subscribe(
-    subscribe_id: int, payload: UpgradeRequest, user: CurrentUser
+    subscribe_id: int, payload: UpgradeRequest, user: OperatorUser
 ) -> dict[str, Any]:
     """为订阅已入库的剧集寻找评分更高的版本。
 
@@ -128,7 +128,7 @@ async def upgrade_subscribe(
 
 
 @router.post("/upgrade-all", summary="洗版：巡检所有最优版本订阅")
-async def upgrade_all(payload: UpgradeRequest, user: CurrentUser) -> dict[str, Any]:
+async def upgrade_all(payload: UpgradeRequest, user: OperatorUser) -> dict[str, Any]:
     """批量巡检所有开启了「最优版本」的订阅。"""
     from app.services import upgrade as upgrade_service
 
@@ -137,5 +137,5 @@ async def upgrade_all(payload: UpgradeRequest, user: CurrentUser) -> dict[str, A
 
 
 @router.post("/run-all", summary="立即巡检所有订阅")
-async def run_all(user: CurrentUser, limit: int | None = None) -> dict[str, Any]:
+async def run_all(user: OperatorUser, limit: int | None = None) -> dict[str, Any]:
     return await subscribe_service.run_all(limit)

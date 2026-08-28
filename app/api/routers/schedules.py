@@ -6,7 +6,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
-from app.api.deps import CurrentUser
+from app.api.deps import AdminUser, CurrentUser, OperatorUser
 from app.schemas.models import Message, ScheduleUpdate
 from app.services.scheduler import scheduler_service
 
@@ -33,7 +33,7 @@ def get_schedule(key: str, user: CurrentUser) -> dict[str, Any]:
 
 @router.put("/{key}", summary="修改定时任务触发规则")
 def update_schedule(
-    key: str, payload: ScheduleUpdate, user: CurrentUser
+    key: str, payload: ScheduleUpdate, user: AdminUser
 ) -> dict[str, Any]:
     """修改后立即改期并持久化，重启后依然生效。"""
     try:
@@ -46,7 +46,7 @@ def update_schedule(
 
 
 @router.post("/{key}/reset", summary="重置为配置默认值")
-def reset_schedule(key: str, user: CurrentUser) -> dict[str, Any]:
+def reset_schedule(key: str, user: AdminUser) -> dict[str, Any]:
     try:
         data = scheduler_service.reset_schedule(key)
     except (ValueError, KeyError) as exc:
@@ -55,7 +55,7 @@ def reset_schedule(key: str, user: CurrentUser) -> dict[str, Any]:
 
 
 @router.post("/{key}/run", response_model=Message, summary="立即执行一次")
-async def run_schedule(key: str, user: CurrentUser) -> Message:
+async def run_schedule(key: str, user: OperatorUser) -> Message:
     try:
         info = scheduler_service.describe_schedule(key)
     except (ValueError, KeyError) as exc:

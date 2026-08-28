@@ -6,7 +6,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 
-from app.api.deps import CurrentUser, SuperUser
+from app.api.deps import CurrentUser, OperatorUser
 from app.schemas.models import PanMkdirRequest, PanSaveRequest
 from app.services import pan_storage as pan_service
 
@@ -78,7 +78,7 @@ def save_records(user: CurrentUser, limit: int = Query(100, ge=1, le=500)) -> di
 
 
 @router.post("/save", summary="转存分享链接到网盘")
-async def save_share(payload: PanSaveRequest, user: SuperUser) -> dict[str, Any]:
+async def save_share(payload: PanSaveRequest, user: OperatorUser) -> dict[str, Any]:
     """把一个网盘分享链接转存进自己的网盘。"""
     result = await pan_service.save_share(
         payload.share_url,
@@ -94,7 +94,7 @@ async def save_share(payload: PanSaveRequest, user: SuperUser) -> dict[str, Any]
 
 @router.post("/transfer", summary="批量转存待处理任务")
 async def transfer_pending(
-    user: SuperUser,
+    user: OperatorUser,
     limit: int = Query(20, ge=1, le=200),
     site_id: int | None = None,
 ) -> dict[str, Any]:
@@ -103,7 +103,7 @@ async def transfer_pending(
 
 
 @router.post("/mkdir", summary="创建网盘目录")
-async def mkdir(payload: PanMkdirRequest, user: SuperUser) -> dict[str, Any]:
+async def mkdir(payload: PanMkdirRequest, user: OperatorUser) -> dict[str, Any]:
     result = await pan_service.make_dir(payload.site_id, payload.path)
     if not result.get("success"):
         raise HTTPException(status_code=400, detail=result.get("message", "创建失败"))
@@ -112,7 +112,7 @@ async def mkdir(payload: PanMkdirRequest, user: SuperUser) -> dict[str, Any]:
 
 @router.delete("/files", summary="删除网盘文件或目录")
 async def delete_file(
-    user: SuperUser,
+    user: OperatorUser,
     site_id: int = Query(),
     path: str = Query(),
     file_id: str | None = None,

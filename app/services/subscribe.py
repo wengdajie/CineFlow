@@ -130,6 +130,7 @@ async def create_subscribe(payload: dict[str, Any]) -> Subscribe:
             allow_pan=bool(payload.get("allow_pan", True)),
             allow_torrent=bool(payload.get("allow_torrent", True)),
             best_version=bool(payload.get("best_version", False)),
+            rule_group_id=int(payload["rule_group_id"]) if payload.get("rule_group_id") else None,
             save_path=payload.get("save_path"),
             note=payload.get("note"),
         )

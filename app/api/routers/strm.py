@@ -13,7 +13,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import RedirectResponse
 
-from app.api.deps import CurrentUser, SuperUser
+from app.api.deps import CurrentUser, OperatorUser
 from app.schemas.models import StrmSyncRequest
 from app.services import strm_sync as strm_service
 
@@ -39,7 +39,7 @@ def records(
 
 
 @router.post("/sync", summary="手动同步 STRM")
-async def sync(payload: StrmSyncRequest, user: SuperUser) -> dict[str, Any]:
+async def sync(payload: StrmSyncRequest, user: OperatorUser) -> dict[str, Any]:
     """同步单个网盘目录或遍历全部网盘生成 STRM。"""
     if payload.site_id:
         result = await strm_service.sync_storage(

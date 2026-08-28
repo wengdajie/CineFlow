@@ -111,3 +111,20 @@ pan_subscribe_max_failures: 5      # 连续失败到此次数标记分享失效�
 upgrade_enabled: false
 upgrade_score_delta: 15            # 评分至少提升这么多才替换（防止反复横跳）
 upgrade_max_times: 2               # 每个文件最多洗版几次
+
+# ---------- 站点健康巡检（v1.5.0）----------
+# 为什么需要：Cookie 过期/站点被墙的表现是"搜索返回 0 条"而不是报错，
+# 只探首页发现不了，所以搜索类站点会真的搜一次。
+site_health_enabled: true
+site_health_interval_minutes: 180
+site_health_fail_threshold: 3      # 连续多少次异常才告警
+site_auto_disable: false           # 连续失败自动停用站点（默认关）
+
+# ---------- 下载器负载均衡（v1.5.0）----------
+# priority / least_tasks / round_robin
+downloader_strategy: "priority"
+downloader_failover: true          # 投递失败自动换下一个下载器
+
+# ---------- 榜单自动订阅（v1.5.0）----------
+ranking_interval_minutes: 720
+ranking_max_per_run: 5             # 单次最多新建多少订阅（硬上限）

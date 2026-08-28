@@ -18,6 +18,7 @@ from app.core.version import API_PREFIX, APP_TITLE, APP_VERSION
 from app.db.init_db import init_db
 from app.plugins.manager import plugin_manager
 from app.providers.registry import load_builtin_providers
+from app.services import config_store
 from app.services.scheduler import scheduler_service
 
 logger = get_logger(__name__)
@@ -33,6 +34,9 @@ async def lifespan(app: FastAPI):
     logger.info("%s v%s 正在启动…", APP_TITLE, APP_VERSION)
 
     init_db()
+    # 顺序很重要：先把数据库里的运行期配置覆盖套回 settings 单例，
+    # 再启动调度器——否则调度器会按 .env 里的旧周期建触发器
+    config_store.apply_overrides()
     load_builtin_providers()
     await plugin_manager.load_enabled()
     scheduler_service.start()

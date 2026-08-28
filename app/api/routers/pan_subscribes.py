@@ -10,7 +10,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 
-from app.api.deps import CurrentUser, SuperUser
+from app.api.deps import CurrentUser, OperatorUser
 from app.schemas.models import Message, PanSubscribeCreate, PanSubscribeUpdate
 from app.services import pan_subscribe as service
 
@@ -29,14 +29,14 @@ def list_subscribes(user: CurrentUser) -> dict[str, Any]:
 
 
 @router.post("", summary="新建分享追更")
-def create_subscribe(payload: PanSubscribeCreate, user: SuperUser) -> dict[str, Any]:
+def create_subscribe(payload: PanSubscribeCreate, user: OperatorUser) -> dict[str, Any]:
     record = service.create(payload.model_dump())
     return {"success": True, "data": record}
 
 
 @router.patch("/{subscribe_id}", summary="更新分享追更")
 def update_subscribe(
-    subscribe_id: int, payload: PanSubscribeUpdate, user: SuperUser
+    subscribe_id: int, payload: PanSubscribeUpdate, user: OperatorUser
 ) -> dict[str, Any]:
     data = payload.model_dump(exclude_unset=True)
     if data.get("status") is not None:
@@ -49,14 +49,14 @@ def update_subscribe(
 
 
 @router.delete("/{subscribe_id}", response_model=Message, summary="删除分享追更")
-def delete_subscribe(subscribe_id: int, user: SuperUser) -> Message:
+def delete_subscribe(subscribe_id: int, user: OperatorUser) -> Message:
     if not service.delete(subscribe_id):
         raise HTTPException(status_code=404, detail="分享追更任务不存在")
     return Message(message="任务已删除")
 
 
 @router.post("/{subscribe_id}/check", summary="立即巡检该任务")
-async def check_one(subscribe_id: int, user: SuperUser) -> dict[str, Any]:
+async def check_one(subscribe_id: int, user: OperatorUser) -> dict[str, Any]:
     result = await service.check_one(subscribe_id, notify=False)
     if result.get("message") == "订阅不存在":
         raise HTTPException(status_code=404, detail="分享追更任务不存在")
@@ -64,5 +64,5 @@ async def check_one(subscribe_id: int, user: SuperUser) -> dict[str, Any]:
 
 
 @router.post("/check-all", summary="立即巡检全部任务")
-async def check_all(user: SuperUser, limit: int = Query(50, ge=1, le=500)) -> dict[str, Any]:
+async def check_all(user: OperatorUser, limit: int = Query(50, ge=1, le=500)) -> dict[str, Any]:
     return {"success": True, **(await service.check_all(limit=limit, notify=False))}

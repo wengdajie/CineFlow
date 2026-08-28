@@ -13,6 +13,7 @@ from typing import Any
 
 from app.core.config import settings
 from app.core.meta import MetaInfo, parse
+from app.core.rules import RuleGroup, annotate
 from app.schemas.enums import ResourceKind
 from app.utils.strings import match_keywords, parse_size, split_keywords
 
@@ -220,9 +221,16 @@ def score_resource(resource: dict[str, Any], rule: FilterRule | None = None) -> 
 
 
 def filter_and_rank(
-    resources: list[dict[str, Any]], rule: FilterRule | None = None
+    resources: list[dict[str, Any]],
+    rule: FilterRule | None = None,
+    group: RuleGroup | None = None,
 ) -> list[dict[str, Any]]:
-    """过滤 + 打分 + 排序，返回通过筛选的资源（分数降序）。"""
+    """过滤 + 打分 + 排序，返回通过筛选的资源（分数降序）。
+
+    ``group`` 是可选的**有序规则组**（``app.core.rules``）。给了它以后排序会变成
+    「先看命中的层级，层内再看分数」——这样才能表达"宁可 1080p 中字也不要无字幕 4K"
+    这类分层偏好；不给则完全保持 v1.4.0 的纯评分行为。
+    """
     passed: list[dict[str, Any]] = []
     for resource in resources:
         ok, reason = apply_rules(resource, rule)
@@ -232,4 +240,6 @@ def filter_and_rank(
         score_resource(resource, rule)
         passed.append(resource)
     passed.sort(key=lambda item: item.get("score", 0), reverse=True)
+    if group is not None and not group.is_empty:
+        passed = annotate(group, passed, resource_meta)
     return passed

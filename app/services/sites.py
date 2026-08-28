@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.logger import get_logger
 from app.db.models import SiteConfig
 from app.db.session import session_scope
@@ -88,9 +89,66 @@ def downloaders() -> list[BaseDownloader]:
     ]
 
 
-def default_downloader(prefer: str | None = None) -> BaseDownloader | None:
-    """取默认下载器（可按名字优先）。"""
+#: 轮询策略的游标（进程内即可：重启后从头轮询没有副作用）
+_ROUND_ROBIN_CURSOR = 0
+
+
+def _task_counts() -> dict[str, int]:
+    """各下载器当前在跑的任务数（用于 least_tasks 策略）。"""
+    from app.db.models import DownloadTask
+    from app.schemas.enums import TaskStatus
+
+    with session_scope() as session:
+        rows = session.execute(
+            select(DownloadTask.downloader, func.count(DownloadTask.id))
+            .where(
+                DownloadTask.status.in_(
+                    [TaskStatus.DOWNLOADING.value, TaskStatus.PENDING.value]
+                )
+            )
+            .group_by(DownloadTask.downloader)
+        ).all()
+    return {str(name): int(count) for name, count in rows if name}
+
+
+def healthy_downloaders() -> list[BaseDownloader]:
+    """按策略排序后的下载器列表，已知不健康的排到最后。
+
+    为什么"排后"而不是"剔除"：健康数据可能过期（比如刚重启下载器还没探测），
+    直接剔除会导致"明明能用却不投递"。排到最后既避开坏的，又保留兜底。
+    """
+    global _ROUND_ROBIN_CURSOR
     items = downloaders()
+    if len(items) <= 1:
+        return items
+
+    strategy = str(settings.DOWNLOADER_STRATEGY or "priority").strip().lower()
+    if strategy == "least_tasks":
+        counts = _task_counts()
+        items.sort(key=lambda item: (counts.get(item.site_name, 0), item.priority))
+    elif strategy == "round_robin":
+        _ROUND_ROBIN_CURSOR = (_ROUND_ROBIN_CURSOR + 1) % len(items)
+        items = items[_ROUND_ROBIN_CURSOR:] + items[:_ROUND_ROBIN_CURSOR]
+    else:  # priority：站点 priority 数字越小越优先（与其它 Provider 一致）
+        items.sort(key=lambda item: item.priority)
+
+    try:
+        from app.services import site_health
+
+        health = site_health.downloader_health()
+    except Exception:  # pragma: no cover - 健康数据不可用时退回原顺序
+        return items
+    bad = {name for name, status in health.items() if status in ("down", "degraded")}
+    if not bad:
+        return items
+    return [item for item in items if item.site_name not in bad] + [
+        item for item in items if item.site_name in bad
+    ]
+
+
+def default_downloader(prefer: str | None = None) -> BaseDownloader | None:
+    """取默认下载器（可按名字优先，否则按当前策略挑）。"""
+    items = healthy_downloaders()
     if not items:
         return None
     if prefer:
@@ -98,6 +156,26 @@ def default_downloader(prefer: str | None = None) -> BaseDownloader | None:
             if item.site_name == prefer or item.name == prefer:
                 return item
     return items[0]
+
+
+def downloader_candidates(prefer: str | None = None) -> list[BaseDownloader]:
+    """投递候选序列：首选在前，其余作为失败自动换源的备选。
+
+    ``CF_DOWNLOADER_FAILOVER=false`` 时只返回首选一个，
+    行为与 v1.4.0 完全一致（不擅自把任务投到别的下载器）。
+    """
+    items = healthy_downloaders()
+    if not items:
+        return []
+    if prefer:
+        picked = [
+            item for item in items if item.site_name == prefer or item.name == prefer
+        ]
+        others = [item for item in items if item not in picked]
+        items = picked + others if picked else items
+    if not settings.DOWNLOADER_FAILOVER:
+        return items[:1]
+    return items
 
 
 def notifiers() -> list[BaseNotifier]:

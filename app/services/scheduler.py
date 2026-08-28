@@ -30,6 +30,8 @@ JOB_PAN_SUBSCRIBE = "cineflow.pan_subscribe"
 JOB_STRM_SYNC = "cineflow.strm_sync"
 JOB_SCRAPE = "cineflow.scrape"
 JOB_UPGRADE = "cineflow.upgrade"
+JOB_SITE_HEALTH = "cineflow.site_health"
+JOB_RANKING = "cineflow.ranking"
 _PLUGIN_PREFIX = "plugin."
 
 #: 间隔型任务允许的分钟范围
@@ -51,6 +53,16 @@ def _parse_cron(expression: str) -> CronTrigger:
         day_of_week=day_of_week,
         timezone=settings.TIMEZONE,
     )
+
+
+def validate_cron(expression: str) -> str:
+    """校验 5 段 cron，非法则抛 ``ValueError``。
+
+    对外暴露是为了让运行期配置层（``config_store``）复用**同一份**规则，
+    避免出现"设置页放过了、调度器却起不来"的两份校验漂移。
+    """
+    _parse_cron(expression)
+    return str(expression).strip()
 
 
 @dataclass(frozen=True)
@@ -133,6 +145,26 @@ def builtin_specs() -> list[JobSpec]:
             enabled=bool(settings.STRM_SYNC_INTERVAL_MINUTES > 0),
         ),
         JobSpec(
+            key="site_health",
+            job_id=JOB_SITE_HEALTH,
+            name="站点健康巡检",
+            description="逐个探测已启用站点，Cookie 过期/掉线时告警（静默 0 结果是最难发现的故障）",
+            trigger="interval",
+            minutes=settings.SITE_HEALTH_INTERVAL_MINUTES or 180,
+            enabled=bool(
+                settings.SITE_HEALTH_ENABLED and settings.SITE_HEALTH_INTERVAL_MINUTES > 0
+            ),
+        ),
+        JobSpec(
+            key="ranking",
+            job_id=JOB_RANKING,
+            name="榜单自动订阅",
+            description="按已启用的榜单规则自动建订阅（TMDB 热门/高分等），单次有数量上限",
+            trigger="interval",
+            minutes=settings.RANKING_INTERVAL_MINUTES or 720,
+            enabled=bool(settings.RANKING_INTERVAL_MINUTES > 0),
+        ),
+        JobSpec(
             key="scrape",
             job_id=JOB_SCRAPE,
             name="媒体库补刮（NFO + 图片）",
@@ -205,12 +237,14 @@ def normalize_schedule(key: str, payload: dict[str, Any]) -> dict[str, Any]:
     minutes = current["minutes"] if minutes in (None, "") else int(minutes)
     cron = str(payload.get("cron") or current["cron"]).strip()
 
-    if trigger == "interval":
-        if not MIN_INTERVAL_MINUTES <= minutes <= MAX_INTERVAL_MINUTES:
-            raise ValueError(
-                f"间隔需在 {MIN_INTERVAL_MINUTES}~{MAX_INTERVAL_MINUTES} 分钟之间"
-            )
-    else:
+    if trigger == "interval" and not MIN_INTERVAL_MINUTES <= minutes <= MAX_INTERVAL_MINUTES:
+        raise ValueError(
+            f"间隔需在 {MIN_INTERVAL_MINUTES}~{MAX_INTERVAL_MINUTES} 分钟之间"
+        )
+    # cron 字段**只要用户提交了就校验**，不管当前 trigger 是不是 cron：
+    # 否则非法表达式会被静默存下来，等用户哪天把 trigger 切成 cron 才炸，
+    # 那时他早就忘了自己填过什么（真实踩坑：冒烟测试发现 interval 任务能存 "这不是 cron"）。
+    if payload.get("cron") not in (None, "") or trigger == "cron":
         _parse_cron(cron)  # 非法表达式直接抛错
 
     return {"enabled": enabled, "trigger": trigger, "minutes": minutes, "cron": cron}
@@ -240,7 +274,9 @@ class SchedulerService:
         from app.services import pan_storage as pan_service
         from app.services import pan_subscribe as pan_subscribe_service
         from app.services import radar as radar_service
+        from app.services import ranking as ranking_service
         from app.services import scraper as scraper_service
+        from app.services import site_health as health_service
         from app.services import strm_sync as strm_service
         from app.services import subscribe as subscribe_service
         from app.services import upgrade as upgrade_service
@@ -264,6 +300,8 @@ class SchedulerService:
                 {"limit": settings.SCRAPE_BATCH},
             ),
             "upgrade": (upgrade_service.run, {}),
+            "site_health": (health_service.check_all, {}),
+            "ranking": (ranking_service.run, {}),
         }
         if key not in targets:
             raise ValueError(f"未知任务: {key}")
@@ -319,6 +357,25 @@ class SchedulerService:
             logger.info(
                 "  · %-22s %s -> %s", item["id"], item["trigger"], item["next_run_time"]
             )
+
+    def refresh_builtin_jobs(self) -> list[str]:
+        """按当前生效配置重建全部内置任务的触发器。
+
+        运行期配置（``config_store``）改了周期类配置后调用：
+        ``builtin_specs()`` 每次都从 ``settings`` 现读，所以重跑一遍
+        ``_register`` 就能让新周期立即生效，不需要重启进程。
+        """
+        if not self.running:
+            return []
+        changed: list[str] = []
+        for spec in builtin_specs():
+            try:
+                if self._register(spec):
+                    changed.append(spec.key)
+            except ValueError as exc:
+                logger.warning("任务 %s 重建失败: %s", spec.job_id, exc)
+        logger.info("内置任务已按新配置重建：%s", changed)
+        return changed
 
     def shutdown(self) -> None:
         """停止调度器。"""

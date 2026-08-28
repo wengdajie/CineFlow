@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from sqlalchemy import select
 
-from app.api.deps import CurrentUser, DbSession, SuperUser
+from app.api.deps import AdminUser, CurrentUser, DbSession
 from app.db.base import utcnow
 from app.db.models import SiteConfig
 from app.providers.registry import list_providers
@@ -45,7 +45,7 @@ def list_sites(
 
 
 @router.post("", response_model=SiteOut, summary="新增站点")
-def create_site(payload: SiteCreate, session: DbSession, user: SuperUser) -> SiteOut:
+def create_site(payload: SiteCreate, session: DbSession, user: AdminUser) -> SiteOut:
     exists = session.execute(
         select(SiteConfig).where(SiteConfig.name == payload.name)
     ).scalar_one_or_none()
@@ -68,7 +68,7 @@ def create_site(payload: SiteCreate, session: DbSession, user: SuperUser) -> Sit
 
 @router.patch("/{site_id}", response_model=SiteOut, summary="更新站点")
 def update_site(
-    site_id: int, payload: SiteUpdate, session: DbSession, user: SuperUser
+    site_id: int, payload: SiteUpdate, session: DbSession, user: AdminUser
 ) -> SiteOut:
     site = session.get(SiteConfig, site_id)
     if not site:
@@ -81,7 +81,7 @@ def update_site(
 
 
 @router.delete("/{site_id}", response_model=Message, summary="删除站点")
-def delete_site(site_id: int, session: DbSession, user: SuperUser) -> Message:
+def delete_site(site_id: int, session: DbSession, user: AdminUser) -> Message:
     site = session.get(SiteConfig, site_id)
     if not site:
         raise HTTPException(status_code=404, detail="站点不存在")
@@ -117,7 +117,7 @@ def site_presets(user: CurrentUser, kind: ProviderKind | None = None) -> list[di
 def apply_preset(
     preset_id: str,
     session: DbSession,
-    user: SuperUser,
+    user: AdminUser,
     name: str | None = None,
     url: str | None = None,
     enabled: bool = False,

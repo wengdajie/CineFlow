@@ -18,6 +18,8 @@ PAGES = [
     ("trending", "热度排行"),
     ("subscribes", "订阅追新"),
     ("radar", "追新雷达"),
+    ("ranking", "榜单订阅"),
+    ("rules", "过滤规则组"),
     ("schedules", "定时任务"),
     ("downloads", "下载任务"),
     ("library", "媒体库"),
@@ -25,14 +27,51 @@ PAGES = [
     ("pansub", "分享追更"),
     ("strm", "STRM 同步"),
     ("sites", "站点管理"),
+    ("sitehealth", "站点健康"),
     ("chatops", "机器人"),
     ("plugins", "插件"),
+    ("users", "用户权限"),
     ("logs", "运行日志"),
     ("settings", "设置"),
 ]
 
 errors = []
 failed_requests = []
+
+
+def close_modal(page):
+    """关掉当前弹窗。
+
+    优先点「取消」/「关闭」，都找不到就按 Escape——
+    弹窗遗留的 .modal-mask 会拦截后续所有点击，导致后面的点检莫名超时。
+    """
+    for label in ("取消", "关闭"):
+        button = page.get_by_text(label, exact=True).first
+        if button.count():
+            try:
+                button.click(timeout=3000)
+                page.wait_for_timeout(400)
+                return
+            except Exception:
+                break
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(400)
+
+
+def wait_button(page, label, timeout=15000):
+    """等某个按钮真正出现再返回，找不到返回 None。
+
+    页面数据全是异步拉的，前一段刚触发过「立即巡检」这类慢请求时，
+    networkidle 之后立刻找按钮会偶发落空——那是点检脚本抢跑，不是页面坏了。
+    """
+    button = page.get_by_role("button", name=label, exact=True).first
+    try:
+        button.wait_for(state="visible", timeout=timeout)
+    except Exception as exc:
+        print(f"   [debug] 等按钮「{label}」失败：{type(exc).__name__} {str(exc)[:200]}")
+        print(f"   [debug] 当前 URL={page.url} 按钮数={page.locator('button').count()}")
+        return None
+    return button
 
 
 def main():
@@ -524,6 +563,161 @@ def main():
             page.screenshot(path=str(SHOTS / "35-library-scrape.png"), full_page=True)
         else:
             errors.append("[library] 未找到「补刮 NFO」按钮")
+
+        print("\n" + "=" * 68)
+        print("6m) 交互测试：站点健康页（概览 / 手动探测）")
+        print("=" * 68)
+        page.goto(f"{BASE}/#sitehealth", wait_until="networkidle")
+        page.wait_for_timeout(1600)
+        body = page.inner_text("body")
+        print(f"   站点健康页含「站点健康」：{'站点健康' in body}")
+        print(f"   含四档状态卡：{all(word in body for word in ('正常', '亚健康', '掉线', '未探测'))}")
+        print(f"   含巡检策略卡：{'巡检策略' in body}")
+        # 这句话是该页存在的理由，掉了就说明改坏了
+        print(f"   含「真搜一次」说明：{'搜一次' in body}")
+        print(f"   概览卡片 {page.locator('.card.stat').count()} 个")
+        page.screenshot(path=str(SHOTS / "36-sitehealth.png"), full_page=True)
+
+        check_btn = page.get_by_text("立即巡检", exact=True).first
+        if check_btn.count():
+            # 真探测会去各站点搜一次，给足超时
+            check_btn.click()
+            page.wait_for_timeout(8000)
+            print(f"   巡检后页面文本长度：{len(page.inner_text('body'))}")
+            page.screenshot(path=str(SHOTS / "37-sitehealth-checked.png"), full_page=True)
+        else:
+            errors.append("[sitehealth] 未找到「立即巡检」按钮")
+
+        print("\n" + "=" * 68)
+        print("6n) 交互测试：榜单订阅页（新建规则弹窗 / 试算）")
+        print("=" * 68)
+        page.goto(f"{BASE}/#ranking", wait_until="networkidle")
+        page.wait_for_timeout(1500)
+        body = page.inner_text("body")
+        print(f"   榜单订阅页含「榜单订阅」：{'榜单订阅' in body}")
+        print(f"   含概览卡：{all(word in body for word in ('榜单规则', '启用中', '巡检周期'))}")
+        print(f"   含定时执行卡：{'定时执行' in body}")
+        page.screenshot(path=str(SHOTS / "38-ranking.png"), full_page=True)
+
+        new_rule = wait_button(page, "新建")
+        if new_rule:
+            new_rule.click()
+            page.wait_for_timeout(900)
+            modal = page.locator(".modal")
+            fields = page.locator(".modal .field").count()
+            print(f"   榜单规则弹窗渲染：{modal.count() > 0}（字段 {fields} 个）")
+            if modal.count():
+                modal_text = page.inner_text(".modal")
+                print(f"   弹窗含来源选择：{'来源' in modal_text}")
+                print(f"   弹窗含评分门槛：{'评分' in modal_text}")
+                print(f"   弹窗含数量上限：{'数量' in modal_text or '条数' in modal_text}")
+                page.screenshot(path=str(SHOTS / "39-ranking-modal.png"))
+            close_modal(page)
+        else:
+            errors.append("[ranking] 未找到「新建」按钮")
+
+        print("\n" + "=" * 68)
+        print("6o) 交互测试：过滤规则组页（内置模板 / 试算分层）")
+        print("=" * 68)
+        page.goto(f"{BASE}/#rules", wait_until="networkidle")
+        page.wait_for_timeout(1500)
+        body = page.inner_text("body")
+        print(f"   规则组页含「过滤规则组」：{'规则组' in body}")
+        # init_db 内置 4 个模板，页面上应当能看到其中的画质优先
+        print(f"   含内置模板「画质优先」：{'画质优先' in body}")
+        print(f"   含层级说明：{'层' in body}")
+        page.screenshot(path=str(SHOTS / "40-rules.png"), full_page=True)
+
+        preview_btn = page.get_by_text("试算", exact=True).first
+        if preview_btn.count():
+            preview_btn.click()
+            page.wait_for_timeout(2500)
+            body = page.inner_text("body")
+            print(f"   试算后页面含层级标注：{'层' in body}")
+            page.screenshot(path=str(SHOTS / "41-rules-preview.png"), full_page=True)
+            # 试算结果是弹窗，不关掉的话遮罩会挡住下面的「新建」按钮
+            close_modal(page)
+
+        new_group = wait_button(page, "新建")
+        if new_group:
+            new_group.click()
+            page.wait_for_timeout(900)
+            modal = page.locator(".modal")
+            print(f"   规则组弹窗渲染：{modal.count() > 0}")
+            if modal.count():
+                modal_text = page.inner_text(".modal")
+                print(f"   弹窗含分辨率条件：{'分辨率' in modal_text}")
+                print(f"   弹窗含兜底开关：{'兜底' in modal_text or '未命中' in modal_text}")
+                page.screenshot(path=str(SHOTS / "42-rules-modal.png"))
+            close_modal(page)
+
+        print("\n" + "=" * 68)
+        print("6p) 交互测试：用户权限页（列表 / 新建弹窗 / 角色选择）")
+        print("=" * 68)
+        page.goto(f"{BASE}/#users", wait_until="networkidle")
+        page.wait_for_timeout(1500)
+        body = page.inner_text("body")
+        print(f"   用户权限页含「用户」：{'用户' in body}")
+        print(f"   含 admin 账号行：{'admin' in body}")
+        print(f"   含角色标签：{'管理员' in body}")
+        page.screenshot(path=str(SHOTS / "43-users.png"), full_page=True)
+
+        new_user = page.get_by_text("新增用户", exact=False).first
+        if new_user.count():
+            new_user.click()
+            page.wait_for_timeout(900)
+            modal = page.locator(".modal")
+            fields = page.locator(".modal .field").count()
+            print(f"   新增用户弹窗渲染：{modal.count() > 0}（字段 {fields} 个）")
+            if modal.count():
+                modal_text = page.inner_text(".modal")
+                print(f"   弹窗含角色选择：{'角色' in modal_text}")
+                print(f"   弹窗含备注字段：{'备注' in modal_text}")
+                page.screenshot(path=str(SHOTS / "44-users-modal.png"))
+            close_modal(page)
+        else:
+            errors.append("[users] 未找到「新增用户」按钮")
+
+        print("\n" + "=" * 68)
+        print("6q) 交互测试：设置页可编辑表单（改一项并保存 / 恢复默认）")
+        print("=" * 68)
+        page.goto(f"{BASE}/#settings", wait_until="networkidle")
+        page.wait_for_timeout(1800)
+        body = page.inner_text("body")
+        print(f"   设置页含分组标题：{'站点健康' in body}")
+        print(f"   含下载器调度分组：{'下载器' in body}")
+        print(f"   含榜单订阅分组：{'榜单' in body}")
+        inputs = page.locator(".card input, .card select").count()
+        print(f"   可编辑控件 {inputs} 个")
+        if inputs == 0:
+            errors.append("[settings] 设置页没有任何可编辑控件")
+        print(f"   含「需重启」标记：{'需重启' in body or '重启' in body}")
+        # 「能改」必须配「能改回来」：这里真的改一项再恢复，光看按钮在不在证明不了什么
+        has_save = wait_button(page, "保存并生效") is not None
+        print(f"   含保存按钮：{has_save}")
+        if not has_save:
+            errors.append("[settings] 设置页缺少「保存并生效」按钮")
+        else:
+            number_input = page.locator('.card input[type="number"]').first
+            original = number_input.input_value()
+            number_input.fill(str(int(original or 0) + 1))
+            page.get_by_role("button", name="保存并生效", exact=True).first.click()
+            page.wait_for_timeout(2500)
+            body = page.inner_text("body")
+            print(f"   保存后出现在线覆盖标记：{'恢复默认' in body}")
+            # 覆盖项存在时才渲染「全部恢复默认」，所以这一步必须在改动之后查
+            reset = wait_button(page, "全部恢复默认", timeout=6000)
+            if reset is None:
+                errors.append("[settings] 改动生效后没有出现「全部恢复默认」按钮")
+            else:
+                page.on("dialog", lambda dialog: dialog.accept())
+                reset.click()
+                page.wait_for_timeout(2500)
+                restored = page.locator('.card input[type="number"]').first.input_value()
+                print(f"   恢复默认后回到原值：{restored == original}（{original}）")
+                if restored != original:
+                    errors.append("[settings] 恢复默认没有把值改回去")
+        page.screenshot(path=str(SHOTS / "45-settings.png"), full_page=True)
 
         print("\n" + "=" * 68)
         print("7) 响应式检查（移动端 430x900）")

@@ -919,3 +919,85 @@ tbody tr:last-child td { border-bottom: 0; }
 @media print {
   .sidebar, .topbar-actions, #toasts { display: none !important; }
 }
+
+/* ============================================================
+   v1.5.0 新增组件
+   ------------------------------------------------------------
+   命名与尺度延续上面的 token 体系（Radix Colors / Open Props /
+   shadcn/ui 的语义化命名思路），不引入任何新的调色板。
+   ============================================================ */
+
+/* 侧栏底部的当前身份条：让"我现在是谁、有什么权限"随时可见 */
+.nav-role {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 8px 10px;
+  margin-bottom: 4px;
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--border-soft);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  min-width: 0;
+}
+.nav-role > span:first-of-type {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+.nav-role .icon { flex: 0 0 auto; color: var(--text-3); }
+
+/* 表格内联的小号控件：设置页要在单元格里放输入框，标准尺寸太高会撑破行 */
+.input.sm,
+select.input.sm {
+  padding: 5px 8px;
+  font-size: var(--fs-sm);
+  min-width: 110px;
+  max-width: 260px;
+}
+
+/* 行内复选：不占满整行，用于表格单元格 */
+.field-check.inline {
+  display: inline-flex;
+  padding: 4px 8px;
+  border-color: transparent;
+  background: transparent;
+}
+.field-check.inline:hover { border-color: var(--border-soft); }
+
+/* 更轻的卡片：用于弹窗里的分节，避免层层描边显得脏 */
+.card.soft {
+  background: var(--surface-2);
+  border-color: var(--border-soft);
+  box-shadow: none;
+  padding: var(--sp-4);
+}
+.card.soft .card-head { margin-bottom: var(--sp-3); }
+.card.soft .card-head h3 { font-size: var(--fs-md); color: var(--text-2); }
+
+/* 轻量列表：比 table 更适合"标题 + 一句说明"的成对信息 */
+.list { display: flex; flex-direction: column; }
+.list-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border-soft);
+  min-width: 0;
+}
+.list-row:last-child { border-bottom: 0; }
+.list-row > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.list-row > span:last-child { flex: 0 0 auto; text-align: right; }
+
+/* 超小号标签：用于"需重启""已被在线修改"这类元信息 */
+.tag.tiny { padding: 1px 6px; font-size: 10px; letter-spacing: 0.02em; }

@@ -122,6 +122,7 @@ async def search(
     season: int | None = None,
     episode: int | None = None,
     rule: FilterRule | None = None,
+    rule_group_id: int | None = None,
     providers: list[SearchProvider] | None = None,
     extra_keywords: list[str] | None = None,
     save_history: bool = True,
@@ -171,7 +172,15 @@ async def search(
         effective_rule.title_keywords = _title_variants(title)
 
     payload = [resource.to_dict() for resource in collected]
-    ranked = filter_and_rank(payload, effective_rule)[: settings.SEARCH_MAX_RESULTS]
+    # 规则组（有序偏好）在硬过滤与评分之后生效，只影响排序/兜底剔除
+    group = None
+    try:
+        from app.services import rule_groups as rule_group_service
+
+        group = rule_group_service.load_group(rule_group_id)
+    except Exception as exc:  # pragma: no cover - 规则组不可用时退回纯评分
+        logger.warning("加载过滤规则组失败，本次仅按评分排序: %s", exc)
+    ranked = filter_and_rank(payload, effective_rule, group)[: settings.SEARCH_MAX_RESULTS]
 
     for item in ranked:
         info = item.pop("_meta", None)
@@ -283,5 +292,7 @@ async def search_for_subscribe(subscribe: Any, missing: list[int] | None = None)
         season=subscribe.season,
         episode=episode,
         rule=rule,
+        # 订阅可以绑定自己的规则组；没绑就由 load_group 退回全局默认组
+        rule_group_id=getattr(subscribe, "rule_group_id", None),
         save_history=False,
     )

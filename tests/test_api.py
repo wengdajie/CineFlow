@@ -536,3 +536,172 @@ def test_migrate_columns_upgrades_legacy_table(tmp_path):
     finally:
         init_module.engine = original
         engine.dispose()
+
+
+# ---------------- v1.5.0 老库升级与新端点 ----------------
+def test_migrate_columns_upgrades_users_and_subscribes(tmp_path):
+    """v1.5.0 给 users 加 role/note、给 subscribes 加 rule_group_id。
+
+    ``users.role`` 的默认值必须是 ``admin``：老库里唯一的那个管理员
+    如果被补成 viewer，用户升级后就再也进不了后台了。
+    """
+    import sqlite3
+
+    from sqlalchemy import create_engine, inspect, text
+
+    from app.db import init_db as init_module
+
+    legacy = tmp_path / "legacy_users.db"
+    connection = sqlite3.connect(legacy)
+    # v1.4.0 时期的 users / subscribes：没有 role、note、rule_group_id
+    connection.execute(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, "
+        "password_hash TEXT, is_superuser INTEGER DEFAULT 0, is_active INTEGER DEFAULT 1)"
+    )
+    connection.execute(
+        "CREATE TABLE subscribes (id INTEGER PRIMARY KEY, title TEXT, media_type TEXT)"
+    )
+    connection.execute(
+        "INSERT INTO users (username, password_hash, is_superuser) VALUES ('old', 'h', 1)"
+    )
+    connection.commit()
+    connection.close()
+
+    engine = create_engine(f"sqlite:///{legacy}")
+    original = init_module.engine
+    init_module.engine = engine
+    try:
+        init_module.migrate_columns()
+        inspector = inspect(engine)
+        user_columns = {item["name"] for item in inspector.get_columns("users")}
+        assert {"role", "note"} <= user_columns
+        sub_columns = {item["name"] for item in inspector.get_columns("subscribes")}
+        assert "rule_group_id" in sub_columns
+
+        with engine.begin() as conn:
+            role = conn.execute(text("SELECT role FROM users WHERE username='old'")).scalar()
+        assert role == "admin", "老管理员不能被降级，否则会被锁在系统外"
+
+        init_module.migrate_columns()  # 幂等
+    finally:
+        init_module.engine = original
+        engine.dispose()
+
+
+def test_settings_groups_include_v150_features(client, auth_headers):
+    """v1.5.0 三组新配置必须出现在设置页分组里。"""
+    response = client.get("/api/v1/system/settings", headers=auth_headers)
+    assert response.status_code == 200
+    body = response.json()
+    keys = {item["key"] for group in body["groups"] for item in group["items"]}
+    assert {
+        "SITE_HEALTH_ENABLED",
+        "SITE_AUTO_DISABLE",
+        "DOWNLOADER_STRATEGY",
+        "DOWNLOADER_FAILOVER",
+        "RANKING_INTERVAL_MINUTES",
+        "RANKING_MAX_PER_RUN",
+    } <= keys
+    # 每一项都要带出界面渲染所需的元信息，否则设置页没法画控件
+    sample = next(
+        item for group in body["groups"] for item in group["items"] if item["key"] == "DOWNLOADER_STRATEGY"
+    )
+    assert sample["editable"] is True
+    assert sample["choices"], "选项型配置必须给出可选值"
+    assert body["editable_total"] > 0
+
+
+def test_v150_endpoints_smoke(client, auth_headers):
+    """新增的四个子系统端点都能正常返回（不联网）。"""
+    for path in (
+        "/api/v1/site-health",
+        "/api/v1/site-health/records",
+        "/api/v1/ranking-rules",
+        "/api/v1/rule-groups",
+        "/api/v1/users",
+    ):
+        response = client.get(path, headers=auth_headers)
+        assert response.status_code == 200, f"{path} -> {response.text}"
+        assert response.json()["success"] is True
+
+
+def test_settings_update_and_reset(client, auth_headers):
+    """在线改配置要真生效，并且能恢复默认。"""
+    from app.core.config import settings
+
+    original = settings.RANKING_MAX_PER_RUN
+    try:
+        response = client.put(
+            "/api/v1/system/settings",
+            headers=auth_headers,
+            json={"values": {"RANKING_MAX_PER_RUN": original + 3}},
+        )
+        assert response.status_code == 200, response.text
+        # 关键点：改完 settings 单例要立刻是新值，否则"能改"只是假象
+        assert original + 3 == settings.RANKING_MAX_PER_RUN
+
+        reset = client.post(
+            "/api/v1/system/settings/reset",
+            headers=auth_headers,
+            json={"keys": ["RANKING_MAX_PER_RUN"]},
+        )
+        assert reset.status_code == 200
+        assert original == settings.RANKING_MAX_PER_RUN
+    finally:
+        client.post(
+            "/api/v1/system/settings/reset", headers=auth_headers, json={"keys": None}
+        )
+
+
+def test_settings_update_rejects_unknown_and_invalid(client, auth_headers):
+    """白名单外的键与非法值都要整体拒绝。"""
+    assert (
+        client.put(
+            "/api/v1/system/settings",
+            headers=auth_headers,
+            json={"values": {"SECRET_KEY": "偷偷改密钥"}},
+        ).status_code
+        == 400
+    )
+    assert (
+        client.put(
+            "/api/v1/system/settings",
+            headers=auth_headers,
+            json={"values": {"DOWNLOADER_STRATEGY": "不存在的策略"}},
+        ).status_code
+        == 400
+    )
+
+
+def test_subscribe_accepts_rule_group(client, auth_headers):
+    """订阅可以绑定规则组。"""
+    group = client.post(
+        "/api/v1/rule-groups",
+        headers=auth_headers,
+        json={"name": "接口订阅用规则组", "levels": [{"resolution": "1080p"}]},
+    )
+    assert group.status_code == 200, group.text
+    group_id = group.json()["data"]["id"]
+
+    created = client.post(
+        "/api/v1/subscribes",
+        headers=auth_headers,
+        json={"title": "绑定规则组的剧", "media_type": "tv", "rule_group_id": group_id},
+    )
+    assert created.status_code == 200, created.text
+    sub_id = created.json()["id"]
+    assert created.json()["rule_group_id"] == group_id
+
+    # 删掉规则组后订阅要自动解绑，而不是留悬空 ID
+    assert client.delete(f"/api/v1/rule-groups/{group_id}", headers=auth_headers).status_code == 200
+    detail = client.get(f"/api/v1/subscribes/{sub_id}", headers=auth_headers).json()
+    assert detail["rule_group_id"] is None
+    client.delete(f"/api/v1/subscribes/{sub_id}", headers=auth_headers)
+
+
+def test_schedules_expose_v150_jobs(client, auth_headers):
+    """站点健康与榜单订阅两个新任务要出现在调度列表里。"""
+    response = client.get("/api/v1/schedules", headers=auth_headers)
+    assert response.status_code == 200
+    keys = {item["key"] for item in response.json()["items"]}
+    assert {"site_health", "ranking"} <= keys
