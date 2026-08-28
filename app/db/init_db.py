@@ -92,6 +92,47 @@ DEFAULT_SITES = [
         "priority": 10,
         "options": {"category": "CineFlow", "tags": "CineFlow"},
     },
+    # ---- 网盘存储（转存/浏览，区别于上面的「盘搜」搜索器）----
+    {
+        "name": "AList 网盘（推荐）",
+        "kind": ProviderKind.PANSTORAGE.value,
+        "provider": "alist",
+        "url": "http://127.0.0.1:5244",
+        "username": "admin",
+        "enabled": False,
+        "priority": 10,
+        "options": {
+            "note": "AList 一套接入 20+ 网盘，填地址与账号（或 api_key）即可；"
+                    "转存走离线下载接口",
+            "root_path": "/",
+            "offline_tool": "SimpleHttp",
+        },
+    },
+    {
+        "name": "夸克网盘",
+        "kind": ProviderKind.PANSTORAGE.value,
+        "provider": "quark",
+        "url": "https://drive-pc.quark.cn",
+        "enabled": False,
+        "priority": 20,
+        "options": {
+            "note": "在 cookie 字段填浏览器里的完整 Cookie；支持分享链接直接转存",
+            "cookie": "",
+            "root_path": "/",
+        },
+    },
+    {
+        "name": "本地/挂载目录",
+        "kind": ProviderKind.PANSTORAGE.value,
+        "provider": "local_dir",
+        "url": "file:///",
+        "enabled": False,
+        "priority": 90,
+        "options": {
+            "note": "把 rclone/CloudDrive 挂载出来的目录当网盘浏览，无需联网即可试用",
+            "root_path": "/",
+        },
+    },
     {
         "name": "Emby",
         "kind": ProviderKind.MEDIASERVER.value,
@@ -133,13 +174,23 @@ def create_superuser() -> None:
 
 
 def create_default_sites() -> None:
-    """首次启动时写入示例站点（全部默认禁用）。"""
+    """写入示例站点（全部默认禁用）。
+
+    这里按 ``name`` 逐条补齐而不是"表空才写"，因为**版本升级**会带来
+    新的示例站点（例如 1.3.0 新增的网盘存储）。老库如果只判断"表非空就跳过"，
+    升级后用户永远看不到新能力的示例配置。
+    已存在的同名站点绝不覆盖，避免抹掉用户改过的地址与密钥。
+    """
     with session_scope() as session:
-        if session.query(SiteConfig).count():
-            return
+        existing = {name for (name,) in session.query(SiteConfig.name).all()}
+        added = 0
         for item in DEFAULT_SITES:
+            if item["name"] in existing:
+                continue
             session.add(SiteConfig(**item))
-    logger.info("已写入 %d 条示例站点配置（默认禁用）", len(DEFAULT_SITES))
+            added += 1
+    if added:
+        logger.info("已写入 %d 条示例站点配置（默认禁用，共 %d 条内置示例）", added, len(DEFAULT_SITES))
 
 
 def init_db() -> None:

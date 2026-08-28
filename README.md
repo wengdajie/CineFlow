@@ -9,7 +9,8 @@
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)](#-docker-部署推荐)
-[![Tests](https://img.shields.io/badge/tests-156%20passed-brightgreen)](#-测试)
+[![Tests](https://img.shields.io/badge/tests-270%20passed-brightgreen)](#-测试)
+[![Version](https://img.shields.io/badge/version-1.3.0-blue)](docs/08-变更日志.md)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 </div>
@@ -46,7 +47,8 @@ CineFlow 是一个**从零实现**的 NAS 影视自动化项目，设计上参�
               ▼
    ┌───────────────────────────────┐
    │ ⬇ 投递 qBittorrent / TR / aria2 │
-   │   网盘资源 → 登记待转存（带提取码）│
+   │   网盘资源 → 自动转存进自己的网盘  │
+   │   （AList / 夸克，带提取码）      │
    └──────────┬────────────────────┘
               ▼
    ┌───────────────────────────────┐
@@ -59,6 +61,20 @@ CineFlow 是一个**从零实现**的 NAS 影视自动化项目，设计上参�
    │ 📢 Telegram / 企微 / Bark 推送   │
    │ ✅ 回写进度，缺集收敛，永不重复下载 │
    └───────────────────────────────┘
+```
+
+也可以**不开界面**，直接在飞书 / 钉钉 / Telegram 里发一句话：
+
+```
+    你：搜索 沙丘 第二季
+   Bot：🔍 找到 23 条，前 5 条：
+        1. Dune.Part.Two.2024.2160p… 24.6 GB · 2160p · 128↑ · 站A
+        2. 沙丘2.2024.1080p.中字…     8.2 GB · 1080p · 网盘 · 站B
+        …
+    你：下载 2
+   Bot：✅ 已提交下载：沙丘2.2024.1080p.中字
+        任务 #37 · 状态 transferred
+        ☁️ 网盘资源已自动转存
 ```
 
 ---
@@ -198,13 +214,14 @@ heat = min(做种数, 5000) ^ 0.5 × 3      # 做种数（开方避免头部通�
 
 ### ⏱ 定时任务可视化设置
 
-4 个内置任务的触发规则都能在界面上改，**不用改配置文件、不用重启**：
+5 个内置任务的触发规则都能在界面上改，**不用改配置文件、不用重启**：
 
 | 任务 | 默认 | 作用 |
 |---|---|---|
 | 订阅巡检（自动追新） | 每 30 分钟 | 逐个活跃订阅去各站搜索缺失集 |
 | 追新雷达 | 每 15 分钟 | 拉各站最新流再匹配订阅，延迟最低 |
 | 下载状态同步与自动整理 | 每 5 分钟 | 同步进度，完成即硬链入库并刷新媒体服务器 |
+| 网盘待转存队列 | 每 20 分钟 | 把命中但没转存成功的网盘资源批量重试转存 |
 | 媒体库全量扫描 | 每天 `0 4 * * *` | 重建入库索引，用于缺集计算与去重 |
 
 - 两种触发方式：**interval**（1 ~ 10080 分钟）与 **cron**（标准 5 段表达式）
@@ -214,6 +231,83 @@ heat = min(做种数, 5000) ^ 0.5 × 3      # 做种数（开方避免头部通�
   只作为默认值，随时可「重置为默认」
 - 每个任务都能**立即执行一次**，用于验证配置
 - 「订阅追新」页顶部内嵌快捷卡片，可直接调周期或立即跑一次
+
+### ☁️ 网盘管理（转存 + 浏览）
+
+盘搜找到的是**别人的分享链接**——链接会失效、也不进你的媒体库。
+所以「盘搜」和「网盘」是两件事，CineFlow 分成两类 Provider：
+
+| 分类 | Provider | 干什么 |
+|---|---|---|
+| `pan`（搜索器） | `pansou` `pan_generic` | **找**分享链接 |
+| `panstorage`（存储器） | `alist` `quark` `local_dir` | **存**进你自己的盘、浏览、给直链 |
+
+| 存储 Provider | 鉴权 | 转存方式 | 适合 |
+|---|---|---|---|
+| `alist` **推荐** | 账号密码或固定 `api_key` | `add_offline_download` 离线下载 | 一套接 20+ 网盘，已有 AList 的首选 |
+| `quark` | 浏览器 Cookie | 官方分享转存四步流程（换 stoken → 列文件 → 提交 → 轮询任务） | 国内影视分享最多的夸克 |
+| `local_dir` | 无 | 不支持转存（只读） | 把 rclone / CloudDrive 挂载目录当网盘浏览，**零配置试用** |
+
+- **自动转存**：订阅追新命中网盘资源时，`download` 服务会按分享域名**优先选同家网盘**
+  （夸克分享给夸克盘，没有同家就退回 AList 离线下载），成功后任务直接进 `transferred`
+  状态并把落地路径写进 `meta`。可用 `CF_PAN_AUTO_SAVE=false` 关掉
+- **待转存队列**：转存失败（提取码错、容量不足、Cookie 过期）的任务留在队列里，
+  「网盘待转存队列」定时任务每 20 分钟重试一次，也能在页面上一键全部重试
+- **转存记录**：每次转存都落一条记录（成功/失败 + 原因 + 落地路径），
+  专门用来回答「为什么这个没转存成功」
+- **目录浏览**：容量进度条 + 面包屑导航 + 建目录 / 删除 / 换取临时直链（可喂给 STRM 或 aria2）
+- **优雅降级**：不支持某个能力的网盘（如 `local_dir` 不能转存）会返回**明确提示**，
+  不是 500 也不是假装成功
+
+### 🤖 ChatOps：在飞书 / 钉钉 / Telegram 里发指令
+
+不用开网页，聊天窗口里一句话就能搜索、下载、订阅。
+
+| 指令 | 说法举例（共 40+ 个中英别名） | 作用 |
+|---|---|---|
+| `search` | `搜索 沙丘 第二季` / `搜 三体` / `s Dune` / 直接发片名 | 聚合搜索，回前 N 条 |
+| `download` | `下载 2` / `2` / `下载 magnet:?xt=…` | 下上一次搜索的第 N 条，或直接投链接 |
+| `subscribe` | `订阅 凡人修仙传 第二季` / `追剧 苍兰诀` | 建订阅并自动追新 |
+| `subscribes` | `订阅列表` / `我的订阅` / `subs` | 追剧进度与缺集 |
+| `status` | `状态` / `进度` | 下载中的任务 |
+| `transfer` | `转存` / `网盘` | 批量转存待处理网盘资源 |
+| `trending` | `热榜` / `排行` | 资源热度榜 |
+| `help` | `帮助` / `?` / `菜单` | 指令说明 |
+
+- **会话上下文**：`搜索` 的结果按会话缓存，接着发 `下载 2` 就能选中第 2 条，
+  不用复制粘贴链接（有效期 `CF_CHATOPS_SESSION_TTL`，默认 15 分钟）
+- **口语容错**：自动去掉 `@机器人` 与前导 `/`，认 `搜索:片名`、中文季号（`第二季`）、
+  `S02E09`；纯数字当序号；**没有指令词就当搜索**
+- **验签是强制的**：Webhook 端点不能带 JWT（平台发不了），所以安全性全靠验签——
+  飞书校验 `verification_token`（支持 AES 加密推送与 URL 验证挑战）、
+  钉钉校验 `HMAC-SHA256(timestamp+"\n"+secret)` **并带时间戳防重放**、
+  Telegram 校验 `X-Telegram-Bot-Api-Secret-Token`。
+  **没配密钥默认直接拒绝**，纯内网想免验签必须显式打开 `allow_unverified`
+- **幂等**：平台重投同一条消息（10 分钟内）只执行一次
+- **白名单**：`CF_CHATOPS_ALLOW_USERS` 限定谁能操控你的 NAS
+- **全量审计**：每条指令都写 `audit_logs`（谁、哪个渠道、什么指令、成功与否、回复内容）
+- **界面自助**：机器人页展示各平台**可一键复制的回调地址**与配置字段，
+  还带一个「指令试跑」输入框——不用真去建机器人也能验证指令是否被正确解析和执行
+
+三个平台的回调地址（填到各平台后台）：
+
+```
+http://<你的地址>:6060/api/v1/chatops/webhook/feishu
+http://<你的地址>:6060/api/v1/chatops/webhook/dingtalk
+http://<你的地址>:6060/api/v1/chatops/webhook/telegram
+```
+
+详细配置步骤见 [`docs/05-ChatOps-机器人.md`](docs/05-ChatOps-机器人.md)。
+
+### ⚙️ 设置页
+
+**设置页**把当前**真正生效**的配置按 9 组列出来（服务 / 目录 / 整理入库 / 搜索策略 /
+调度 / 网盘 / 机器人 / 元数据网络 / 安全），每项都标出对应的 `CF_XXX` 环境变量名，
+密钥类只显示「已设置」而不回显明文。
+
+> 这里刻意**只读**：静态配置改了必须重启才生效，做成可编辑就会出现
+> 「界面上改了、重启后丢了」的假功能。需要在线改的东西（定时任务周期、
+> ChatOps 配置、站点、插件）都在各自页面里，并且**持久化到数据库**。
 
 ### 🧩 插件系统
 
@@ -242,7 +336,7 @@ NAS 离线内网直接可用，整个前端只有 `index.html` + `app.js` + `sty
 - **完整 token 化设计系统**：所有颜色走语义变量
   （`--surface-0..3` / `--text` / `--accent` / `--ok|warn|err` / `--ring` / `--shadow-1..3`），
   两套主题各自一份取值，组件代码零改动即可换肤
-- **11 个功能页**分五组导航（总览 / 发现 / 追剧 / 入库 / 系统），侧边栏按组折行
+- **14 个功能页**分五组导航（总览 / 发现 / 追剧 / 入库 / 系统），侧边栏按组折行
 - **约 35 个内联 SVG 线性图标**，无字体图标、无图片请求
 - **骨架屏加载**（不再是白屏转圈）、空态插画、热度条、排名徽标、
   分段控件（segment）、标签云（chips）等组件
@@ -266,17 +360,34 @@ NAS 离线内网直接可用，整个前端只有 `index.html` + `app.js` + `sty
 
 ---
 
+## 📚 文档
+
+项目的现状、设计、升级计划与每一步决策都写进了 [`docs/`](docs/README.md)，方便后续维护与 review：
+
+| 文档 | 内容 |
+|---|---|
+| [`docs/01-项目现状.md`](docs/01-项目现状.md) | 代码规模、模块清单、能力矩阵、**当前缺口** |
+| [`docs/02-架构设计.md`](docs/02-架构设计.md) | 分层铁律、主链路时序、扩展点、设计取舍 |
+| [`docs/03-升级路线图.md`](docs/03-升级路线图.md) | 里程碑任务表 + **逐条验收证据** |
+| [`docs/04-决策记录.md`](docs/04-决策记录.md) | ADR：为什么这么选，以及被否掉的方案 |
+| [`docs/05-ChatOps-机器人.md`](docs/05-ChatOps-机器人.md) | 三平台配置步骤、验签算法、指令表 |
+| [`docs/06-网盘管理.md`](docs/06-网盘管理.md) | 盘搜 vs 网盘、三种存储配置、转存流程 |
+| [`docs/07-运维手册.md`](docs/07-运维手册.md) | 部署、备份、排障、验证脚本 |
+| [`docs/08-变更日志.md`](docs/08-变更日志.md) | v1.0.0 → v1.3.0 逐版本记录 |
+
+---
+
 ## 🏗 架构
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │  web/  零依赖 Web 控制台（原生 JS，无 CDN）                     │
 └────────────────────────────┬─────────────────────────────────┘
-                             │ REST /api/v1（63 个端点）
+                             │ REST /api/v1（82 个端点）
 ┌────────────────────────────▼─────────────────────────────────┐
-│  app/api/      12 个 router：auth search trending subscribes  │
+│  app/api/      14 个 router：auth search trending subscribes  │
 │                 radar schedules downloads library media       │
-│                 sites plugins system                          │
+│                 sites pan chatops plugins system              │
 ├──────────────────────────────────────────────────────────────┤
 │  app/services/  业务编排层                                     │
 │    search    多级关键词 · 并发聚合 · 去重                       │
@@ -285,10 +396,12 @@ NAS 离线内网直接可用，整个前端只有 `index.html` + `app.js` + `sty
 │    trending  热度加权打分 → 资源榜/实时榜/热词/站点榜             │
 │    discovery 导航站解析 → 候选资源站发现                         │
 │    presets   自定义站点配置模板                                 │
-│    download  投递下载器 · 进度同步                             │
+│    download  投递下载器 · 进度同步 · 网盘资源自动转存            │
+│    pan_storage 网盘容量/浏览/转存/待转存队列                     │
+│    chatops/  聊天平台适配（验签/解析/回复）+ 指令执行引擎          │
 │    library   整理入库 · 扫描 · 刷新媒体服务器                    │
 │    notify    事件总线 + 多渠道推送                              │
-│    scheduler APScheduler（4 内置任务 + 插件任务），可视化改期      │
+│    scheduler APScheduler（5 内置任务 + 插件任务），可视化改期      │
 │    settings_store 运行期设置持久化（settings 表）               │
 │    sites     DB 配置 → Provider 实例                           │
 ├──────────────────────────────────────────────────────────────┤
@@ -296,9 +409,10 @@ NAS 离线内网直接可用，整个前端只有 `index.html` + `app.js` + `sty
 │    meta 解析引擎 · filters 过滤打分 · organizer 命名转移         │
 │    config 三级配置 · security PBKDF2+JWT · logger 环形缓冲       │
 ├──────────────────────────────────────────────────────────────┤
-│  app/providers/ 18 个注册 Provider + TMDB 单例，装饰器自动发现   │
+│  app/providers/ 21 个注册 Provider + TMDB 单例，装饰器自动发现   │
 │    indexer  torznab rss nyaa api_generic html_generic mukaku  │
-│    pan      pansou pan_generic                                │
+│    pan      pansou pan_generic         ← 找分享链接（搜索器）    │
+│    panstorage alist quark local_dir    ← 存到自己的盘（存储器）  │
 │    downloader qbittorrent transmission aria2                  │
 │    mediaserver emby jellyfin plex                             │
 │    notify   telegram webhook bark wecom                       │
@@ -306,7 +420,7 @@ NAS 离线内网直接可用，整个前端只有 `index.html` + `app.js` + `sty
 ├──────────────────────────────────────────────────────────────┤
 │  app/plugins/   插件基类 + 管理器（发现/热启停/配置/动作）        │
 ├──────────────────────────────────────────────────────────────┤
-│  app/db/        SQLAlchemy 2.0 ORM · SQLite(WAL) · 12 张表     │
+│  app/db/        SQLAlchemy 2.0 ORM · SQLite(WAL) · 14 张表     │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -386,6 +500,14 @@ YAML 里的二级 key 会拍平成 `CF_<父>_<子>`，例如 `tmdb.api_key` → 
 | 关键词黑名单 | `CF_EXCLUDE_KEYWORDS` | `枪版,抢先版,CAM,…` | 支持正则 |
 | TMDB | `CF_TMDB_API_KEY` | 空 | **留空也能用**，只是没海报/总集数 |
 | API 令牌 | `CF_API_TOKEN` | 空 | 外部脚本用请求头 `X-API-Token` |
+| 网盘自动转存 | `CF_PAN_AUTO_SAVE` | `true` | 盘搜命中后自动转存进已配置的网盘 |
+| 转存重试间隔 | `CF_PAN_TRANSFER_INTERVAL_MINUTES` | `20` | 分钟，设 0 关闭该定时任务 |
+| 转存批量 | `CF_PAN_TRANSFER_BATCH` | `20` | 单次最多转存多少条 |
+| 机器人总开关 | `CF_CHATOPS_ENABLED` | `true` | 关掉后所有入站指令直接忽略 |
+| 指令自动下载 | `CF_CHATOPS_AUTO_DOWNLOAD` | `false` | 开启后「搜索」直接下最优的一条 |
+| 指令回复条数 | `CF_CHATOPS_RESULT_LIMIT` | `5` | 搜索结果回复几条 |
+| 指令白名单 | `CF_CHATOPS_ALLOW_USERS` | 空 | 平台用户 ID，逗号分隔；留空=不限制 |
+| 指令会话时长 | `CF_CHATOPS_SESSION_TTL` | `900` | 秒；「搜索」后能回「下载 2」的有效期 |
 
 完整清单见 [`config/config.yaml.example`](config/config.yaml.example) 与 [`.env.example`](.env.example)。
 
@@ -393,7 +515,8 @@ YAML 里的二级 key 会拍平成 `CF_<父>_<子>`，例如 `tmdb.api_key` → 
 
 ## 🔌 接入你自己的站点
 
-首次启动会写入 8 条**默认全部禁用**的示例站点（避免启动就对外发请求）。
+首次启动会写入 11 条**默认全部禁用**的示例站点（避免启动就对外发请求）。
+版本升级时会**按名字补齐新增的示例站点**，已存在的同名站点不会被覆盖。
 在 **站点管理** 页填好地址后点「启用」即可。
 
 ### BT 站点（Jackett / Prowlarr）
@@ -739,7 +862,7 @@ curl -X POST -H "X-API-Token: your-token" \
      http://127.0.0.1:6060/api/v1/subscribes/run-all
 ```
 
-主要端点分组（共 63 个）：
+主要端点分组（共 82 个）：
 
 | 前缀 | 用途 |
 |---|---|
@@ -752,9 +875,11 @@ curl -X POST -H "X-API-Token: your-token" \
 | `/api/v1/media` | 资源名识别、TMDB 搜索/详情/分集/热榜 |
 | `/api/v1/sites` | 站点 CRUD、连通性测试、Provider 清单、预设模板、导航站发现 |
 | `/api/v1/radar` | 追新雷达：手动追新、预览匹配、最新流预览、任务状态 |
+| `/api/v1/pan` | 网盘管理：总览、目录浏览、转存、批量转存、建目录、删除、直链、记录 |
+| `/api/v1/chatops` | 机器人：入站 Webhook、平台清单、配置、指令试跑、解析、审计 |
 | `/api/v1/schedules` | 定时任务：查看、改期（interval/cron）、重置、立即执行 |
 | `/api/v1/plugins` | 列表、启停、配置、执行动作 |
-| `/api/v1/system` | 仪表盘、系统信息、调度任务、日志、通知 |
+| `/api/v1/system` | 仪表盘、系统信息、生效配置、调度任务、日志、通知 |
 
 ---
 
@@ -762,7 +887,7 @@ curl -X POST -H "X-API-Token: your-token" \
 
 ```bash
 pip install -r requirements-dev.txt
-pytest -q                 # 156 passed
+pytest -q                 # 270 passed
 ruff check app tests      # 静态检查
 ```
 
@@ -778,6 +903,8 @@ ruff check app tests      # 静态检查
 | `test_custom_sites.py` | **自定义站点**：JSON 字段映射、两阶段详情抓取、正则解析、导航站发现、预设 |
 | `test_radar.py` | **追新雷达**：标题匹配、跨站去重、缺集命中、过滤规则、dry-run |
 | `test_trending.py` | **热度排行 + 定时任务**：热度打分与排序、窗口过滤、热词、站点榜、**发布版本/集号归并去碎片化**、cron/interval 校验、改期持久化 |
+| `test_panstorage.py` | **网盘管理**：三个存储 Provider、路径规范化与**越界防护**、夸克四步转存、AList 离线下载、选盘策略、**盘搜命中自动转存端到端** |
+| `test_chatops.py` | **ChatOps**：40+ 别名解析、中文季号、三平台**验签正反用例**（含钉钉真实 HMAC、防重放）、飞书加解密与挑战、幂等去重、白名单、**搜索→下载 N 会话上下文**、Webhook 全链路 |
 
 全部测试使用内存假 Provider，**全程不触网**。
 
@@ -788,8 +915,8 @@ ruff check app tests      # 静态检查
 ```bash
 python -m app.main &                  # 先起服务
 
-python scripts/smoke_test.py          # 82 项真实 HTTP 接口用例
-python scripts/ui_check.py            # Playwright 真浏览器逐页点检 11 个页面 + 主题切换，捕获 JS 报错
+python scripts/smoke_test.py          # 117 项真实 HTTP 接口用例
+python scripts/ui_check.py            # Playwright 真浏览器逐页点检 14 个页面 + 主题切换，捕获 JS 报错
 python scripts/demo_pipeline.py       # 真实文件演示解析→硬链入库→缺集收敛（无需服务）
 python scripts/live_check.py          # 真实站点端到端：启用 mukaku→搜索→订阅→雷达匹配（联网）
 python scripts/verify_docs.py         # 校验 README 事实声明与代码一致
@@ -804,18 +931,21 @@ cineflow/
 ├── app/
 │   ├── core/          config logger security exceptions meta filters organizer version
 │   ├── db/            session base models init_db
-│   ├── providers/     base registry + indexer/ pan/ downloader/ mediaserver/ notify/ metadata/
+│   ├── providers/     base registry + indexer/ pan/ panstorage/ downloader/
+│   │                  mediaserver/ notify/ metadata/
 │   ├── services/      sites search notify download library subscribe scheduler
 │   │                  radar trending discovery presets settings_store
+│   │                  pan_storage chatops/
 │   ├── plugins/       base manager
-│   ├── api/           deps router + routers/(12)
+│   ├── api/           deps router + routers/(14)
 │   ├── schemas/       enums models
 │   ├── utils/         http strings
 │   └── main.py        应用入口（lifespan / CORS / 静态资源）
 ├── web/               index.html + assets/(app.js style.css)  ← 零依赖前端
 ├── plugins/           auto_cleanup pan_transfer daily_digest  ← 示例插件
-├── tests/             10 个测试文件
+├── tests/             12 个测试文件
 ├── scripts/           smoke_test / ui_check / demo_pipeline 验证脚本
+├── docs/              9 篇维护文档（现状/架构/路线图/决策/运维/变更日志…）
 ├── config/            config.yaml.example
 ├── docker/            entrypoint.sh
 ├── Dockerfile         多阶段构建

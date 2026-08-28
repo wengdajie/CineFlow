@@ -25,6 +25,7 @@ JOB_SUBSCRIBE = "cineflow.subscribe"
 JOB_DOWNLOAD = "cineflow.download"
 JOB_LIBRARY = "cineflow.library"
 JOB_RADAR = "cineflow.radar"
+JOB_PAN_TRANSFER = "cineflow.pan_transfer"
 _PLUGIN_PREFIX = "plugin."
 
 #: 间隔型任务允许的分钟范围
@@ -99,6 +100,15 @@ def builtin_specs() -> list[JobSpec]:
             trigger="interval",
             minutes=settings.DOWNLOAD_CHECK_INTERVAL_MINUTES,
             enabled=True,
+        ),
+        JobSpec(
+            key="pan_transfer",
+            job_id=JOB_PAN_TRANSFER,
+            name="网盘待转存队列",
+            description="把命中网盘资源但尚未转存的任务批量转存到已配置的网盘",
+            trigger="interval",
+            minutes=settings.PAN_TRANSFER_INTERVAL_MINUTES or 20,
+            enabled=bool(settings.PAN_AUTO_SAVE and settings.PAN_TRANSFER_INTERVAL_MINUTES > 0),
         ),
         JobSpec(
             key="library",
@@ -187,6 +197,7 @@ class SchedulerService:
         """任务函数与调用参数。"""
         from app.services import download as download_service
         from app.services import library as library_service
+        from app.services import pan_storage as pan_service
         from app.services import radar as radar_service
         from app.services import subscribe as subscribe_service
 
@@ -198,6 +209,10 @@ class SchedulerService:
             ),
             "download": (download_service.sync_tasks, {}),
             "library": (library_service.scan_library, {}),
+            "pan_transfer": (
+                pan_service.transfer_pending,
+                {"limit": settings.PAN_TRANSFER_BATCH},
+            ),
         }
         if key not in targets:
             raise ValueError(f"未知任务: {key}")

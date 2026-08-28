@@ -141,11 +141,32 @@ class Settings(BaseSettings):
     STRM_ENABLED: bool = False
     STRM_BASE_URL: str = "http://127.0.0.1:6060"
 
+    # ---------- 网盘管理 ----------
+    #: 盘搜命中网盘资源时是否自动转存进已配置的网盘存储
+    PAN_AUTO_SAVE: bool = True
+    #: 定时转存待处理网盘任务的间隔（分钟），0 表示关闭
+    PAN_TRANSFER_INTERVAL_MINUTES: int = 20
+    #: 单次批量转存的最大任务数
+    PAN_TRANSFER_BATCH: int = 20
+
+    # ---------- ChatOps 机器人 ----------
+    #: 是否启用入站 Webhook（飞书/钉钉/Telegram 指令控制）
+    CHATOPS_ENABLED: bool = True
+    #: 收到指令后是否自动下载最优资源（关闭则只返回列表等用户选择）
+    CHATOPS_AUTO_DOWNLOAD: bool = False
+    #: 搜索结果最多回复多少条
+    CHATOPS_RESULT_LIMIT: int = 5
+    #: 允许下发指令的用户白名单（各平台的用户 ID，空表示不限制）
+    CHATOPS_ALLOW_USERS: list[str] = Field(default_factory=list)
+    #: 会话上下文保留时长（秒），用于「搜索」后回「下载 2」
+    CHATOPS_SESSION_TTL: int = 900
+
     @field_validator(
         "ALLOW_ORIGINS",
         "PREFER_RESOLUTIONS",
         "EXCLUDE_KEYWORDS",
         "INCLUDE_KEYWORDS",
+        "CHATOPS_ALLOW_USERS",
         "MEDIA_EXTENSIONS",
         "SUBTITLE_EXTENSIONS",
         mode="before",

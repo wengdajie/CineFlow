@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import func, select
 
 from app.api.deps import CurrentUser
+from app.core.config import DEFAULT_CONFIG_FILE as CONFIG_FILE
 from app.core.config import settings
 from app.core.logger import recent_logs
 from app.core.version import APP_TITLE, APP_VERSION
@@ -115,6 +117,121 @@ def dashboard(user: CurrentUser) -> dict[str, Any]:
         "downloads": {"running": downloading, "finished": finished},
         "library": library_service.library_stats(),
         "recent": recent,
+    }
+
+
+#: 设置页展示的配置分组。只读展示，敏感项脱敏——
+#: 静态配置只能通过 .env / config.yaml 修改（改后需重启），
+#: 这样避免出现"界面能改但重启就丢"的假功能。
+SETTING_GROUPS: list[dict[str, Any]] = [
+    {
+        "title": "服务",
+        "keys": ["HOST", "PORT", "DEBUG", "TIMEZONE", "LOG_LEVEL"],
+    },
+    {
+        "title": "目录",
+        "keys": ["DATA_DIR", "DOWNLOAD_DIR", "LIBRARY_DIR", "STRM_DIR", "PLUGIN_DIR"],
+    },
+    {
+        "title": "整理入库",
+        "keys": ["TRANSFER_MODE", "MOVIE_TEMPLATE", "TV_TEMPLATE", "MIN_FILE_SIZE_MB"],
+    },
+    {
+        "title": "搜索与订阅策略",
+        "keys": [
+            "SEARCH_TIMEOUT",
+            "SEARCH_MAX_RESULTS",
+            "SEARCH_CONCURRENCY",
+            "AUTO_DOWNLOAD_BEST",
+            "PREFER_RESOLUTIONS",
+            "EXCLUDE_KEYWORDS",
+            "INCLUDE_KEYWORDS",
+            "MIN_SEEDERS",
+        ],
+    },
+    {
+        "title": "调度",
+        "keys": [
+            "SUBSCRIBE_INTERVAL_MINUTES",
+            "RADAR_ENABLED",
+            "RADAR_INTERVAL_MINUTES",
+            "RADAR_LIMIT_PER_SITE",
+            "DOWNLOAD_CHECK_INTERVAL_MINUTES",
+            "LIBRARY_SCAN_CRON",
+            "SCHEDULER_ENABLED",
+        ],
+    },
+    {
+        "title": "网盘管理",
+        "keys": ["PAN_AUTO_SAVE", "PAN_TRANSFER_INTERVAL_MINUTES", "PAN_TRANSFER_BATCH"],
+    },
+    {
+        "title": "ChatOps 机器人",
+        "keys": [
+            "CHATOPS_ENABLED",
+            "CHATOPS_AUTO_DOWNLOAD",
+            "CHATOPS_RESULT_LIMIT",
+            "CHATOPS_ALLOW_USERS",
+            "CHATOPS_SESSION_TTL",
+        ],
+    },
+    {
+        "title": "元数据与网络",
+        "keys": [
+            "TMDB_API_KEY",
+            "TMDB_LANGUAGE",
+            "METADATA_CACHE_TTL",
+            "HTTP_PROXY",
+            "STRM_ENABLED",
+            "STRM_BASE_URL",
+        ],
+    },
+    {
+        "title": "安全",
+        "keys": ["SUPERUSER", "SECRET_KEY", "API_TOKEN", "TOKEN_EXPIRE_MINUTES"],
+    },
+]
+
+_SECRET_WORDS = ("SECRET", "TOKEN", "PASSWORD", "API_KEY")
+
+
+def _mask(key: str, value: Any) -> Any:
+    """敏感配置只回显长度，避免界面泄漏密钥。"""
+    if key in ("TOKEN_EXPIRE_MINUTES", "CHATOPS_SESSION_TTL"):
+        return value
+    if any(word in key for word in _SECRET_WORDS) and value:
+        return "******（已设置）"
+    return value
+
+
+@router.get("/settings", summary="生效配置总览（敏感项脱敏）")
+def effective_settings(user: CurrentUser) -> dict[str, Any]:
+    """把当前生效的静态配置分组返回，供设置页展示与排障。"""
+    groups: list[dict[str, Any]] = []
+    for group in SETTING_GROUPS:
+        items = []
+        for key in group["keys"]:
+            if not hasattr(settings, key):
+                continue
+            raw = getattr(settings, key)
+            value = str(raw) if isinstance(raw, Path) else raw
+            if isinstance(value, list):
+                value = "、".join(str(item) for item in value) or "（空）"
+            items.append(
+                {
+                    "key": key,
+                    "env": f"CF_{key}",
+                    "value": _mask(key, value),
+                    "secret": any(word in key for word in _SECRET_WORDS),
+                }
+            )
+        groups.append({"title": group["title"], "items": items})
+    return {
+        "success": True,
+        "config_file": str(CONFIG_FILE),
+        "config_file_exists": CONFIG_FILE.exists(),
+        "note": "静态配置通过 .env 或 config/config.yaml 修改，保存后重启服务生效；定时周期与 ChatOps 可在对应页面在线修改",
+        "groups": groups,
     }
 
 

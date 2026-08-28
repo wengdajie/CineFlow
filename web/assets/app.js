@@ -87,6 +87,8 @@
     server: '<rect x="3.5" y="4" width="17" height="6" rx="2"/><rect x="3.5" y="14" width="17" height="6" rx="2"/><path d="M7 7h.4M7 17h.4"/>',
     chart: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
     inbox: '<path d="M3.5 12.5 6 5h12l2.5 7.5v6.5h-17z"/><path d="M3.5 12.5H9l1 2.5h4l1-2.5h5.5"/>',
+    robot: '<rect x="4" y="8" width="16" height="11" rx="3"/><path d="M12 4v4"/><circle cx="9" cy="13" r="1.2"/><circle cx="15" cy="13" r="1.2"/><path d="M9.5 16.5h5"/>',
+    folder: '<path d="M3.5 6.5h5l2 2.5h9.5v9.5h-16.5z"/>',
     dot: '<circle cx="12" cy="12" r="4"/>',
   };
 
@@ -504,9 +506,12 @@
     { key: "schedules", label: "定时任务", icon: "clock", group: "追剧" },
     { key: "downloads", label: "下载任务", icon: "download", group: "入库" },
     { key: "library", label: "媒体库", icon: "library", group: "入库" },
-    { key: "sites", label: "站点管理", icon: "settings", group: "系统" },
+    { key: "storage", label: "网盘管理", icon: "cloud", group: "入库" },
+    { key: "sites", label: "站点管理", icon: "server", group: "系统" },
+    { key: "chatops", label: "机器人", icon: "robot", group: "系统" },
     { key: "plugins", label: "插件", icon: "plugin", group: "系统" },
     { key: "logs", label: "运行日志", icon: "logs", group: "系统" },
+    { key: "settings", label: "设置", icon: "settings", group: "系统" },
   ];
 
   function shell(content, title, subtitle, actions) {
@@ -2913,6 +2918,694 @@
     );
   }
 
+  // ---------------- 网盘管理 ----------------
+  /** 网盘浏览器的当前位置（页面级状态，切页后保留便于来回跳转）。 */
+  const panState = { siteId: null, path: "/" };
+
+  function quotaCard(item, onPick, active) {
+    const q = item.quota || {};
+    const percent = Number(q.percent) || 0;
+    const card = el("div", { class: "card pan-card" + (active ? " on" : "") }, [
+      el("div", { class: "pan-card-head" }, [
+        el("div", { class: "row tight center", style: "flex:1" }, [
+          icon("cloud", "sm"),
+          el("div", {}, [
+            el("div", { class: "pan-name", text: item.name }),
+            el("div", { class: "cell-sub mono", text: item.provider }),
+          ]),
+        ]),
+        el("span", {
+          class: "tag" + (item.supports_save ? " brand" : ""),
+          text: item.supports_save ? "可转存" : "只读",
+        }),
+      ]),
+      el("div", { class: "progress" + (percent >= 90 ? " done" : "") }, [
+        el("i", { style: "width:" + Math.max(2, Math.min(100, percent)) + "%" }),
+      ]),
+      el("div", { class: "row tight center between" }, [
+        el("span", {
+          class: "tiny dim",
+          text: q.total ? fmtSize(q.used) + " / " + fmtSize(q.total) : "容量未知",
+        }),
+        el("span", { class: "tiny dim", text: q.total ? percent + "%" : "-" }),
+      ]),
+      el("div", { class: "row tight", style: "margin-top:12px" }, [
+        iconButton("浏览", "library", () => onPick(item.site_id), "sm"),
+        iconButton("测试", "check", async () => {
+          try {
+            const result = await api("/pan/" + item.site_id + "/test", { method: "POST" });
+            toast(item.name + "：" + result.message + " · " + result.capacity_text, result.success ? "ok" : "err");
+          } catch (error) {
+            toast(error.message, "err");
+          }
+        }, "sm ghost"),
+        item.supports_save
+          ? iconButton("新建目录", "plus", () => {
+              modal("新建目录", [
+                { key: "path", label: "完整路径", value: (item.root_path || "/") , hint: "例如 /影视/剧集" },
+              ], async (values) => {
+                await api("/pan/mkdir", { method: "POST", body: { site_id: item.site_id, path: values.path } });
+                toast("目录已创建", "ok");
+                pageStorage();
+              }, "创建");
+            }, "sm ghost")
+          : null,
+      ]),
+    ]);
+    return card;
+  }
+
+  function breadcrumb(path, onGo) {
+    const parts = String(path || "/").split("/").filter(Boolean);
+    const nodes = [
+      el("button", { class: "crumb", text: "根目录", onclick: () => onGo("/") }),
+    ];
+    let acc = "";
+    parts.forEach((part, index) => {
+      acc += "/" + part;
+      const target = acc;
+      nodes.push(el("span", { class: "crumb-sep", text: "/" }));
+      nodes.push(
+        index === parts.length - 1
+          ? el("span", { class: "crumb on", text: part })
+          : el("button", { class: "crumb", text: part, onclick: () => onGo(target) })
+      );
+    });
+    return el("div", { class: "crumbs" }, nodes);
+  }
+
+  async function pageStorage() {
+    shell(loading(), "网盘管理", "容量、目录浏览与分享转存");
+    const [overview, pending, records] = await Promise.all([
+      api("/pan"),
+      api("/pan/pending?limit=50").catch(() => ({ items: [] })),
+      api("/pan/records?limit=30").catch(() => ({ items: [] })),
+    ]);
+
+    const list = overview.items || [];
+    if (!panState.siteId && list.length) panState.siteId = list[0].site_id;
+    const current = list.find((item) => item.site_id === panState.siteId) || list[0] || null;
+
+    const pickSite = (siteId) => {
+      panState.siteId = siteId;
+      panState.path = "/";
+      pageStorage();
+    };
+
+    const cards = el(
+      "div",
+      { class: "grid cols-3" },
+      list.length
+        ? list.map((item) => quotaCard(item, pickSite, item.site_id === panState.siteId))
+        : [
+            el("div", { class: "card" }, [
+              emptyBox("还没有启用网盘存储。到「站点管理」启用 AList / 夸克 / 本地目录后即可在此浏览与转存", "cloud"),
+            ]),
+          ]
+    );
+
+    // ---- 文件浏览 ----
+    let browser = null;
+    if (current) {
+      let files = { items: [], path: panState.path, parent: null };
+      try {
+        files = await api(
+          "/pan/files?site_id=" + current.site_id + "&path=" + encodeURIComponent(panState.path)
+        );
+      } catch (error) {
+        files = { items: [], path: panState.path, parent: null, error: error.message };
+      }
+
+      const goPath = (path) => {
+        panState.path = path;
+        pageStorage();
+      };
+
+      browser = el("div", { class: "card flush" }, [
+        el("div", { class: "card-head" }, [
+          el("h3", {}, [icon("library", "sm"), el("span", { text: current.name + " · 文件浏览" })]),
+          el("div", { class: "row tight center" }, [
+            files.parent ? iconButton("上一级", "refresh", () => goPath(files.parent), "sm ghost") : null,
+            iconButton("刷新", "refresh", () => pageStorage(), "sm ghost"),
+          ]),
+        ]),
+        el("div", { style: "padding:0 var(--sp-5) var(--sp-3)" }, [breadcrumb(files.path, goPath)]),
+        files.error
+          ? emptyBox("读取失败：" + files.error, "alert")
+          : table(
+              [
+                {
+                  title: "名称",
+                  render: (row) =>
+                    row.is_dir
+                      ? el("button", { class: "link-btn", onclick: () => goPath(row.path) }, [
+                          icon("box", "sm"),
+                          el("span", { text: row.name }),
+                        ])
+                      : el("div", { class: "row tight center" }, [
+                          icon("film", "sm"),
+                          el("span", { class: "truncate", title: row.name, text: row.name }),
+                        ]),
+                },
+                { title: "类型", render: (row) => (row.is_dir ? "目录" : "文件") },
+                { title: "大小", class: "num", render: (row) => (row.is_dir ? "-" : fmtSize(row.size)) },
+                { title: "修改时间", render: (row) => fmtTime(row.modified_at) },
+                {
+                  title: "操作",
+                  render: (row) =>
+                    el("div", { class: "row tight" }, [
+                      row.is_dir
+                        ? null
+                        : iconButton("直链", "link", async () => {
+                            try {
+                              const result = await api(
+                                "/pan/download-url?site_id=" + current.site_id + "&path=" + encodeURIComponent(row.path)
+                              );
+                              copyText(result.url);
+                              toast("直链已复制到剪贴板", "ok");
+                            } catch (error) {
+                              toast(error.message, "err");
+                            }
+                          }, "sm ghost"),
+                      current.supports_delete
+                        ? iconButton("删除", "trash", async () => {
+                            if (!confirm("确定删除 " + row.name + "？")) return;
+                            try {
+                              await api(
+                                "/pan/files?site_id=" + current.site_id + "&path=" + encodeURIComponent(row.path),
+                                { method: "DELETE" }
+                              );
+                              toast("已删除", "ok");
+                              pageStorage();
+                            } catch (error) {
+                              toast(error.message, "err");
+                            }
+                          }, "sm danger")
+                        : null,
+                    ]),
+                },
+              ],
+              files.items,
+              "该目录为空"
+            ),
+      ]);
+    }
+
+    // ---- 待转存队列 ----
+    const pendingItems = pending.items || [];
+    const pendingCard = el("div", { class: "card flush" }, [
+      el("div", { class: "card-head" }, [
+        el("h3", {}, [icon("inbox", "sm"), el("span", { text: "待转存队列（" + pendingItems.length + "）" })]),
+        pendingItems.length
+          ? iconButton("一键全部转存", "cloud", async () => {
+              try {
+                const result = await api("/pan/transfer?limit=50", { method: "POST" });
+                toast("转存完成：成功 " + result.saved + " · 失败 " + result.failed, result.failed ? "err" : "ok");
+                pageStorage();
+              } catch (error) {
+                toast(error.message, "err");
+              }
+            }, "sm primary")
+          : null,
+      ]),
+      table(
+        [
+          {
+            title: "标题",
+            render: (row) =>
+              el("div", {}, [
+                el("div", { class: "truncate", title: row.title, text: row.title }),
+                el("div", { class: "cell-sub", text: (row.site || "-") + " · " + typeLabel(row.media_type) }),
+              ]),
+          },
+          { title: "网盘", render: (row) => el("span", { class: "tag", text: row.pan_type || "未知" }) },
+          { title: "提取码", render: (row) => el("span", { class: "mono dim", text: row.password || "-" }) },
+          { title: "登记时间", render: (row) => fmtTime(row.created_at) },
+          {
+            title: "操作",
+            render: (row) =>
+              el("div", { class: "row tight" }, [
+                iconButton("转存", "cloud", async () => {
+                  try {
+                    const result = await api("/pan/save", {
+                      method: "POST",
+                      body: { share_url: row.link, password: row.password, task_id: row.id },
+                    });
+                    toast("已转存到 " + (result.saved_path || "网盘"), "ok");
+                    pageStorage();
+                  } catch (error) {
+                    toast(error.message, "err");
+                  }
+                }, "sm"),
+                iconButton("复制链接", "link", () => {
+                  copyText(row.link);
+                  toast("已复制", "ok");
+                }, "sm ghost"),
+              ]),
+          },
+        ],
+        pendingItems,
+        "没有待转存的网盘资源"
+      ),
+    ]);
+
+    // ---- 转存记录 ----
+    const recordCard = el("div", { class: "card flush" }, [
+      el("div", { class: "card-head" }, [
+        el("h3", {}, [icon("logs", "sm"), el("span", { text: "转存记录" })]),
+      ]),
+      table(
+        [
+          { title: "网盘", render: (row) => el("span", { class: "mono", text: row.storage }) },
+          {
+            title: "分享链接",
+            render: (row) => el("div", { class: "truncate mono dim", title: row.share_url, text: row.share_url }),
+          },
+          { title: "落地路径", render: (row) => el("span", { class: "mono", text: row.saved_path || "-" }) },
+          {
+            title: "结果",
+            render: (row) =>
+              el("span", {
+                class: "tag dot " + (row.success ? "ok" : "err"),
+                text: row.success ? "成功" : "失败",
+              }),
+          },
+          { title: "说明", render: (row) => el("div", { class: "truncate tiny dim", title: row.message, text: row.message || "-" }) },
+          { title: "时间", render: (row) => fmtTime(row.created_at) },
+        ],
+        records.items || [],
+        "还没有转存记录"
+      ),
+    ]);
+
+    const saveButton = iconButton("转存分享链接", "plus", () => {
+      modal(
+        "转存网盘分享",
+        [
+          { key: "share_url", label: "分享链接", placeholder: "https://pan.quark.cn/s/xxxx", hint: "支持夸克/阿里/百度等，AList 走离线下载" },
+          { key: "password", label: "提取码", placeholder: "没有则留空" },
+          {
+            key: "site_id",
+            label: "目标网盘",
+            type: "select",
+            options: [{ value: "", label: "自动选择（按链接域名匹配）" }].concat(
+              list.map((item) => ({ value: String(item.site_id), label: item.name }))
+            ),
+          },
+          { key: "target_dir", label: "落地目录", placeholder: "留空用网盘默认目录" },
+        ],
+        async (values) => {
+          const result = await api("/pan/save", {
+            method: "POST",
+            body: {
+              share_url: values.share_url,
+              password: values.password || null,
+              site_id: values.site_id ? Number(values.site_id) : null,
+              target_dir: values.target_dir || null,
+            },
+          });
+          toast("已转存：" + (result.saved_path || "完成"), "ok");
+          pageStorage();
+        },
+        "开始转存"
+      );
+    }, "primary");
+
+    shell(
+      el("div", { class: "grid" }, [cards, browser, pendingCard, recordCard].filter(Boolean)),
+      "网盘管理",
+      list.length
+        ? "已启用 " + list.length + " 个网盘 · 待转存 " + pendingItems.length + " 条"
+        : "尚未启用网盘存储",
+      [saveButton, iconButton("刷新", "refresh", () => pageStorage())]
+    );
+  }
+
+  // ---------------- ChatOps 机器人 ----------------
+  function copyText(text) {
+    const value = String(text || "");
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(value).catch(() => {});
+      return;
+    }
+    const area = el("textarea", { style: "position:fixed;opacity:0" });
+    area.value = value;
+    document.body.appendChild(area);
+    area.select();
+    try {
+      document.execCommand("copy");
+    } catch (err) {
+      /* 忽略：老浏览器不支持时用户可手动复制 */
+    }
+    area.remove();
+  }
+
+  async function pageChatops() {
+    shell(loading(), "机器人", "飞书 / 钉钉 / Telegram 指令控制");
+    const [platforms, config, commands, audit] = await Promise.all([
+      api("/chatops/platforms"),
+      api("/chatops/config"),
+      api("/chatops/commands"),
+      api("/chatops/audit?limit=50").catch(() => ({ items: [] })),
+    ]);
+
+    const cfg = config.data || {};
+    const origin = location.origin;
+
+    // ---- 总开关 ----
+    const globalCard = el("div", { class: "card" }, [
+      el("div", { class: "card-head" }, [
+        el("h3", {}, [icon("robot", "sm"), el("span", { text: "全局设置" })]),
+        el("span", {
+          class: "tag dot " + (cfg.enabled ? "ok" : "warn"),
+          text: cfg.enabled ? "已启用" : "已停用",
+        }),
+      ]),
+      el("div", { class: "muted", text: "机器人收到消息后会解析成搜索/下载/订阅等指令并执行，所有指令都会记入审计日志。" }),
+      el("div", { class: "divider" }),
+      el("div", { class: "kv" }, [
+        el("div", { class: "kv-item" }, [
+          el("div", { class: "kv-label", text: "自动下载" }),
+          el("div", { text: cfg.auto_download ? "搜索后自动下最优" : "只回列表等确认" }),
+        ]),
+        el("div", { class: "kv-item" }, [
+          el("div", { class: "kv-label", text: "回复条数" }),
+          el("div", { class: "mono", text: String(cfg.result_limit) }),
+        ]),
+        el("div", { class: "kv-item" }, [
+          el("div", { class: "kv-label", text: "白名单" }),
+          el("div", { class: "mono tiny", text: (cfg.allow_users || []).join("、") || "不限制" }),
+        ]),
+      ]),
+      el("div", { class: "row tight", style: "margin-top:16px" }, [
+        iconButton("修改全局设置", "edit", () => {
+          modal(
+            "ChatOps 全局设置",
+            [
+              { key: "enabled", label: "启用机器人", type: "checkbox", value: !!cfg.enabled },
+              {
+                key: "auto_download",
+                label: "搜索后自动下载最优资源",
+                type: "checkbox",
+                value: !!cfg.auto_download,
+                hint: "关闭时机器人只回列表，用户回复「下载 2」再下",
+              },
+              { key: "result_limit", label: "搜索结果回复条数", type: "number", value: cfg.result_limit },
+              {
+                key: "allow_users",
+                label: "用户白名单",
+                value: (cfg.allow_users || []).join(","),
+                hint: "各平台的用户 ID，英文逗号分隔；留空表示所有人可用",
+              },
+            ],
+            async (values) => {
+              await api("/chatops/config", {
+                method: "PUT",
+                body: {
+                  enabled: values.enabled,
+                  auto_download: values.auto_download,
+                  result_limit: values.result_limit,
+                  allow_users: String(values.allow_users || "")
+                    .split(",")
+                    .map((item) => item.trim())
+                    .filter(Boolean),
+                },
+              });
+              toast("已保存", "ok");
+              pageChatops();
+            },
+            "保存"
+          );
+        }, "sm primary"),
+      ]),
+    ]);
+
+    // ---- 平台配置 ----
+    const platformCards = (platforms.items || []).map((item) => {
+      const webhook = origin + item.webhook_path;
+      const saved = (cfg.platforms || {})[item.platform] || {};
+      return el("div", { class: "card" }, [
+        el("div", { class: "card-head" }, [
+          el("h3", {}, [icon("link", "sm"), el("span", { text: item.display_name })]),
+          el("span", {
+            class: "tag dot " + (item.configured ? "ok" : ""),
+            text: item.configured ? "已配置" : "未配置",
+          }),
+        ]),
+        el("div", { class: "dim tiny", text: item.setup_hint }),
+        el("div", { class: "webhook-box" }, [
+          el("span", { class: "mono truncate", title: webhook, text: webhook }),
+          iconButton("复制", "link", () => {
+            copyText(webhook);
+            toast("回调地址已复制", "ok");
+          }, "sm ghost"),
+        ]),
+        el("div", { class: "kv" }, (item.fields || []).map((field) =>
+          el("div", { class: "kv-item" }, [
+            el("div", { class: "kv-label", text: field.label }),
+            el("div", {
+              class: "mono tiny",
+              text: saved[field.key] ? String(saved[field.key]) : "未填写",
+            }),
+          ])
+        )),
+        el("div", { class: "row tight", style: "margin-top:16px" }, [
+          iconButton("配置密钥", "edit", () => {
+            modal(
+              item.display_name + " 配置",
+              (item.fields || []).map((field) => ({
+                key: field.key,
+                label: field.label,
+                value: saved[field.key] !== undefined ? saved[field.key] : "",
+                hint: field.hint,
+              })),
+              async (values) => {
+                const body = { platforms: {} };
+                body.platforms[item.platform] = values;
+                await api("/chatops/config", { method: "PUT", body: body });
+                toast(item.display_name + " 配置已保存", "ok");
+                pageChatops();
+              },
+              "保存",
+              { lead: "密钥显示为 ****** 时表示保持原值不变；" + item.setup_hint }
+            );
+          }, "sm primary"),
+        ]),
+      ]);
+    });
+
+    // ---- 试指令 ----
+    const tryInput = el("input", { class: "input", placeholder: "例如：搜索 沙丘 / 订阅 苍兰诀 第2季 / 状态" });
+    const tryOut = el("pre", { class: "logs", style: "min-height:120px", text: "在上方输入指令后点「执行」，这里会显示机器人的真实回复。" });
+    const tryCard = el("div", { class: "card" }, [
+      el("div", { class: "card-head" }, [
+        el("h3", {}, [icon("play", "sm"), el("span", { text: "指令试跑（不经过平台）" })]),
+      ]),
+      el("div", { class: "row" }, [
+        tryInput,
+        iconButton("执行", "play", async () => {
+          const text = tryInput.value.trim();
+          if (!text) {
+            toast("请输入指令", "err");
+            return;
+          }
+          tryOut.textContent = "执行中…";
+          try {
+            const result = await api("/chatops/test", { method: "POST", body: { text: text } });
+            tryOut.textContent = result.reply || "（无回复）";
+          } catch (error) {
+            tryOut.textContent = "出错：" + error.message;
+          }
+        }, "primary"),
+        iconButton("只解析", "info", async () => {
+          const text = tryInput.value.trim();
+          if (!text) return;
+          try {
+            const result = await api("/chatops/parse", { method: "POST", body: { text: text } });
+            tryOut.textContent = JSON.stringify(result.data, null, 2);
+          } catch (error) {
+            tryOut.textContent = "无法识别：" + error.message;
+          }
+        }, "ghost"),
+      ]),
+      tryOut,
+    ]);
+
+    // ---- 指令表 ----
+    const commandCard = el("div", { class: "card flush" }, [
+      el("div", { class: "card-head" }, [
+        el("h3", {}, [icon("logs", "sm"), el("span", { text: "支持的指令" })]),
+      ]),
+      table(
+        [
+          { title: "指令", render: (row) => el("span", { class: "mono", text: row.name }) },
+          {
+            title: "可用说法（别名）",
+            render: (row) =>
+              el("div", { class: "chips" }, row.aliases.map((alias) => el("span", { class: "chip", text: alias }))),
+          },
+        ],
+        commands.commands || [],
+        "无"
+      ),
+    ]);
+
+    // ---- 审计 ----
+    const auditCard = el("div", { class: "card flush" }, [
+      el("div", { class: "card-head" }, [
+        el("h3", {}, [icon("logs", "sm"), el("span", { text: "指令审计（" + (audit.items || []).length + "）" })]),
+        iconButton("刷新", "refresh", () => pageChatops(), "sm ghost"),
+      ]),
+      table(
+        [
+          { title: "渠道", render: (row) => el("span", { class: "tag", text: row.source }) },
+          { title: "用户", render: (row) => row.actor || row.actor_id || "-" },
+          { title: "指令", render: (row) => el("span", { class: "mono", text: row.action || "-" }) },
+          { title: "原文", render: (row) => el("div", { class: "truncate tiny", title: row.command, text: row.command || "-" }) },
+          {
+            title: "结果",
+            render: (row) =>
+              el("span", { class: "tag dot " + (row.success ? "ok" : "err"), text: row.success ? "成功" : "失败" }),
+          },
+          { title: "时间", render: (row) => fmtTime(row.created_at) },
+        ],
+        audit.items || [],
+        "还没有指令记录"
+      ),
+    ]);
+
+    shell(
+      el("div", { class: "grid" }, [
+        globalCard,
+        el("div", { class: "grid cols-3" }, platformCards),
+        tryCard,
+        el("div", { class: "grid cols-2" }, [commandCard, auditCard]),
+      ]),
+      "机器人",
+      "在飞书/钉钉/Telegram 里发指令即可搜索、下载、订阅",
+      [iconButton("刷新", "refresh", () => pageChatops())]
+    );
+  }
+
+  // ---------------- 设置 ----------------
+  async function pageSettings() {
+    shell(loading(), "设置", "生效配置总览与账号安全");
+    const [data, info, me] = await Promise.all([
+      api("/system/settings"),
+      api("/system/info"),
+      api("/auth/me").catch(() => null),
+    ]);
+
+    const groups = (data.groups || []).map((group) =>
+      el("div", { class: "card flush" }, [
+        el("div", { class: "card-head" }, [
+          el("h3", {}, [icon("settings", "sm"), el("span", { text: group.title })]),
+        ]),
+        table(
+          [
+            { title: "配置项", render: (row) => el("span", { class: "mono", text: row.env }) },
+            {
+              title: "当前值",
+              render: (row) =>
+                el("span", {
+                  class: "mono" + (row.secret ? " dim" : ""),
+                  text: typeof row.value === "boolean" ? (row.value ? "开启" : "关闭") : String(row.value === "" ? "（空）" : row.value),
+                }),
+            },
+          ],
+          group.items,
+          "无"
+        ),
+      ])
+    );
+
+    const accountCard = el("div", { class: "card" }, [
+      el("div", { class: "card-head" }, [
+        el("h3", {}, [icon("logout", "sm"), el("span", { text: "账号" })]),
+        me && me.is_superuser ? el("span", { class: "tag brand", text: "管理员" }) : null,
+      ]),
+      el("div", { class: "kv" }, [
+        el("div", { class: "kv-item" }, [
+          el("div", { class: "kv-label", text: "用户名" }),
+          el("div", { text: (me && me.username) || store.username }),
+        ]),
+        el("div", { class: "kv-item" }, [
+          el("div", { class: "kv-label", text: "上次登录" }),
+          el("div", { class: "tiny", text: fmtTime(me && me.last_login_at) }),
+        ]),
+        el("div", { class: "kv-item" }, [
+          el("div", { class: "kv-label", text: "版本" }),
+          el("div", { class: "mono", text: "v" + info.version }),
+        ]),
+        el("div", { class: "kv-item" }, [
+          el("div", { class: "kv-label", text: "调度器" }),
+          el("div", { text: info.scheduler_running ? "运行中" : "已停止" }),
+        ]),
+      ]),
+      el("div", { class: "row tight", style: "margin-top:16px" }, [
+        iconButton("修改密码", "edit", () => {
+          modal(
+            "修改密码",
+            [
+              { key: "old_password", label: "原密码", type: "password" },
+              { key: "new_password", label: "新密码", type: "password", hint: "至少 6 位" },
+            ],
+            async (values) => {
+              await api(
+                "/auth/password?old_password=" +
+                  encodeURIComponent(values.old_password) +
+                  "&new_password=" +
+                  encodeURIComponent(values.new_password),
+                { method: "POST" }
+              );
+              toast("密码已更新，请重新登录", "ok");
+              setTimeout(() => logout(true), 800);
+            },
+            "更新"
+          );
+        }, "sm primary"),
+        iconButton("测试通知渠道", "info", async () => {
+          try {
+            const result = await api("/system/notify/test", { method: "POST" });
+            toast(result.message, result.success ? "ok" : "err");
+          } catch (error) {
+            toast(error.message, "err");
+          }
+        }, "sm"),
+      ]),
+    ]);
+
+    const noteCard = el("div", { class: "card" }, [
+      el("div", { class: "card-head" }, [
+        el("h3", {}, [icon("info", "sm"), el("span", { text: "如何修改配置" })]),
+      ]),
+      el("div", { class: "muted", text: data.note }),
+      el("div", { class: "divider" }),
+      el("div", { class: "kv" }, [
+        el("div", { class: "kv-item" }, [
+          el("div", { class: "kv-label", text: "配置文件" }),
+          el("div", { class: "mono tiny", text: data.config_file }),
+        ]),
+        el("div", { class: "kv-item" }, [
+          el("div", { class: "kv-label", text: "文件状态" }),
+          el("div", {
+            text: data.config_file_exists ? "已存在（优先级低于环境变量）" : "不存在（全部走默认值/.env）",
+          }),
+        ]),
+      ]),
+    ]);
+
+    shell(
+      el("div", { class: "grid" }, [
+        el("div", { class: "grid cols-2" }, [accountCard, noteCard]),
+        ...groups,
+      ]),
+      "设置",
+      "共 " + (data.groups || []).length + " 组配置 · 敏感项已脱敏",
+      [iconButton("刷新", "refresh", () => pageSettings())]
+    );
+  }
+
   // ---------------- 路由 ----------------
   const ROUTES = {
     dashboard: pageDashboard,
@@ -2926,6 +3619,9 @@
     sites: pageSites,
     plugins: pagePlugins,
     logs: pageLogs,
+    storage: pageStorage,
+    chatops: pageChatops,
+    settings: pageSettings,
   };
 
   function go(page) {

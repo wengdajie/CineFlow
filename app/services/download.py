@@ -1,7 +1,10 @@
 """下载服务：把候选资源投递到下载器，并跟踪进度。
 
-网盘类资源不进入 BT 下载器：若配置了 aria2 且拿到直链则交给 aria2，
-否则登记为待人工/插件处理的任务（保留分享链接与提取码）。
+网盘类资源不进入 BT 下载器：
+
+- 若已配置**网盘存储**（AList / 夸克），则**自动转存**进自己的网盘；
+- 否则登记为 ``pending`` 任务（保留分享链接与提取码），
+  可稍后在「网盘管理」页一键转存，或交给 ``pan_transfer`` 插件投递外部服务。
 """
 
 from __future__ import annotations
@@ -69,6 +72,7 @@ async def add_download(
     downloader = None
     status = TaskStatus.PENDING.value
     error: str | None = None
+    pan_saved: dict[str, Any] | None = None
 
     if kind in (ResourceKind.TORRENT.value, ResourceKind.MAGNET.value):
         downloader = site_service.default_downloader(downloader_name)
@@ -97,9 +101,16 @@ async def add_download(
         else:
             error = "直链需要 aria2 下载器"
     else:
-        # 网盘分享：登记任务，由网盘插件或用户转存
+        # 网盘分享：优先自动转存进自己的网盘，失败/未配置则留待人工或插件处理
         status = TaskStatus.PENDING.value
         error = None
+        pan_result = await _try_auto_save_pan(link, resource)
+        if pan_result is not None:
+            if pan_result.get("success"):
+                status = TaskStatus.TRANSFERRED.value
+                pan_saved = pan_result
+            else:
+                error = str(pan_result.get("message") or "")[:500] or None
 
     with session_scope() as session:
         task = DownloadTask(
@@ -124,6 +135,14 @@ async def add_download(
                 "resolution": meta.get("resolution"),
                 "quality": meta.get("quality"),
                 "pan_type": (resource.get("extra") or {}).get("pan_type"),
+                **(
+                    {
+                        "pan_storage": pan_saved.get("storage"),
+                        "saved_path": pan_saved.get("saved_path"),
+                    }
+                    if pan_saved
+                    else {}
+                ),
             },
         )
         session.add(task)
@@ -135,10 +154,19 @@ async def add_download(
         "已登记下载任务 #%s [%s] %s", task_id, status, truncate(title, 80)
     )
 
-    if notify and status in (TaskStatus.DOWNLOADING.value, TaskStatus.PENDING.value):
+    if notify and status in (
+        TaskStatus.DOWNLOADING.value,
+        TaskStatus.PENDING.value,
+        TaskStatus.TRANSFERRED.value,
+    ):
         body = f"{format_size(resource.get('size'))} · {resource.get('site')}"
         if kind == ResourceKind.PAN.value:
-            body += "\n网盘资源，请在任务列表中转存"
+            if pan_saved:
+                body += f"\n已自动转存到 {pan_saved.get('storage')}"
+                if pan_saved.get("saved_path"):
+                    body += f"：{pan_saved['saved_path']}"
+            else:
+                body += "\n网盘资源，请在「网盘管理」页转存"
         await notify_service.send(
             f"开始下载：{truncate(title, 60)}",
             body,
@@ -147,6 +175,30 @@ async def add_download(
             payload={"task_id": task_id, "kind": kind},
         )
     return task
+
+
+async def _try_auto_save_pan(
+    link: str, resource: dict[str, Any]
+) -> dict[str, Any] | None:
+    """网盘资源自动转存。
+
+    返回 ``None`` 表示**没有配置网盘存储**（保持原有 pending 行为）；
+    返回 dict 表示尝试过转存，``success`` 指示结果。
+    转存失败不影响任务登记，只把原因写进 ``error`` 供界面显示。
+    """
+    from app.services import pan_storage as pan_service
+
+    if not bool(settings.PAN_AUTO_SAVE):
+        return None
+    try:
+        if not pan_service.storages():
+            return None
+        return await pan_service.save_share(
+            link, password=resource.get("password") or None
+        )
+    except Exception as exc:  # pragma: no cover - 转存异常不应打断下载登记
+        logger.warning("网盘自动转存异常: %s", exc)
+        return {"success": False, "message": f"自动转存异常: {exc}"}
 
 
 async def sync_tasks() -> dict[str, int]:

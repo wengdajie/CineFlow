@@ -21,9 +21,12 @@ PAGES = [
     ("schedules", "定时任务"),
     ("downloads", "下载任务"),
     ("library", "媒体库"),
+    ("storage", "网盘管理"),
     ("sites", "站点管理"),
+    ("chatops", "机器人"),
     ("plugins", "插件"),
     ("logs", "运行日志"),
+    ("settings", "设置"),
 ]
 
 errors = []
@@ -71,7 +74,7 @@ def main():
         nav_count = page.locator("aside .nav-item").count()
         group_count = page.locator("aside .nav-label").count()
         print(f"   登录成功，侧边导航项 {nav_count} 个（分组 {group_count} 个）")
-        # 11 个功能页 + 1 个退出按钮
+        # 功能页数 + 1 个退出按钮
         if nav_count != len(PAGES) + 1:
             errors.append(
                 f"[nav] 导航项 {nav_count} 个，期望 {len(PAGES) + 1} 个"
@@ -309,7 +312,7 @@ def main():
         page.wait_for_timeout(1500)
         body = page.inner_text("body")
         print(f"   定时任务页含「定时任务」：{'定时任务' in body}")
-        for name in ("订阅巡检", "追新雷达", "下载状态同步", "媒体库全量扫描"):
+        for name in ("订阅巡检", "追新雷达", "下载状态同步", "媒体库全量扫描", "网盘待转存"):
             print(f"   任务「{name}」显示：{name in body}")
         page.screenshot(path=str(SHOTS / "22-schedules.png"), full_page=True)
 
@@ -339,6 +342,108 @@ def main():
             page.wait_for_timeout(2500)
             print(f"   立即执行后页面文本长度：{len(page.inner_text('body'))}")
             page.screenshot(path=str(SHOTS / "24-schedule-run.png"), full_page=True)
+
+        print("\n" + "=" * 68)
+        print("6g) 交互测试：网盘管理页（容量卡 / 转存弹窗）")
+        print("=" * 68)
+        page.goto(f"{BASE}/#storage", wait_until="networkidle")
+        page.wait_for_timeout(1600)
+        body = page.inner_text("body")
+        print(f"   网盘页含「网盘管理」：{'网盘管理' in body}")
+        print(f"   含待转存队列：{'待转存队列' in body}")
+        print(f"   含转存记录：{'转存记录' in body}")
+        print(f"   容量卡片 {page.locator('.pan-card').count()} 个")
+        page.screenshot(path=str(SHOTS / "25-storage.png"), full_page=True)
+
+        save_btn = page.get_by_text("转存分享链接", exact=False).first
+        if save_btn.count():
+            save_btn.click()
+            page.wait_for_timeout(700)
+            modal = page.locator(".modal")
+            print(f"   转存弹窗渲染：{modal.count() > 0}")
+            if modal.count():
+                modal_text = page.inner_text(".modal")
+                print(f"   弹窗含分享链接字段：{'分享链接' in modal_text}")
+                print(f"   弹窗含目标网盘选择：{'目标网盘' in modal_text}")
+                page.screenshot(path=str(SHOTS / "26-storage-modal.png"))
+            close = page.get_by_text("取消", exact=True).first
+            if close.count():
+                close.click()
+                page.wait_for_timeout(400)
+        else:
+            errors.append("[storage] 未找到「转存分享链接」按钮")
+
+        print("\n" + "=" * 68)
+        print("6h) 交互测试：机器人页（平台配置 / 指令试跑）")
+        print("=" * 68)
+        page.goto(f"{BASE}/#chatops", wait_until="networkidle")
+        page.wait_for_timeout(1600)
+        body = page.inner_text("body")
+        for name in ("飞书", "钉钉", "Telegram"):
+            print(f"   平台「{name}」卡片显示：{name in body}")
+        print(f"   回调地址框 {page.locator('.webhook-box').count()} 个")
+        print(f"   含指令审计：{'指令审计' in body}")
+        page.screenshot(path=str(SHOTS / "27-chatops.png"), full_page=True)
+
+        try_input = page.locator("#app input.input").first
+        if try_input.count():
+            try_input.fill("状态")
+            run = page.get_by_text("执行", exact=True).first
+            if run.count():
+                run.click()
+                page.wait_for_timeout(2500)
+                reply = page.inner_text("pre.logs") if page.locator("pre.logs").count() else ""
+                print(f"   试跑「状态」回复长度：{len(reply)}")
+                print(f"   回复含任务统计：{'累计已完成' in reply}")
+                if "累计已完成" not in reply:
+                    errors.append("[chatops] 状态指令回复内容不符合预期")
+                if not reply or "执行中" in reply:
+                    errors.append("[chatops] 指令试跑没有返回回复")
+                page.screenshot(path=str(SHOTS / "28-chatops-test.png"), full_page=True)
+            parse = page.get_by_text("只解析", exact=True).first
+            if parse.count():
+                try_input.fill("搜索 沙丘 第二季")
+                parse.click()
+                page.wait_for_timeout(1200)
+                parsed = page.inner_text("pre.logs") if page.locator("pre.logs").count() else ""
+                print(f"   解析结果含 season：{'season' in parsed}")
+        else:
+            errors.append("[chatops] 未找到指令试跑输入框")
+
+        cfg_btn = page.get_by_text("配置密钥", exact=True).first
+        if cfg_btn.count():
+            cfg_btn.click()
+            page.wait_for_timeout(700)
+            fields = page.locator(".modal .field").count()
+            print(f"   平台配置弹窗字段数：{fields}")
+            page.screenshot(path=str(SHOTS / "29-chatops-config.png"))
+            close = page.get_by_text("取消", exact=True).first
+            if close.count():
+                close.click()
+                page.wait_for_timeout(400)
+
+        print("\n" + "=" * 68)
+        print("6i) 交互测试：设置页（配置分组 / 脱敏）")
+        print("=" * 68)
+        page.goto(f"{BASE}/#settings", wait_until="networkidle")
+        page.wait_for_timeout(1500)
+        body = page.inner_text("body")
+        print(f"   设置页含「设置」：{'设置' in body}")
+        for name in ("网盘管理", "ChatOps 机器人", "调度"):
+            print(f"   配置分组「{name}」显示：{name in body}")
+        print(f"   含 CF_ 环境变量名：{'CF_PORT' in body}")
+        print(f"   敏感项已脱敏：{'已设置' in body or 'SECRET_KEY' in body}")
+        page.screenshot(path=str(SHOTS / "30-settings.png"), full_page=True)
+
+        pwd = page.get_by_text("修改密码", exact=True).first
+        if pwd.count():
+            pwd.click()
+            page.wait_for_timeout(600)
+            print(f"   改密弹窗渲染：{page.locator('.modal').count() > 0}")
+            close = page.get_by_text("取消", exact=True).first
+            if close.count():
+                close.click()
+                page.wait_for_timeout(300)
 
         print("\n" + "=" * 68)
         print("7) 响应式检查（移动端 430x900）")

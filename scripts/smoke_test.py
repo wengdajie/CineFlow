@@ -13,9 +13,9 @@ API = BASE + "/api/v1"
 results = []
 
 
-def call(method, path, *, body=None, form=None, token=None, expect=(200, 201)):
+def call(method, path, *, body=None, form=None, token=None, expect=(200, 201), extra_headers=None):
     url = path if path.startswith("http") else API + path
-    data, headers = None, {}
+    data, headers = None, dict(extra_headers or {})
     if form is not None:
         data = urllib.parse.urlencode(form).encode()
         headers["Content-Type"] = "application/x-www-form-urlencoded"
@@ -338,6 +338,129 @@ rdata = reset.get("data") or {}
 print(f"       重置后：minutes={rdata.get('minutes')} customized={rdata.get('customized')}")
 call("POST", "/schedules/library/reset", token=token)
 call("POST", "/schedules/radar/run", token=token, expect=(200, 400))
+
+print("\n" + "=" * 70)
+print("9c) 网盘管理：总览 / 浏览 / 待转存 / 记录 / 转存")
+print("=" * 70)
+pan = call("GET", "/pan", token=token)
+pan_items = items_of(pan)
+print(f"       已启用网盘 {len(pan_items)} 个")
+for item in pan_items:
+    quota = item.get("quota") or {}
+    print(
+        f"         {item.get('name')[:16]:18} {item.get('provider'):10} "
+        f"已用 {quota.get('percent')}% 可转存={item.get('supports_save')}"
+    )
+
+pending = call("GET", "/pan/pending?limit=10", token=token)
+print(f"       待转存队列 {len(items_of(pending))} 条")
+records = call("GET", "/pan/records?limit=10", token=token)
+print(f"       转存记录 {len(items_of(records))} 条")
+
+# 有启用的网盘就顺带验证目录浏览、建目录、直链、删除
+if pan_items:
+    pan_site = pan_items[0]["site_id"]
+    files = call("GET", f"/pan/files?site_id={pan_site}&path=/", token=token)
+    print(
+        f"       浏览根目录：{files.get('total')} 个条目 parent={files.get('parent')}"
+    )
+    # 查询串里的中文必须先 percent-encode，否则 urllib 会按 ASCII 编码报错
+    probe_dir = urllib.parse.quote("/冒烟测试目录")
+    probe_file = urllib.parse.quote("/不存在.mkv")
+    call("POST", "/pan/mkdir", token=token,
+         body={"site_id": pan_site, "path": "/冒烟测试目录"}, expect=(200, 400))
+    call("DELETE", f"/pan/files?site_id={pan_site}&path={probe_dir}",
+         token=token, expect=(200, 400))
+    call("GET", f"/pan/download-url?site_id={pan_site}&path={probe_file}",
+         token=token, expect=(200, 400))
+    call("POST", f"/pan/{pan_site}/test", token=token)
+else:
+    print("       （未启用网盘，跳过目录类端点；下面仍验证降级提示）")
+
+# 不存在的网盘要 404 而不是 500
+call("GET", "/pan/files?site_id=999999", token=token, expect=(404,))
+# 没有可用网盘或链接非法时要 400 并给出明确原因
+call("POST", "/pan/save", token=token,
+     body={"share_url": "https://pan.quark.cn/s/smoketest"}, expect=(200, 400))
+transfer = call("POST", "/pan/transfer?limit=5", token=token)
+print(f"       批量转存：待处理 {transfer.get('pending')} 成功 {transfer.get('saved')}")
+# 未授权拦截
+call("GET", "/pan", expect=(401,))
+call("POST", "/pan/save", body={"share_url": "x"}, expect=(401,))
+
+print("\n" + "=" * 70)
+print("9d) ChatOps 机器人：平台 / 配置 / 指令 / 审计 / Webhook 验签")
+print("=" * 70)
+platforms = call("GET", "/chatops/platforms", token=token)
+for item in items_of(platforms):
+    print(
+        f"         {item.get('display_name'):10} {item.get('webhook_path'):40} "
+        f"字段 {len(item.get('fields') or [])} 已配置={item.get('configured')}"
+    )
+config = call("GET", "/chatops/config", token=token)
+cdata = config.get("data") or {}
+print(
+    f"       全局：enabled={cdata.get('enabled')} auto_download={cdata.get('auto_download')} "
+    f"result_limit={cdata.get('result_limit')}"
+)
+commands = call("GET", "/chatops/commands", token=token)
+print(f"       支持指令 {[item['name'] for item in commands.get('commands') or []]}")
+
+# 指令解析（不执行）
+for text in ("搜索 庆余年 第二季", "下载 2", "订阅 凡人修仙传 第2季", "状态", "热榜"):
+    parsed = call("POST", "/chatops/parse", token=token, body={"text": text})
+    data = parsed.get("data") or {}
+    print(
+        f"         「{text}」-> {data.get('name')} arg={data.get('argument')!r} "
+        f"index={data.get('index')} season={data.get('season')}"
+    )
+call("POST", "/chatops/parse", token=token, body={"text": "@bot"}, expect=(400, 422))
+
+# 指令真实执行
+for text in ("状态", "订阅列表", "帮助", "热榜", "转存"):
+    tested = call("POST", "/chatops/test", token=token, body={"text": text})
+    reply = str(tested.get("reply") or "").splitlines()
+    print(f"         执行「{text}」-> {reply[0][:56] if reply else '(空)'}")
+
+audit = call("GET", "/chatops/audit?limit=10", token=token)
+print(f"       审计日志 {len(items_of(audit))} 条（刚才的指令应已留痕）")
+
+# 配置读写与脱敏
+call("PUT", "/chatops/config", token=token,
+     body={"platforms": {"telegram": {"secret_token": "smoke-secret", "token": "smoke-bot"}}})
+masked = (call("GET", "/chatops/config", token=token).get("data") or {}).get("platforms") or {}
+tg = masked.get("telegram") or {}
+print(f"       密钥脱敏：secret_token={tg.get('secret_token')} （应为 ******）")
+if tg.get("secret_token") != "******":
+    results.append((False, "MASK", "/chatops/config", 200))
+    print("FAIL   0 MASK   密钥未脱敏")
+
+# Webhook：验签失败必须 401；未知平台 404
+call("POST", "/chatops/webhook/telegram", body={"message": {"text": "状态"}}, expect=(401,))
+call("POST", "/chatops/webhook/wechat", body={}, expect=(404,))
+
+# 带正确 secret token 的 Webhook 必须放行并真正执行指令（不需要登录）
+webhook_ok = call(
+    "POST",
+    "/chatops/webhook/telegram",
+    body={
+        "message": {
+            "text": "状态",
+            "chat": {"id": 1},
+            "from": {"id": 2},
+            "message_id": int(__import__("time").time()),
+        }
+    },
+    extra_headers={"X-Telegram-Bot-Api-Secret-Token": "smoke-secret"},
+)
+print(f"       带验签的 Webhook：handled={webhook_ok.get('handled')}")
+if not webhook_ok.get("handled"):
+    results.append((False, "WEBHOOK", "/chatops/webhook/telegram", 200))
+    print("FAIL   0 WEBHOOK 验签通过但指令未执行")
+
+# 复原配置，避免污染本地环境
+call("PUT", "/chatops/config", token=token, body={"platforms": {}})
+call("GET", "/chatops/config", expect=(401,))
 
 print("\n" + "=" * 70)
 print("10) 清理测试数据")

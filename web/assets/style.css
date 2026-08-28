@@ -822,6 +822,53 @@ tbody tr:last-child td { border-bottom: 0; }
 .plugin-top { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--sp-3); }
 .plugin-title { display: flex; align-items: center; gap: var(--sp-2); font-weight: 600; }
 
+/* ---------------- 网盘管理 ---------------- */
+.pan-card { display: flex; flex-direction: column; gap: var(--sp-3); position: relative; }
+.pan-card.on { border-color: var(--accent-line); box-shadow: 0 0 0 1px var(--accent-line) inset; }
+.pan-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--sp-3); }
+.pan-name { font-weight: 600; }
+.row.between { justify-content: space-between; }
+
+.crumbs { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; font-size: var(--fs-sm); }
+.crumb {
+  background: none;
+  border: 0;
+  color: var(--text-2);
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: var(--r-xs);
+  font: inherit;
+}
+.crumb:hover { background: var(--surface-3); color: var(--text); }
+.crumb.on { color: var(--text); font-weight: 600; }
+.crumb-sep { color: var(--text-3); }
+
+.link-btn {
+  background: none;
+  border: 0;
+  color: var(--accent-text);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  font: inherit;
+  text-align: left;
+}
+.link-btn:hover { text-decoration: underline; }
+
+/* ---------------- ChatOps ---------------- */
+.webhook-box {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  background: var(--surface-3);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-sm);
+  padding: 7px 10px;
+}
+.webhook-box .mono { flex: 1; min-width: 0; font-size: var(--fs-xs); }
+
 /* ---------------- 响应式 ---------------- */
 @media (max-width: 980px) {
   .layout { flex-direction: column; }

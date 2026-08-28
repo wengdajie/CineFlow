@@ -265,6 +265,43 @@ class ScheduleUpdate(BaseModel):
     cron: str | None = Field(default=None, description="5 段 cron，如 0 4 * * *")
 
 
+# ---------------- 网盘管理 ----------------
+class PanSaveRequest(BaseModel):
+    """转存一个分享链接。"""
+
+    share_url: str = Field(description="网盘分享链接")
+    site_id: int | None = Field(default=None, description="指定网盘站点，留空自动选择")
+    password: str | None = Field(default=None, description="提取码")
+    target_dir: str | None = Field(default=None, description="落地目录，留空用网盘默认")
+    task_id: int | None = Field(default=None, description="关联的下载任务，转存成功后推进其状态")
+
+
+class PanMkdirRequest(BaseModel):
+    """创建网盘目录。"""
+
+    site_id: int
+    path: str = Field(min_length=1)
+
+
+# ---------------- ChatOps 机器人 ----------------
+class ChatOpsConfigUpdate(BaseModel):
+    """更新 ChatOps 配置。所有字段可选，只更新提交过的键。"""
+
+    enabled: bool | None = Field(default=None, description="总开关")
+    auto_download: bool | None = Field(default=None, description="搜索后是否自动下第一个")
+    result_limit: int | None = Field(default=None, ge=1, le=20, description="搜索结果回复条数")
+    allow_users: list[str] | None = Field(default=None, description="白名单用户 ID，空表示不限制")
+    platforms: dict[str, Any] | None = Field(default=None, description="各平台密钥配置")
+
+
+class ChatOpsTestRequest(BaseModel):
+    """在界面上模拟一条聊天指令。"""
+
+    text: str = Field(min_length=1, description="指令文本，如 搜索 沙丘")
+    platform: str | None = Field(default=None, description="模拟的平台，默认 console")
+    user_id: str | None = Field(default=None, description="模拟的用户 ID")
+
+
 # ---------------- 插件 ----------------
 class PluginConfigUpdate(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)

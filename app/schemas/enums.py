@@ -55,7 +55,8 @@ class TransferMode(StrEnum):
 
 class ProviderKind(StrEnum):
     INDEXER = "indexer"
-    PAN = "pan"
+    PAN = "pan"                 # 盘搜（找分享链接）
+    PANSTORAGE = "panstorage"   # 网盘存储（转存/浏览自己的网盘）
     DOWNLOADER = "downloader"
     MEDIASERVER = "mediaserver"
     NOTIFIER = "notifier"
@@ -78,5 +79,8 @@ class EventType(StrEnum):
     TRANSFER_COMPLETED = "transfer.completed"
     TRANSFER_FAILED = "transfer.failed"
     LIBRARY_REFRESHED = "library.refreshed"
+    PAN_SAVED = "pan.saved"
+    PAN_SAVE_FAILED = "pan.save_failed"
+    CHAT_COMMAND = "chat.command"
     PLUGIN_ACTION = "plugin.action"
     SYSTEM_ERROR = "system.error"

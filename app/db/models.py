@@ -279,6 +279,49 @@ class SystemSetting(IdMixin, TimestampMixin, Base):
     value: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
 
+class AuditLog(IdMixin, TimestampMixin, Base):
+    """操作审计：谁在什么时候通过哪个渠道下了什么指令。
+
+    主要用于 ChatOps——机器人可以被多人使用，必须能追溯是谁下的指令。
+    Web 界面的写操作也可以复用这张表。
+    """
+
+    __tablename__ = "audit_logs"
+
+    #: 来源，如 ``chatops.feishu`` / ``web`` / ``api``
+    source: Mapped[str] = mapped_column(String(64), index=True)
+    #: 操作者展示名
+    actor: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    #: 操作者在该平台的唯一 ID
+    actor_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    #: 规范化后的动作，如 ``search`` / ``download``
+    action: Mapped[str] = mapped_column(String(64), index=True)
+    #: 动作目标（关键词、序号、链接等）
+    target: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    #: 原始指令文本
+    command: Mapped[str | None] = mapped_column(Text, nullable=True)
+    success: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    #: 回复/执行结果摘要
+    result: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class PanSaveRecord(IdMixin, TimestampMixin, Base):
+    """网盘转存记录，便于回溯「哪个分享转存到了哪里」。"""
+
+    __tablename__ = "pan_saves"
+
+    task_id: Mapped[int | None] = mapped_column(
+        ForeignKey("download_tasks.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    storage: Mapped[str] = mapped_column(String(128), index=True)
+    share_url: Mapped[str] = mapped_column(Text)
+    password: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    saved_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    file_count: Mapped[int] = mapped_column(Integer, default=0)
+    success: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 class SearchHistory(IdMixin, TimestampMixin, Base):
     """搜索历史。"""
 
