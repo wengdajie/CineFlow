@@ -2,18 +2,19 @@
 
 不触网，但使用真实磁盘 IO 与真实 SQLite。
 """
-import asyncio
 import shutil
 import sys
 from pathlib import Path
 
+# 允许从项目根目录外直接运行本脚本
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.stdout.reconfigure(encoding="utf-8")
 
-from app.core.config import settings
-from app.core.organizer import transfer_directory
-from app.core.meta import parse
-from app.services import library as library_service
-from app.utils.strings import format_size
+from app.core.config import settings  # noqa: E402
+from app.core.meta import parse  # noqa: E402
+from app.core.organizer import transfer_directory  # noqa: E402
+from app.services import library as library_service  # noqa: E402
+from app.utils.strings import format_size  # noqa: E402
 
 DEMO = Path("data/_e2e_demo")
 if DEMO.exists():

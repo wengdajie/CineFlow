@@ -1,6 +1,5 @@
 """用真实浏览器逐页点检 CineFlow 前端，捕获任何 JS 报错。"""
 import sys
-import time
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
