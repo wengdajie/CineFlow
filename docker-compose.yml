@@ -1,7 +1,7 @@
 # ============================================================
 # CineFlow —— docker compose 部署示例
 #   docker compose up -d
-#   浏览器打开 http://<NAS_IP>:8611  默认账号 admin / cineflow
+#   浏览器打开 http://<NAS_IP>:6060  默认账号 admin / cineflow
 # ------------------------------------------------------------
 # 重要：downloads 目录必须与下载器（qBittorrent 等）容器中的路径一致，
 #       否则 CineFlow 找不到下载完成的文件，也无法使用硬链接。
@@ -14,7 +14,7 @@ services:
     container_name: cineflow
     restart: unless-stopped
     ports:
-      - "8611:8611"
+      - "6060:6060"
     environment:
       # 群晖/威联通请改为实际用户，避免文件权限问题（id 命令可查）
       PUID: 1000
@@ -36,7 +36,7 @@ services:
       - /volume1/media:/library       # ← 改成你的媒体库目录
       - ./strm:/strm
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8611/api/health"]
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:6060/api/health"]
       interval: 30s
       timeout: 5s
       retries: 3

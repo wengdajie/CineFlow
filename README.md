@@ -230,7 +230,7 @@ docker compose up -d
 docker compose logs -f cineflow
 ```
 
-打开 `http://<NAS_IP>:8611`，使用 **`admin` / `cineflow`** 登录（**请立即改密**）。
+打开 `http://<NAS_IP>:6060`，使用 **`admin` / `cineflow`** 登录（**请立即改密**）。
 
 > ⚠️ **两个关键前提，务必满足**
 > 1. **下载目录路径必须一致**：CineFlow 容器里的 `/downloads` 与 qBittorrent 容器里的 `/downloads`
@@ -258,7 +258,7 @@ cp .env.example .env
 python -m app.main
 ```
 
-访问 `http://127.0.0.1:8611`。
+访问 `http://127.0.0.1:6060`（默认端口 `6060`，可用 `CF_PORT` 覆盖）。
 
 ---
 
@@ -276,7 +276,7 @@ YAML 里的二级 key 会拍平成 `CF_<父>_<子>`，例如 `tmdb.api_key` → 
 
 | 配置 | 环境变量 | 默认 | 说明 |
 |---|---|---|---|
-| 端口 | `CF_PORT` | `8611` | |
+| 端口 | `CF_PORT` | `6060` | |
 | 管理员 | `CF_SUPERUSER` / `CF_SUPERUSER_PASSWORD` | `admin` / `cineflow` | 仅首次启动生效 |
 | 密钥 | `CF_SECRET_KEY` | — | **务必改成随机串** |
 | 转移模式 | `CF_TRANSFER_MODE` | `link` | `link`/`copy`/`move`/`softlink`/`strm` |
@@ -624,8 +624,8 @@ class MyPlugin(PluginBase):
 
 ## 📡 API
 
-- Swagger UI：`http://127.0.0.1:8611/docs`
-- ReDoc：`http://127.0.0.1:8611/redoc`
+- Swagger UI：`http://127.0.0.1:6060/docs`
+- ReDoc：`http://127.0.0.1:6060/redoc`
 - 健康检查：`GET /api/health`（无需认证，供 Docker / 反代使用）
 
 外部脚本推荐用固定令牌，免登录：
@@ -633,14 +633,14 @@ class MyPlugin(PluginBase):
 ```bash
 # 配置 CF_API_TOKEN=your-token 后
 curl -H "X-API-Token: your-token" \
-     "http://127.0.0.1:8611/api/v1/search?keyword=庆余年&media_type=tv&season=2"
+     "http://127.0.0.1:6060/api/v1/search?keyword=庆余年&media_type=tv&season=2"
 
 curl -X POST -H "X-API-Token: your-token" -H "Content-Type: application/json" \
      -d '{"title":"凡人修仙传","media_type":"tv","season":2}' \
-     http://127.0.0.1:8611/api/v1/subscribes
+     http://127.0.0.1:6060/api/v1/subscribes
 
 curl -X POST -H "X-API-Token: your-token" \
-     http://127.0.0.1:8611/api/v1/subscribes/run-all
+     http://127.0.0.1:6060/api/v1/subscribes/run-all
 ```
 
 主要端点分组（共 53 个）：

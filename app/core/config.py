@@ -54,7 +54,7 @@ class Settings(BaseSettings):
 
     # ---------- 基础 ----------
     HOST: str = "0.0.0.0"
-    PORT: int = 8611
+    PORT: int = 6060
     DEBUG: bool = False
     TIMEZONE: str = "Asia/Shanghai"
     LOG_LEVEL: str = "INFO"
@@ -139,7 +139,7 @@ class Settings(BaseSettings):
 
     # ---------- STRM ----------
     STRM_ENABLED: bool = False
-    STRM_BASE_URL: str = "http://127.0.0.1:8611"
+    STRM_BASE_URL: str = "http://127.0.0.1:6060"
 
     @field_validator(
         "ALLOW_ORIGINS",

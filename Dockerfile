@@ -49,10 +49,10 @@ RUN chmod +x /entrypoint.sh \
 
 VOLUME ["/app/data", "/app/config", "/app/plugins", "/downloads", "/library", "/strm"]
 
-EXPOSE 8611
+EXPOSE 6060
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD curl -fsS http://127.0.0.1:8611/api/health || exit 1
+    CMD curl -fsS http://127.0.0.1:6060/api/health || exit 1
 
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["python", "-m", "app.main"]

@@ -1,4 +1,5 @@
 """用真实浏览器逐页点检 CineFlow 前端，捕获任何 JS 报错。"""
+import os
 import sys
 from pathlib import Path
 
@@ -6,7 +7,8 @@ from playwright.sync_api import sync_playwright
 
 sys.stdout.reconfigure(encoding="utf-8")
 
-BASE = "http://127.0.0.1:8611"
+#: 服务地址，可用 CF_BASE_URL / CF_PORT 覆盖
+BASE = os.environ.get("CF_BASE_URL") or f"http://127.0.0.1:{os.environ.get('CF_PORT', '6060')}"
 SHOTS = Path("data/ui_shots")
 SHOTS.mkdir(parents=True, exist_ok=True)
 

@@ -1,5 +1,6 @@
 """校验 README 中的事实性声明与代码实际情况是否一致。"""
 import json
+import os
 import pathlib
 import re
 import sys
@@ -7,6 +8,9 @@ import urllib.request
 
 sys.path.insert(0, ".")
 sys.stdout.reconfigure(encoding="utf-8")
+
+#: 服务地址，可用 CF_BASE_URL / CF_PORT 覆盖
+BASE = os.environ.get("CF_BASE_URL") or f"http://127.0.0.1:{os.environ.get('CF_PORT', '6060')}"
 
 README = pathlib.Path("README.md").read_text(encoding="utf-8")
 SCRIPTS_README = pathlib.Path("scripts/README.md").read_text(encoding="utf-8")
@@ -66,7 +70,7 @@ check("雷达任务已注册", "cineflow.radar" in job_ids)
 
 # ---- API 端点 ----
 try:
-    with urllib.request.urlopen("http://127.0.0.1:8611/openapi.json", timeout=15) as r:
+    with urllib.request.urlopen(f"{BASE}/openapi.json", timeout=15) as r:
         spec = json.loads(r.read().decode())
     total = sum(
         1

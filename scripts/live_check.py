@@ -3,13 +3,16 @@
 只做「dry_run」不真正下载，不需要下载器。
 """
 import json
+import os
 import sys
 import urllib.error
 import urllib.parse
 import urllib.request
 
 sys.stdout.reconfigure(encoding="utf-8")
-API = "http://127.0.0.1:8611/api/v1"
+#: 服务地址，可用 CF_BASE_URL / CF_PORT 覆盖
+BASE = os.environ.get("CF_BASE_URL") or f"http://127.0.0.1:{os.environ.get('CF_PORT', '6060')}"
+API = BASE + "/api/v1"
 
 
 def call(method, path, *, body=None, form=None, token=None):

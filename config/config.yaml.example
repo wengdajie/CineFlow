@@ -8,7 +8,7 @@
 
 # ---------- 基础 ----------
 host: "0.0.0.0"
-port: 8611
+port: 6060
 debug: false
 timezone: "Asia/Shanghai"
 log_level: "INFO"          # DEBUG / INFO / WARNING / ERROR
@@ -81,4 +81,4 @@ http_proxy: ""                     # 例如 http://127.0.0.1:7890
 
 # ---------- STRM（网盘直连播放，可选）----------
 strm_enabled: false
-strm_base_url: "http://127.0.0.1:8611"
+strm_base_url: "http://127.0.0.1:6060"
