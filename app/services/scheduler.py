@@ -1,8 +1,13 @@
-"""定时调度：订阅巡检、下载状态同步、媒体库扫描、插件任务。"""
+"""定时调度：订阅巡检、追新雷达、下载状态同步、媒体库扫描、插件任务。
+
+内置任务的**触发规则可在界面上修改并持久化**：静态配置（``.env`` /
+``config.yaml``）提供默认值，用户改动写入 ``settings`` 表，重启后依然生效。
+"""
 
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
@@ -12,6 +17,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from app.core.config import settings
 from app.core.logger import get_logger
+from app.services import settings_store
 
 logger = get_logger(__name__)
 
@@ -20,6 +26,10 @@ JOB_DOWNLOAD = "cineflow.download"
 JOB_LIBRARY = "cineflow.library"
 JOB_RADAR = "cineflow.radar"
 _PLUGIN_PREFIX = "plugin."
+
+#: 间隔型任务允许的分钟范围
+MIN_INTERVAL_MINUTES = 1
+MAX_INTERVAL_MINUTES = 7 * 24 * 60
 
 
 def _parse_cron(expression: str) -> CronTrigger:
@@ -38,6 +48,124 @@ def _parse_cron(expression: str) -> CronTrigger:
     )
 
 
+@dataclass(frozen=True)
+class JobSpec:
+    """内置任务的描述与默认触发规则。"""
+
+    key: str
+    job_id: str
+    name: str
+    description: str
+    trigger: str = "interval"
+    minutes: int = 30
+    cron: str = "0 4 * * *"
+    enabled: bool = True
+
+    def defaults(self) -> dict[str, Any]:
+        return {
+            "enabled": self.enabled,
+            "trigger": self.trigger,
+            "minutes": self.minutes,
+            "cron": self.cron,
+        }
+
+
+def builtin_specs() -> list[JobSpec]:
+    """内置任务规格（默认值来自静态配置，随配置变化）。"""
+    return [
+        JobSpec(
+            key="subscribe",
+            job_id=JOB_SUBSCRIBE,
+            name="订阅巡检（自动追新）",
+            description="逐个活跃订阅去各站点搜索缺失集，适合补全历史缺集",
+            trigger="interval",
+            minutes=settings.SUBSCRIBE_INTERVAL_MINUTES,
+            enabled=True,
+        ),
+        JobSpec(
+            key="radar",
+            job_id=JOB_RADAR,
+            name="追新雷达（站点最新流巡检）",
+            description="只拉一次各站点最新发布流再匹配全部订阅，发现新集延迟最低",
+            trigger="interval",
+            minutes=settings.RADAR_INTERVAL_MINUTES or 15,
+            enabled=bool(settings.RADAR_ENABLED and settings.RADAR_INTERVAL_MINUTES > 0),
+        ),
+        JobSpec(
+            key="download",
+            job_id=JOB_DOWNLOAD,
+            name="下载状态同步与自动整理",
+            description="同步下载器进度，完成后自动硬链入库并刷新媒体服务器",
+            trigger="interval",
+            minutes=settings.DOWNLOAD_CHECK_INTERVAL_MINUTES,
+            enabled=True,
+        ),
+        JobSpec(
+            key="library",
+            job_id=JOB_LIBRARY,
+            name="媒体库全量扫描",
+            description="重建入库文件索引，用于缺集计算与去重",
+            trigger="cron",
+            cron=settings.LIBRARY_SCAN_CRON,
+            enabled=True,
+        ),
+    ]
+
+
+def _spec_map() -> dict[str, JobSpec]:
+    return {spec.key: spec for spec in builtin_specs()}
+
+
+def _spec(key: str) -> JobSpec:
+    """按 key 取任务规格，未知 key 抛 ``ValueError``。"""
+    spec = _spec_map().get(key)
+    if spec is None:
+        raise ValueError(f"未知任务: {key}")
+    return spec
+
+
+def _overrides() -> dict[str, Any]:
+    raw = settings_store.get_setting(settings_store.KEY_SCHEDULES, {}) or {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def effective_schedule(key: str) -> dict[str, Any]:
+    """某个内置任务当前生效的触发规则（默认值 + 用户覆盖）。"""
+    config = _spec(key).defaults()
+    override = _overrides().get(key) or {}
+    if isinstance(override, dict):
+        for field in ("enabled", "trigger", "minutes", "cron"):
+            if field in override and override[field] is not None:
+                config[field] = override[field]
+    config["customized"] = bool(override)
+    return config
+
+
+def normalize_schedule(key: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """校验并规范化一份触发规则，非法时抛 ``ValueError``。"""
+    current = effective_schedule(key)
+    trigger = str(payload.get("trigger") or current["trigger"]).lower()
+    if trigger not in ("interval", "cron"):
+        raise ValueError("trigger 只能是 interval 或 cron")
+
+    enabled = payload.get("enabled")
+    enabled = current["enabled"] if enabled is None else bool(enabled)
+
+    minutes = payload.get("minutes")
+    minutes = current["minutes"] if minutes in (None, "") else int(minutes)
+    cron = str(payload.get("cron") or current["cron"]).strip()
+
+    if trigger == "interval":
+        if not MIN_INTERVAL_MINUTES <= minutes <= MAX_INTERVAL_MINUTES:
+            raise ValueError(
+                f"间隔需在 {MIN_INTERVAL_MINUTES}~{MAX_INTERVAL_MINUTES} 分钟之间"
+            )
+    else:
+        _parse_cron(cron)  # 非法表达式直接抛错
+
+    return {"enabled": enabled, "trigger": trigger, "minutes": minutes, "cron": cron}
+
+
 class SchedulerService:
     """调度服务封装。"""
 
@@ -54,6 +182,55 @@ class SchedulerService:
     def running(self) -> bool:
         return bool(self._scheduler and self._scheduler.running)
 
+    # ---------------- 内置任务 ----------------
+    def _job_target(self, key: str) -> tuple[Callable[..., Any], dict[str, Any]]:
+        """任务函数与调用参数。"""
+        from app.services import download as download_service
+        from app.services import library as library_service
+        from app.services import radar as radar_service
+        from app.services import subscribe as subscribe_service
+
+        targets: dict[str, tuple[Callable[..., Any], dict[str, Any]]] = {
+            "subscribe": (subscribe_service.run_all, {}),
+            "radar": (
+                radar_service.run,
+                {"limit_per_site": settings.RADAR_LIMIT_PER_SITE},
+            ),
+            "download": (download_service.sync_tasks, {}),
+            "library": (library_service.scan_library, {}),
+        }
+        if key not in targets:
+            raise ValueError(f"未知任务: {key}")
+        return targets[key]
+
+    def _register(self, spec: JobSpec) -> bool:
+        """按当前生效规则注册（或移除）一个内置任务。"""
+        config = effective_schedule(spec.key)
+        if not config["enabled"]:
+            self.remove_job(spec.job_id)
+            logger.info("任务 %s 已按配置禁用", spec.job_id)
+            return False
+
+        if config["trigger"] == "cron":
+            trigger: Any = _parse_cron(config["cron"])
+        else:
+            trigger = IntervalTrigger(
+                minutes=int(config["minutes"]), timezone=settings.TIMEZONE
+            )
+
+        func, kwargs = self._job_target(spec.key)
+        self.scheduler.add_job(
+            func,
+            trigger=trigger,
+            id=spec.job_id,
+            name=spec.name,
+            kwargs=kwargs or None,
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+        return True
+
     def start(self) -> None:
         """启动调度器并注册内置任务。"""
         if not settings.SCHEDULER_ENABLED:
@@ -62,60 +239,20 @@ class SchedulerService:
         if self.running:
             return
 
-        from app.services import download as download_service
-        from app.services import library as library_service
-        from app.services import radar as radar_service
-        from app.services import subscribe as subscribe_service
-
-        self.scheduler.add_job(
-            subscribe_service.run_all,
-            trigger=IntervalTrigger(minutes=settings.SUBSCRIBE_INTERVAL_MINUTES),
-            id=JOB_SUBSCRIBE,
-            name="订阅巡检（自动追新）",
-            replace_existing=True,
-            max_instances=1,
-            coalesce=True,
-        )
-        if settings.RADAR_ENABLED and settings.RADAR_INTERVAL_MINUTES > 0:
-            self.scheduler.add_job(
-                radar_service.run,
-                trigger=IntervalTrigger(minutes=settings.RADAR_INTERVAL_MINUTES),
-                id=JOB_RADAR,
-                name="追新雷达（站点最新流巡检）",
-                replace_existing=True,
-                max_instances=1,
-                coalesce=True,
-            )
-        self.scheduler.add_job(
-            download_service.sync_tasks,
-            trigger=IntervalTrigger(minutes=settings.DOWNLOAD_CHECK_INTERVAL_MINUTES),
-            id=JOB_DOWNLOAD,
-            name="下载状态同步与自动整理",
-            replace_existing=True,
-            max_instances=1,
-            coalesce=True,
-        )
-        try:
-            self.scheduler.add_job(
-                library_service.scan_library,
-                trigger=_parse_cron(settings.LIBRARY_SCAN_CRON),
-                id=JOB_LIBRARY,
-                name="媒体库全量扫描",
-                replace_existing=True,
-                max_instances=1,
-            )
-        except ValueError as exc:
-            logger.warning("媒体库扫描任务未注册: %s", exc)
+        registered = []
+        for spec in builtin_specs():
+            try:
+                if self._register(spec):
+                    registered.append(spec.key)
+            except ValueError as exc:
+                logger.warning("任务 %s 未注册: %s", spec.job_id, exc)
 
         self.scheduler.start()
-        logger.info(
-            "调度器已启动：订阅每 %d 分钟、雷达每 %s 分钟、下载每 %d 分钟",
-            settings.SUBSCRIBE_INTERVAL_MINUTES,
-            settings.RADAR_INTERVAL_MINUTES
-            if settings.RADAR_ENABLED and settings.RADAR_INTERVAL_MINUTES > 0
-            else "关闭",
-            settings.DOWNLOAD_CHECK_INTERVAL_MINUTES,
-        )
+        logger.info("调度器已启动，内置任务 %d 个：%s", len(registered), registered)
+        for item in self.list_jobs():
+            logger.info(
+                "  · %-22s %s -> %s", item["id"], item["trigger"], item["next_run_time"]
+            )
 
     def shutdown(self) -> None:
         """停止调度器。"""
@@ -123,6 +260,70 @@ class SchedulerService:
             self._scheduler.shutdown(wait=False)
             logger.info("调度器已停止")
 
+    def remove_job(self, job_id: str) -> bool:
+        """移除指定任务（不存在时静默返回）。"""
+        if not self._scheduler:
+            return False
+        job = self._scheduler.get_job(job_id)
+        if not job:
+            return False
+        job.remove()
+        return True
+
+    def update_schedule(self, key: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """修改某个内置任务的触发规则：校验 → 持久化 → 立即改期。"""
+        config = normalize_schedule(key, payload)
+        overrides = _overrides()
+        overrides[key] = config
+        settings_store.set_setting(settings_store.KEY_SCHEDULES, overrides)
+
+        spec = _spec(key)
+        active = False
+        if self.running:
+            active = self._register(spec)
+        logger.info(
+            "任务 %s 规则已更新：%s（已生效=%s）", spec.job_id, config, active
+        )
+        return {**self.describe_schedule(key), "applied": active}
+
+    def reset_schedule(self, key: str) -> dict[str, Any]:
+        """清除用户覆盖，回到静态配置的默认值。"""
+        overrides = _overrides()
+        if key in overrides:
+            overrides.pop(key)
+            settings_store.set_setting(settings_store.KEY_SCHEDULES, overrides)
+        spec = _spec(key)
+        if self.running:
+            self._register(spec)
+        return self.describe_schedule(key)
+
+    def describe_schedule(self, key: str) -> dict[str, Any]:
+        """单个内置任务的完整描述（含运行时状态）。"""
+        spec = _spec(key)
+        config = effective_schedule(key)
+        job = self._scheduler.get_job(spec.job_id) if self._scheduler else None
+        next_run = getattr(job, "next_run_time", None) if job else None
+        return {
+            "key": spec.key,
+            "id": spec.job_id,
+            "name": spec.name,
+            "description": spec.description,
+            "enabled": bool(config["enabled"]),
+            "trigger": config["trigger"],
+            "minutes": int(config["minutes"]),
+            "cron": config["cron"],
+            "customized": bool(config["customized"]),
+            "default": spec.defaults(),
+            "scheduled": job is not None,
+            "trigger_text": str(job.trigger) if job else "",
+            "next_run_time": next_run.isoformat() if next_run else None,
+        }
+
+    def describe_schedules(self) -> list[dict[str, Any]]:
+        """全部内置任务的可编辑描述。"""
+        return [self.describe_schedule(spec.key) for spec in builtin_specs()]
+
+    # ---------------- 插件任务 ----------------
     def add_plugin_job(self, plugin_id: str, job: dict[str, Any]) -> None:
         """注册插件定时任务。"""
         func: Callable[..., Any] | None = job.get("func")
@@ -168,13 +369,16 @@ class SchedulerService:
         """列出所有任务。"""
         if not self._scheduler:
             return []
+        specs = {spec.job_id: spec.key for spec in builtin_specs()}
         jobs = []
         for job in self._scheduler.get_jobs():
             next_run = getattr(job, "next_run_time", None)
             jobs.append(
                 {
                     "id": job.id,
+                    "key": specs.get(job.id),
                     "name": job.name,
+                    "builtin": job.id in specs,
                     "trigger": str(job.trigger),
                     "next_run_time": next_run.isoformat() if next_run else None,
                 }

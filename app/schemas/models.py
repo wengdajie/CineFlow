@@ -255,6 +255,16 @@ class TransferResultOut(BaseModel):
     meta: dict[str, Any] | None = None
 
 
+# ---------------- 定时任务 ----------------
+class ScheduleUpdate(BaseModel):
+    """内置定时任务的触发规则（仅提交需要修改的字段）。"""
+
+    enabled: bool | None = None
+    trigger: str | None = Field(default=None, description="interval 或 cron")
+    minutes: int | None = Field(default=None, ge=1, le=7 * 24 * 60)
+    cron: str | None = Field(default=None, description="5 段 cron，如 0 4 * * *")
+
+
 # ---------------- 插件 ----------------
 class PluginConfigUpdate(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)

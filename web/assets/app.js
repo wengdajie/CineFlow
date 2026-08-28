@@ -1,13 +1,103 @@
-/* CineFlow 控制台：零依赖单页应用 */
+/* ============================================================
+   CineFlow 控制台 · 零依赖单页应用
+   ------------------------------------------------------------
+   视觉方案参考的开源项目（仅借鉴 token 与交互范式，未引入代码）：
+     · Radix Colors    12 级语义色阶 → 双主题变量
+     · Open Props      尺度/阴影/圆角 token 化
+     · shadcn/ui       surface/muted/accent/ring 命名与卡片布局
+     · Feather Icons   线性图标风格（此处为等价手写路径）
+   无任何 CDN 依赖，NAS 离线环境完全可用。
+   ============================================================ */
 (function () {
   "use strict";
 
   const API = "/api/v1";
+  const THEME_KEY = "cf_theme";
+
   const store = {
     token: localStorage.getItem("cf_token") || "",
     username: localStorage.getItem("cf_user") || "",
     page: location.hash.replace("#", "") || "dashboard",
+    theme: localStorage.getItem(THEME_KEY) || "auto",
   };
+
+  // ---------------- 主题（暗色 / 浅色 / 跟随系统） ----------------
+  const media = window.matchMedia ? window.matchMedia("(prefers-color-scheme: light)") : null;
+
+  const resolveTheme = (mode) => {
+    if (mode === "light" || mode === "dark") return mode;
+    return media && media.matches ? "light" : "dark";
+  };
+
+  function applyTheme() {
+    const resolved = resolveTheme(store.theme);
+    document.documentElement.setAttribute("data-theme", resolved);
+    document.documentElement.setAttribute("data-theme-mode", store.theme);
+    return resolved;
+  }
+
+  function setTheme(mode) {
+    store.theme = mode;
+    localStorage.setItem(THEME_KEY, mode);
+    applyTheme();
+    document.querySelectorAll("[data-theme-btn]").forEach((node) => {
+      node.classList.toggle("on", node.getAttribute("data-theme-btn") === mode);
+    });
+  }
+
+  applyTheme();
+  if (media && media.addEventListener) {
+    media.addEventListener("change", () => {
+      if (store.theme === "auto") applyTheme();
+    });
+  }
+
+  // ---------------- 图标（内联 SVG，线性风格） ----------------
+  const ICONS = {
+    dashboard: '<rect x="3" y="3" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="2"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="2"/>',
+    search: '<circle cx="11" cy="11" r="7"/><path d="M16.5 16.5 21 21"/>',
+    star: '<path d="M12 3.5l2.6 5.4 5.9.8-4.3 4.2 1 5.9-5.2-2.8-5.2 2.8 1-5.9L3.5 9.7l5.9-.8z"/>',
+    download: '<path d="M12 3v12"/><path d="M7.5 10.5 12 15l4.5-4.5"/><path d="M4 20h16"/>',
+    library: '<path d="M4 5h16v14H4z"/><path d="M4 10h16"/><path d="M9 10v9"/>',
+    radar: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r="1"/><path d="M12 12 19 6"/>',
+    settings: '<circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.2 5.2l2.1 2.1M16.7 16.7l2.1 2.1M18.8 5.2l-2.1 2.1M7.3 16.7 5.2 18.8"/>',
+    plugin: '<path d="M9 3v4"/><path d="M15 3v4"/><path d="M5 7h14v6a6 6 0 0 1-6 6h-2a6 6 0 0 1-6-6z"/>',
+    logs: '<path d="M5 4h9l5 5v11H5z"/><path d="M14 4v5h5"/><path d="M8 13h8M8 17h6"/>',
+    flame: '<path d="M12 3s5 4.2 5 8.6A5 5 0 0 1 7 12c0-1.6.7-2.9 1.6-4 .3 1.3 1.1 2.1 2 2.3-.5-2.6.6-5.6 1.4-7.3z"/>',
+    clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3.2 2"/>',
+    sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M18.7 5.3l-1.6 1.6M6.9 17.1 5.3 18.7"/>',
+    moon: '<path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"/>',
+    auto: '<circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v17a8.5 8.5 0 0 0 0-17z" fill="currentColor" stroke="none"/>',
+    logout: '<path d="M14 5H6v14h8"/><path d="M13 12h8"/><path d="m18 8.5 3.5 3.5L18 15.5"/>',
+    refresh: '<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4.5V11h-6"/>',
+    play: '<path d="M8 5.5 18.5 12 8 18.5z"/>',
+    pause: '<path d="M9.5 5v14M14.5 5v14"/>',
+    trash: '<path d="M4.5 7h15"/><path d="M9.5 7V4.5h5V7"/><path d="M6.5 7 7.5 20h9L17.5 7"/>',
+    edit: '<path d="M5 19h3.5L19 8.5 15.5 5 5 15.5z"/><path d="M14 6.5 17.5 10"/>',
+    plus: '<path d="M12 5v14M5 12h14"/>',
+    check: '<path d="M4.5 12.5 9.5 17.5 19.5 6.5"/>',
+    close: '<path d="M6 6l12 12M18 6 6 18"/>',
+    alert: '<path d="M12 4 2.8 20h18.4z"/><path d="M12 10v4.5M12 17.2v.4"/>',
+    info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5M12 7.7v.4"/>',
+    box: '<path d="M3.5 8 12 3.5 20.5 8v8L12 20.5 3.5 16z"/><path d="M3.5 8 12 12.5 20.5 8M12 12.5v8"/>',
+    cloud: '<path d="M7 18a4 4 0 0 1-.4-8A5.5 5.5 0 0 1 17 10.5a3.8 3.8 0 0 1 .3 7.5z"/>',
+    link: '<path d="M9.5 14.5 14.5 9.5"/><path d="M11 6.5 13 4.5a4 4 0 0 1 5.7 5.7l-2 2"/><path d="M13 17.5 11 19.5a4 4 0 0 1-5.7-5.7l2-2"/>',
+    film: '<rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M7.5 4.5v15M16.5 4.5v15M3 12h18"/>',
+    tv: '<rect x="3" y="6" width="18" height="12" rx="2"/><path d="M8.5 21h7M12 6V3"/>',
+    server: '<rect x="3.5" y="4" width="17" height="6" rx="2"/><rect x="3.5" y="14" width="17" height="6" rx="2"/><path d="M7 7h.4M7 17h.4"/>',
+    chart: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
+    inbox: '<path d="M3.5 12.5 6 5h12l2.5 7.5v6.5h-17z"/><path d="M3.5 12.5H9l1 2.5h4l1-2.5h5.5"/>',
+    dot: '<circle cx="12" cy="12" r="4"/>',
+  };
+
+  function icon(name, cls) {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("class", "icon" + (cls ? " " + cls : ""));
+    svg.setAttribute("aria-hidden", "true");
+    svg.innerHTML = ICONS[name] || ICONS.dot;
+    return svg;
+  }
 
   // ---------------- 基础工具 ----------------
   const el = (tag, attrs, children) => {
@@ -47,10 +137,25 @@
     value ? String(value).replace("T", " ").slice(0, 19) : "-";
   const pad2 = (value) => String(value).padStart(2, "0");
 
+  const fmtRelative = (value) => {
+    if (!value) return "-";
+    const then = new Date(String(value).replace(" ", "T"));
+    const diff = (then.getTime() - Date.now()) / 1000;
+    const abs = Math.abs(diff);
+    const unit =
+      abs < 60 ? [abs, "秒"] : abs < 3600 ? [abs / 60, "分钟"] : abs < 86400 ? [abs / 3600, "小时"] : [abs / 86400, "天"];
+    const text = Math.round(unit[0]) + " " + unit[1];
+    return diff >= 0 ? text + "后" : text + "前";
+  };
+
   const toast = (message, kind) => {
-    const node = el("div", { class: "toast " + (kind || ""), text: message });
+    const name = kind === "ok" ? "check" : kind === "err" ? "alert" : "info";
+    const node = el("div", { class: "toast " + (kind || "") }, [
+      icon(name, "sm"),
+      el("div", { text: message }),
+    ]);
     document.getElementById("toasts").appendChild(node);
-    setTimeout(() => node.remove(), 3600);
+    setTimeout(() => node.remove(), 3800);
   };
 
   async function api(path, options) {
@@ -100,13 +205,16 @@
 
   const statusTag = (status) => {
     const pair = STATUS_MAP[status] || [status, ""];
-    return el("span", { class: "tag " + pair[1], text: pair[0] });
+    return el("span", { class: "tag dot " + pair[1], text: pair[0] });
   };
 
   const typeLabel = (value) =>
     ({ movie: "电影", tv: "剧集", anime: "动漫", unknown: "未知" }[value] ||
       value ||
       "-");
+
+  const typeIcon = (value) =>
+    ({ movie: "film", tv: "tv", anime: "star" }[value] || "box");
 
   const kindLabel = (value) =>
     ({ torrent: "种子", magnet: "磁力", pan: "网盘", direct: "直链" }[value] ||
@@ -118,11 +226,16 @@
       : "-";
 
   const loading = () =>
-    el("div", { class: "empty" }, [el("span", { class: "spinner" }), " 加载中…"]);
+    el("div", { class: "card" }, [
+      el("div", { class: "skeleton" }, [el("i"), el("i"), el("i"), el("i")]),
+    ]);
+
+  const emptyBox = (text, iconName) =>
+    el("div", { class: "empty" }, [icon(iconName || "inbox"), el("div", { text: text })]);
 
   function table(columns, rows, emptyText) {
     if (!rows || !rows.length) {
-      return el("div", { class: "empty", text: emptyText || "暂无数据" });
+      return emptyBox(emptyText || "暂无数据");
     }
     const head = el("thead", {}, [
       el("tr", {}, columns.map((col) => el("th", { text: col.title }))),
@@ -130,16 +243,16 @@
     const body = el(
       "tbody",
       {},
-      rows.map((row) =>
+      rows.map((row, index) =>
         el(
           "tr",
           {},
           columns.map((col) => {
-            const value = col.render ? col.render(row) : row[col.key];
+            const value = col.render ? col.render(row, index) : row[col.key];
             const isNode = value && typeof value === "object";
             return el(
               "td",
-              {},
+              col.class ? { class: col.class } : {},
               isNode ? value : String(value === undefined || value === null ? "-" : value)
             );
           })
@@ -149,8 +262,44 @@
     return el("div", { class: "table-wrap" }, [el("table", {}, [head, body])]);
   }
 
+  function segment(items, current, onPick) {
+    const box = el("div", { class: "segment" });
+    items.forEach((item) => {
+      const button = el("button", {
+        class: item.value === current ? "on" : "",
+        text: item.label,
+        onclick: () => onPick(item.value),
+      });
+      box.appendChild(button);
+    });
+    return box;
+  }
+
+  function themeToggle() {
+    const modes = [
+      { value: "auto", icon: "auto", title: "跟随系统" },
+      { value: "light", icon: "sun", title: "浅色" },
+      { value: "dark", icon: "moon", title: "暗色" },
+    ];
+    return el(
+      "div",
+      { class: "theme-toggle", role: "group", "aria-label": "主题切换" },
+      modes.map((mode) => {
+        const button = el("button", {
+          class: store.theme === mode.value ? "on" : "",
+          title: mode.title,
+          "aria-label": mode.title,
+          "data-theme-btn": mode.value,
+          onclick: () => setTheme(mode.value),
+        });
+        button.appendChild(icon(mode.icon, "sm"));
+        return button;
+      })
+    );
+  }
+
   // ---------------- 通用弹窗表单 ----------------
-  function modal(title, fields, onSubmit, submitText) {
+  function modal(title, fields, onSubmit, submitText, options) {
     const root = document.getElementById("modal-root");
     const getters = {};
 
@@ -159,11 +308,13 @@
         const input = el("input", { type: "checkbox" });
         input.checked = !!field.value;
         getters[field.key] = () => input.checked;
-        return el(
-          "label",
-          { class: "field", style: "display:flex;gap:8px;align-items:center" },
-          [input, el("span", { text: field.label })]
-        );
+        return el("label", { class: "field-check" }, [
+          input,
+          el("span", {}, [
+            el("div", { text: field.label }),
+            field.hint ? el("div", { class: "dim tiny", text: field.hint }) : null,
+          ]),
+        ]);
       }
 
       let input;
@@ -182,7 +333,7 @@
       } else if (field.type === "textarea") {
         input = el("textarea", {
           class: "input",
-          rows: 3,
+          rows: field.rows || 3,
           placeholder: field.placeholder || "",
         });
         input.value = field.value || "";
@@ -205,13 +356,7 @@
       return el("div", { class: "field" }, [
         el("label", { text: field.label }),
         input,
-        field.hint
-          ? el("div", {
-              class: "muted",
-              style: "font-size:11px;margin-top:4px",
-              text: field.hint,
-            })
-          : null,
+        field.hint ? el("div", { class: "dim tiny", style: "margin-top:4px", text: field.hint }) : null,
       ]);
     });
 
@@ -219,7 +364,10 @@
       root.innerHTML = "";
     };
 
-    const submit = el("button", { class: "btn primary", text: submitText || "确定" });
+    const submit = el("button", { class: "btn primary" }, [
+      icon("check", "sm"),
+      el("span", { text: submitText || "确定" }),
+    ]);
     submit.addEventListener("click", async () => {
       const values = {};
       Object.keys(getters).forEach((key) => {
@@ -236,8 +384,9 @@
     });
 
     const mask = el("div", { class: "modal-mask" }, [
-      el("div", { class: "modal" }, [
+      el("div", { class: "modal" + ((options && options.wide) ? " wide" : "") }, [
         el("h3", { text: title }),
+        (options && options.lead) ? el("div", { class: "muted", style: "margin:-8px 0 16px", text: options.lead }) : null,
         ...rows,
         el("div", { class: "modal-actions" }, [
           el("button", { class: "btn ghost", text: "取消", onclick: close }),
@@ -249,6 +398,29 @@
       if (event.target === mask) close();
     });
     root.appendChild(mask);
+  }
+
+  /** 自定义内容弹窗（非表单场景）。 */
+  function panelModal(title, lead, content, wide) {
+    const root = document.getElementById("modal-root");
+    const close = () => {
+      root.innerHTML = "";
+    };
+    const mask = el("div", { class: "modal-mask" }, [
+      el("div", { class: "modal" + (wide ? " wide" : "") }, [
+        el("h3", { text: title }),
+        lead ? el("div", { class: "muted", style: "margin:-8px 0 16px", text: lead }) : null,
+        content,
+        el("div", { class: "modal-actions" }, [
+          el("button", { class: "btn ghost", text: "关闭", onclick: close }),
+        ]),
+      ]),
+    ]);
+    mask.addEventListener("click", (event) => {
+      if (event.target === mask) close();
+    });
+    root.appendChild(mask);
+    return close;
   }
 
   // ---------------- 登录 ----------------
@@ -299,21 +471,22 @@
 
     document.getElementById("app").replaceChildren(
       el("div", { class: "login-wrap" }, [
+        el("div", { class: "login-theme" }, [themeToggle()]),
         el("div", { class: "login-card" }, [
-          el("h1", {}, [
-            el("span", {
-              class: "brand-dot",
-              style: "display:inline-block;margin-right:8px",
-            }),
-            "CineFlow",
+          el("div", { class: "login-head" }, [
+            el("div", { class: "brand-mark" }, [icon("film", "lg")]),
+            el("div", {}, [
+              el("h1", { text: "CineFlow" }),
+              el("div", { class: "dim tiny", text: "NAS 自动化观影追剧平台" }),
+            ]),
           ]),
-          el("p", { text: "自动化观影追剧平台 · BT 站点与网盘聚合" }),
+          el("p", { class: "lead", text: "聚合 BT 站点与网盘搜索，定时追新自动入库" }),
           el("div", { class: "field" }, [el("label", { text: "用户名" }), user]),
           el("div", { class: "field" }, [el("label", { text: "密码" }), pass]),
           button,
           el("p", {
-            class: "muted",
-            style: "margin-top:16px;font-size:11px",
+            class: "dim tiny",
+            style: "margin-top:16px",
             text: "默认账号 admin / cineflow，登录后请及时修改密码",
           }),
         ]),
@@ -323,41 +496,56 @@
 
   // ---------------- 布局 ----------------
   const PAGES = [
-    { key: "dashboard", label: "仪表盘", icon: "◈" },
-    { key: "search", label: "资源搜索", icon: "⌕" },
-    { key: "subscribes", label: "订阅追新", icon: "★" },
-    { key: "downloads", label: "下载任务", icon: "↓" },
-    { key: "library", label: "媒体库", icon: "▤" },
-    { key: "radar", label: "追新雷达", icon: "◎" },
-    { key: "sites", label: "站点管理", icon: "⚙" },
-    { key: "plugins", label: "插件", icon: "✚" },
-    { key: "logs", label: "运行日志", icon: "❯" },
+    { key: "dashboard", label: "仪表盘", icon: "dashboard", group: "总览" },
+    { key: "search", label: "资源搜索", icon: "search", group: "发现" },
+    { key: "trending", label: "热度排行", icon: "flame", group: "发现" },
+    { key: "subscribes", label: "订阅追新", icon: "star", group: "追剧" },
+    { key: "radar", label: "追新雷达", icon: "radar", group: "追剧" },
+    { key: "schedules", label: "定时任务", icon: "clock", group: "追剧" },
+    { key: "downloads", label: "下载任务", icon: "download", group: "入库" },
+    { key: "library", label: "媒体库", icon: "library", group: "入库" },
+    { key: "sites", label: "站点管理", icon: "settings", group: "系统" },
+    { key: "plugins", label: "插件", icon: "plugin", group: "系统" },
+    { key: "logs", label: "运行日志", icon: "logs", group: "系统" },
   ];
 
   function shell(content, title, subtitle, actions) {
-    const nav = PAGES.map((page) =>
-      el(
-        "button",
-        {
-          class: "nav-item " + (store.page === page.key ? "active" : ""),
-          onclick: () => go(page.key),
-        },
-        [el("span", { text: page.icon }), el("span", { text: page.label })]
-      )
-    );
+    const nav = [];
+    let lastGroup = null;
+    PAGES.forEach((page) => {
+      if (page.group !== lastGroup) {
+        lastGroup = page.group;
+        nav.push(el("div", { class: "nav-label", text: page.group }));
+      }
+      nav.push(
+        el(
+          "button",
+          {
+            class: "nav-item " + (store.page === page.key ? "active" : ""),
+            onclick: () => go(page.key),
+          },
+          [icon(page.icon), el("span", { text: page.label })]
+        )
+      );
+    });
 
     document.getElementById("app").replaceChildren(
       el("div", { class: "layout" }, [
         el("aside", { class: "sidebar" }, [
           el("div", { class: "brand" }, [
-            el("span", { class: "brand-dot" }),
-            "CineFlow",
+            el("div", { class: "brand-mark" }, [icon("film")]),
+            el("div", { class: "brand-text" }, [
+              el("span", { class: "brand-name", text: "CineFlow" }),
+              el("span", { class: "brand-sub", text: "自动追剧中枢" }),
+            ]),
           ]),
           ...nav,
           el("div", { class: "nav-spacer" }),
-          el("button", { class: "nav-item", onclick: () => logout() }, [
-            el("span", { text: "⏻" }),
-            el("span", { text: "退出（" + store.username + "）" }),
+          el("div", { class: "nav-foot" }, [
+            el("button", { class: "nav-item", onclick: () => logout() }, [
+              icon("logout"),
+              el("span", { text: "退出（" + store.username + "）" }),
+            ]),
           ]),
         ]),
         el("main", { class: "main" }, [
@@ -366,7 +554,7 @@
               el("h2", { text: title }),
               subtitle ? el("div", { class: "sub", text: subtitle }) : null,
             ]),
-            el("div", { class: "row tight" }, actions || []),
+            el("div", { class: "topbar-actions" }, [...(actions || []), themeToggle()]),
           ]),
           content,
         ]),
@@ -374,82 +562,174 @@
     );
   }
 
+  /** 带图标的按钮。 */
+  function iconButton(label, iconName, onclick, cls) {
+    const button = el("button", { class: "btn " + (cls || "") }, [
+      icon(iconName, "sm"),
+      el("span", { text: label }),
+    ]);
+    button.addEventListener("click", onclick);
+    return button;
+  }
+
   // ---------------- 仪表盘 ----------------
-  function statCard(label, value, hint) {
+  function statCard(label, value, hint, iconName) {
     return el("div", { class: "card stat" }, [
+      iconName ? el("div", { class: "stat-icon" }, [icon(iconName, "sm")]) : null,
       el("div", { class: "label", text: label }),
       el("div", { class: "value", text: value }),
       hint ? el("div", { class: "hint", text: hint }) : null,
     ]);
   }
 
+  /** 热度条单元格。 */
+  function heatCell(percent, value) {
+    const width = Math.max(2, Math.min(100, Number(percent) || 0));
+    return el("div", { class: "heat" }, [
+      el("div", { class: "heat-bar" + (width >= 70 ? " hot" : "") }, [
+        el("i", { style: "width:" + width + "%" }),
+      ]),
+      el("span", { class: "heat-value", text: String(value === undefined ? Math.round(width) : value) }),
+    ]);
+  }
+
+  function rankCell(rank) {
+    const cls = rank === 1 ? " top1" : rank === 2 ? " top2" : rank === 3 ? " top3" : "";
+    return el("span", { class: "rank" + cls, text: String(rank) });
+  }
+
   async function pageDashboard() {
     shell(loading(), "仪表盘", "系统概览与最近入库");
-    const [data, info] = await Promise.all([
+    const [data, info, jobs, trending] = await Promise.all([
       api("/system/dashboard"),
       api("/system/info"),
+      api("/schedules"),
+      api("/trending?limit=5&days=14").catch(() => null),
     ]);
 
     const stats = el("div", { class: "grid cols-4" }, [
-      statCard("追新中订阅", data.subscribes.active, "已完成 " + data.subscribes.completed + " 个"),
-      statCard("进行中下载", data.downloads.running, "累计完成 " + data.downloads.finished + " 个"),
-      statCard("媒体库文件", data.library.files, fmtSize(data.library.size)),
+      statCard("追新中订阅", data.subscribes.active, "已完成 " + data.subscribes.completed + " 个", "star"),
+      statCard("进行中下载", data.downloads.running, "累计完成 " + data.downloads.finished + " 个", "download"),
+      statCard("媒体库文件", data.library.files, fmtSize(data.library.size), "library"),
       statCard(
         "剧集 / 电影",
         data.library.series + " / " + data.library.movies,
-        "共 " + data.library.episodes + " 集"
+        "共 " + data.library.episodes + " 集",
+        "film"
       ),
     ]);
 
     const badge = (ok, okText, badText) =>
-      el("span", { class: "tag " + (ok ? "ok" : "warn"), text: ok ? okText : badText });
+      el("span", { class: "tag dot " + (ok ? "ok" : "warn"), text: ok ? okText : badText });
+
+    const kv = (label, node) =>
+      el("div", { class: "kv-item" }, [el("div", { class: "kv-label", text: label }), node]);
 
     const health = el("div", { class: "card" }, [
-      el("h3", { text: "运行状态" }),
-      el("div", { class: "row" }, [
-        el("div", {}, [
-          el("div", { class: "muted", text: "调度器" }),
-          badge(info.scheduler_running, "运行中", "已停止"),
-        ]),
-        el("div", {}, [
-          el("div", { class: "muted", text: "TMDB 刮削" }),
-          badge(info.tmdb_enabled, "已启用", "未配置"),
-        ]),
-        el("div", {}, [
-          el("div", { class: "muted", text: "整理模式" }),
-          el("span", { class: "tag brand", text: info.transfer_mode }),
-        ]),
-        el("div", {}, [
-          el("div", { class: "muted", text: "订阅间隔" }),
-          el("span", { class: "tag", text: info.intervals.subscribe_minutes + " 分钟" }),
-        ]),
+      el("h3", {}, [icon("server", "sm"), el("span", { text: "运行状态" })]),
+      el("div", { class: "kv" }, [
+        kv("调度器", badge(info.scheduler_running, "运行中", "已停止")),
+        kv("TMDB 刮削", badge(info.tmdb_enabled, "已启用", "未配置")),
+        kv("整理模式", el("span", { class: "tag brand", text: info.transfer_mode })),
+        kv("版本", el("span", { class: "tag", text: "v" + info.version })),
       ]),
-      el("div", { class: "muted mono", style: "margin-top:14px;font-size:11px" }, [
+      el("div", { class: "divider" }),
+      el("div", { class: "dim tiny mono" }, [
         "媒体库：" + info.directories.library,
         el("br"),
         "下载目录：" + info.directories.downloads,
       ]),
     ]);
 
-    const recent = el("div", { class: "card" }, [
-      el("h3", { text: "最近入库" }),
+    const jobCard = el("div", { class: "card" }, [
+      el("div", { class: "card-head" }, [
+        el("h3", {}, [icon("clock", "sm"), el("span", { text: "定时任务" })]),
+        iconButton("任务设置", "settings", () => go("schedules"), "sm ghost"),
+      ]),
       table(
         [
-          { title: "标题", render: (row) => row.title },
-          { title: "类型", render: (row) => typeLabel(row.media_type) },
+          {
+            title: "任务",
+            render: (row) =>
+              el("div", {}, [
+                el("div", { text: row.name }),
+                el("div", { class: "cell-sub", text: row.trigger === "cron" ? "cron " + row.cron : "每 " + row.minutes + " 分钟" }),
+              ]),
+          },
+          {
+            title: "状态",
+            render: (row) =>
+              row.enabled
+                ? el("span", { class: "tag dot ok", text: "已启用" })
+                : el("span", { class: "tag dot", text: "已关闭" }),
+          },
+          {
+            title: "下次执行",
+            render: (row) =>
+              el("div", {}, [
+                el("div", { class: "tiny", text: fmtTime(row.next_run_time) }),
+                el("div", { class: "cell-sub", text: fmtRelative(row.next_run_time) }),
+              ]),
+          },
+        ],
+        jobs.items,
+        "调度器未启动"
+      ),
+    ]);
+
+    const recent = el("div", { class: "card" }, [
+      el("h3", {}, [icon("inbox", "sm"), el("span", { text: "最近入库" })]),
+      table(
+        [
+          {
+            title: "标题",
+            render: (row) =>
+              el("div", { class: "row tight center" }, [
+                icon(typeIcon(row.media_type), "sm"),
+                el("span", { text: row.title }),
+              ]),
+          },
           { title: "季集", render: (row) => seasonEpisode(row.season, row.episode) },
           { title: "画质", render: (row) => row.resolution || "-" },
-          { title: "时间", render: (row) => fmtTime(row.created_at) },
+          { title: "时间", render: (row) => el("span", { class: "tiny dim", text: fmtTime(row.created_at) }) },
         ],
         data.recent,
         "还没有入库记录，先添加订阅或搜索下载吧"
       ),
     ]);
 
-    const runAll = el("button", { class: "btn primary", text: "立即巡检订阅" });
+    const hotItems = (trending && trending.data.resources.items) || [];
+    const hotCard = el("div", { class: "card" }, [
+      el("div", { class: "card-head" }, [
+        el("h3", {}, [icon("flame", "sm"), el("span", { text: "热度排行 TOP5" })]),
+        iconButton("完整榜单", "chart", () => go("trending"), "sm ghost"),
+      ]),
+      hotItems.length
+        ? table(
+            [
+              { title: "#", render: (row) => rankCell(row.rank) },
+              {
+                title: "作品",
+                render: (row) =>
+                  el("div", {}, [
+                    el("div", { class: "truncate", title: row.title, text: row.title }),
+                    el("div", { class: "cell-sub", text: typeLabel(row.media_type) + (row.season ? " · 第 " + row.season + " 季" : "") }),
+                  ]),
+              },
+              { title: "热度", render: (row) => heatCell(row.heat_percent, Math.round(row.heat)) },
+            ],
+            hotItems
+          )
+        : emptyBox("暂无热度数据：先在资源搜索里搜几次，或启用站点后跑一次追新雷达", "flame"),
+    ]);
+
+    const runAll = el("button", { class: "btn primary" }, [
+      icon("refresh", "sm"),
+      el("span", { text: "立即巡检订阅" }),
+    ]);
     runAll.addEventListener("click", async () => {
       runAll.disabled = true;
-      runAll.textContent = "巡检中…";
+      runAll.querySelector("span").textContent = "巡检中…";
       try {
         const result = await api("/subscribes/run-all", { method: "POST" });
         toast(
@@ -460,23 +740,65 @@
       } catch (error) {
         toast(error.message, "err");
         runAll.disabled = false;
-        runAll.textContent = "立即巡检订阅";
+        runAll.querySelector("span").textContent = "立即巡检订阅";
       }
     });
 
     shell(
       el("div", { class: "grid" }, [
         stats,
-        el("div", { class: "grid cols-2" }, [health, recent]),
+        el("div", { class: "grid cols-2" }, [health, jobCard]),
+        el("div", { class: "grid cols-2" }, [hotCard, recent]),
       ]),
       "仪表盘",
-      "系统概览与最近入库",
+      "系统概览 · 定时任务 · 热度排行",
       [runAll]
     );
   }
 
   // ---------------- 资源搜索 ----------------
-  const searchState = { items: [], keyword: "" };
+  const searchState = { items: [], keyword: "", sort: "score", kind: "" };
+
+  const SORTERS = {
+    score: (a, b) => (b.score || 0) - (a.score || 0),
+    seeders: (a, b) => (b.seeders || 0) - (a.seeders || 0),
+    size: (a, b) => (b.size || 0) - (a.size || 0),
+    time: (a, b) => String(b.publish_at || "").localeCompare(String(a.publish_at || "")),
+  };
+
+  function downloadButton(row, onDone) {
+    const button = el("button", { class: "btn sm primary" }, [
+      icon("download", "sm"),
+      el("span", { text: "下载" }),
+    ]);
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      button.querySelector("span").textContent = "提交中…";
+      try {
+        await api("/downloads", {
+          method: "POST",
+          body: {
+            title: row.title,
+            link: row.link,
+            kind: row.kind,
+            site: row.site,
+            size: row.size,
+            password: row.password,
+            page_url: row.page_url,
+            meta: row.meta || {},
+          },
+        });
+        button.querySelector("span").textContent = "已添加";
+        toast("已加入下载队列", "ok");
+        if (onDone) onDone();
+      } catch (error) {
+        toast(error.message, "err");
+        button.disabled = false;
+        button.querySelector("span").textContent = "下载";
+      }
+    });
+    return button;
+  }
 
   async function pageSearch() {
     const keyword = el("input", {
@@ -494,83 +816,117 @@
     const season = el("input", { class: "input", type: "number", placeholder: "季" });
     const episode = el("input", { class: "input", type: "number", placeholder: "集" });
     const results = el("div", {});
-
-    const downloadButton = (row) => {
-      const button = el("button", { class: "btn sm primary", text: "下载" });
-      button.addEventListener("click", async () => {
-        button.disabled = true;
-        button.textContent = "提交中…";
-        try {
-          await api("/downloads", {
-            method: "POST",
-            body: {
-              title: row.title,
-              link: row.link,
-              kind: row.kind,
-              site: row.site,
-              size: row.size,
-              password: row.password,
-              page_url: row.page_url,
-              meta: row.meta || {},
-            },
-          });
-          button.textContent = "已添加";
-          toast("已加入下载队列", "ok");
-        } catch (error) {
-          toast(error.message, "err");
-          button.disabled = false;
-          button.textContent = "下载";
-        }
-      });
-      return button;
-    };
+    const hotBox = el("div", {});
 
     const renderResults = () => {
+      const filtered = searchState.kind
+        ? searchState.items.filter((item) =>
+            searchState.kind === "pan"
+              ? item.kind === "pan" || item.kind === "direct"
+              : item.kind === "torrent" || item.kind === "magnet"
+          )
+        : searchState.items.slice();
+      filtered.sort(SORTERS[searchState.sort] || SORTERS.score);
+
+      const counts = { pan: 0, bt: 0 };
+      searchState.items.forEach((item) => {
+        if (item.kind === "pan" || item.kind === "direct") counts.pan += 1;
+        else counts.bt += 1;
+      });
+
       results.replaceChildren(
-        el("div", { class: "card" }, [
-          el("h3", { text: "搜索结果（" + searchState.items.length + "）" }),
+        el("div", { class: "card flush" }, [
+          el("div", { class: "card-head" }, [
+            el("h3", {}, [
+              icon("search", "sm"),
+              el("span", { text: "搜索结果 " + filtered.length + " / " + searchState.items.length }),
+            ]),
+            el("div", { class: "row tight center" }, [
+              segment(
+                [
+                  { value: "", label: "全部 " + searchState.items.length },
+                  { value: "bt", label: "BT " + counts.bt },
+                  { value: "pan", label: "网盘 " + counts.pan },
+                ],
+                searchState.kind,
+                (value) => {
+                  searchState.kind = value;
+                  renderResults();
+                }
+              ),
+              segment(
+                [
+                  { value: "score", label: "综合" },
+                  { value: "seeders", label: "做种" },
+                  { value: "size", label: "体积" },
+                  { value: "time", label: "时间" },
+                ],
+                searchState.sort,
+                (value) => {
+                  searchState.sort = value;
+                  renderResults();
+                }
+              ),
+            ]),
+          ]),
           table(
             [
+              { title: "#", render: (row, index) => rankCell(index + 1) },
               {
                 title: "资源名称",
                 render: (row) =>
-                  el("div", { class: "truncate", title: row.title, text: row.title }),
+                  el("div", {}, [
+                    el("div", { class: "truncate", title: row.title, text: row.title }),
+                    el("div", { class: "cell-sub" }, [
+                      (row.meta && row.meta.quality) || "",
+                      (row.meta && row.meta.video_codec) ? " · " + row.meta.video_codec : "",
+                      (row.meta && row.meta.effect) ? " · " + row.meta.effect : "",
+                      (row.meta && row.meta.episodes && row.meta.episodes.length)
+                        ? " · 第 " + row.meta.episodes.join(",") + " 集"
+                        : "",
+                    ]),
+                  ]),
               },
               { title: "来源", render: (row) => el("span", { class: "tag", text: row.site || "-" }) },
               {
                 title: "类型",
                 render: (row) =>
-                  el("span", {
-                    class: "tag " + (row.kind === "pan" ? "brand" : ""),
-                    text: kindLabel(row.kind),
-                  }),
+                  el("span", { class: "tag " + (row.kind === "pan" ? "brand" : "") }, [
+                    icon(row.kind === "pan" ? "cloud" : "link", "sm"),
+                    el("span", { text: kindLabel(row.kind) }),
+                  ]),
               },
               { title: "画质", render: (row) => (row.meta && row.meta.resolution) || "-" },
-              { title: "大小", render: (row) => fmtSize(row.size) },
-              { title: "做种", render: (row) => row.seeders || "-" },
-              { title: "评分", render: (row) => Math.round(row.score || 0) },
-              { title: "操作", render: downloadButton },
+              { title: "大小", class: "num", render: (row) => fmtSize(row.size) },
+              { title: "做种", class: "num", render: (row) => row.seeders || "-" },
+              {
+                title: "评分",
+                class: "num",
+                render: (row) => el("span", { class: "tag brand", text: String(Math.round(row.score || 0)) }),
+              },
+              { title: "操作", render: (row) => downloadButton(row) },
             ],
-            searchState.items,
+            filtered,
             "没有匹配的资源，试试更换关键词或启用更多站点"
           ),
         ])
       );
     };
 
-    const doSearch = async () => {
-      const value = keyword.value.trim();
-      if (!value) {
+    const doSearch = async (value) => {
+      const text = (value || keyword.value).trim();
+      if (!text) {
         toast("请输入关键词", "err");
         return;
       }
-      searchState.keyword = value;
+      keyword.value = text;
+      searchState.keyword = text;
       results.replaceChildren(loading());
       try {
         const data = await api("/search", {
           method: "POST",
           body: {
-            keyword: value,
+            keyword: text,
             media_type: type.value || null,
             season: season.value ? Number(season.value) : null,
             episode: episode.value ? Number(episode.value) : null,
@@ -578,9 +934,81 @@
         });
         searchState.items = data.items || [];
         renderResults();
+        loadHot();
         toast("找到 " + data.total + " 条资源", data.total ? "ok" : "");
       } catch (error) {
-        results.replaceChildren(el("div", { class: "empty", text: error.message }));
+        results.replaceChildren(el("div", { class: "card" }, [emptyBox(error.message, "alert")]));
+      }
+    };
+
+    /** 热度排行侧栏：搜索页直接可见的榜单，点击即搜。 */
+    const loadHot = async () => {
+      try {
+        const response = await api("/trending?limit=8&days=14");
+        const data = response.data;
+        const hot = data.resources.items;
+        const words = data.keywords.items;
+
+        hotBox.replaceChildren(
+          el("div", { class: "grid cols-2" }, [
+            el("div", { class: "card flush" }, [
+              el("div", { class: "card-head" }, [
+                el("h3", {}, [icon("flame", "sm"), el("span", { text: "资源热度榜" })]),
+                el("span", { class: "tag", text: "近 " + data.resources.window_days + " 天" }),
+              ]),
+              hot.length
+                ? table(
+                    [
+                      { title: "#", render: (row) => rankCell(row.rank) },
+                      {
+                        title: "作品",
+                        render: (row) => {
+                          const link = el("a", {
+                            href: "javascript:void(0)",
+                            class: "truncate",
+                            title: "点击搜索 " + row.title,
+                            text: row.title,
+                            onclick: () => doSearch(row.title),
+                          });
+                          return el("div", {}, [
+                            link,
+                            el("div", { class: "cell-sub", text:
+                              typeLabel(row.media_type) +
+                              (row.season ? " · 第 " + row.season + " 季" : "") +
+                              (row.latest_episode ? " · 更新至 " + row.latest_episode + " 集" : "") +
+                              " · " + row.site_count + " 站 " + row.resource_count + " 条" }),
+                          ]);
+                        },
+                      },
+                      { title: "热度", render: (row) => heatCell(row.heat_percent, Math.round(row.heat)) },
+                    ],
+                    hot
+                  )
+                : emptyBox("搜索过的资源会在这里聚合成热度榜", "flame"),
+            ]),
+            el("div", { class: "card flush" }, [
+              el("div", { class: "card-head" }, [
+                el("h3", {}, [icon("chart", "sm"), el("span", { text: "搜索热词" })]),
+                el("span", { class: "tag", text: "近 " + data.keywords.window_days + " 天" }),
+              ]),
+              words.length
+                ? el(
+                    "div",
+                    { class: "chips", style: "padding:0 22px 22px" },
+                    words.map((item) =>
+                      el("button", {
+                        class: "chip",
+                        text: item.keyword + " · " + item.times,
+                        onclick: () => doSearch(item.keyword),
+                      })
+                    )
+                  )
+                : emptyBox("还没有搜索历史", "search"),
+            ]),
+          ])
+        );
+      } catch (error) {
+        hotBox.replaceChildren();
       }
     };
 
@@ -588,35 +1016,364 @@
       if (event.key === "Enter") doSearch();
     });
     if (searchState.items.length) renderResults();
+    loadHot();
 
     const labeled = (text, node, flex) =>
       el("div", { style: flex ? "flex:" + flex : null }, [
-        el("label", { class: "muted", style: "font-size:12px", text: text }),
+        el("label", { class: "dim tiny", text: text }),
         node,
       ]);
+
+    const searchBtn = el("button", { class: "btn primary", style: "flex:0 0 auto" }, [
+      icon("search", "sm"),
+      el("span", { text: "搜索" }),
+    ]);
+    searchBtn.addEventListener("click", () => doSearch());
 
     shell(
       el("div", { class: "grid" }, [
         el("div", { class: "card" }, [
-          el("h3", { text: "聚合搜索（BT 站点 + 网盘）" }),
+          el("h3", {}, [icon("search", "sm"), el("span", { text: "聚合搜索（BT 站点 + 网盘）" })]),
           el("div", { class: "row" }, [
             labeled("关键词", keyword, "3"),
             labeled("类型", type),
             labeled("季", season),
             labeled("集", episode),
-            el("button", {
-              class: "btn primary",
-              text: "搜索",
-              onclick: doSearch,
-              style: "flex:0 0 auto",
-            }),
+            searchBtn,
           ]),
         ]),
         results,
+        hotBox,
       ]),
       "资源搜索",
-      "并发查询所有已启用的索引器与盘搜服务"
+      "并发查询所有已启用的索引器与盘搜服务",
+      [iconButton("刷新热榜", "refresh", () => loadHot())]
     );
+  }
+
+  // ---------------- 热度排行 ----------------
+  const trendingState = { tab: "resources", days: 14, mediaType: "" };
+
+  function subscribeFromTrending(row) {
+    modal(
+      "订阅《" + row.title + "》",
+      [
+        { key: "title", label: "片名", value: row.title },
+        {
+          key: "media_type",
+          label: "类型",
+          type: "select",
+          value: row.media_type === "unknown" ? "tv" : row.media_type,
+          options: [
+            { value: "tv", label: "剧集" },
+            { value: "movie", label: "电影" },
+            { value: "anime", label: "动漫" },
+          ],
+        },
+        { key: "season", label: "季", type: "number", value: row.season || 1 },
+        { key: "total_episodes", label: "总集数（0 = 持续追新）", type: "number", value: 0 },
+        { key: "resolution", label: "分辨率过滤（可选）", placeholder: "如：2160p,1080p" },
+      ],
+      async (values) => {
+        await api("/subscribes", {
+          method: "POST",
+          body: Object.assign({}, values, {
+            season: values.season || 1,
+            total_episodes: values.total_episodes || 0,
+          }),
+        });
+        toast("已创建订阅，稍后自动追新", "ok");
+      },
+      "创建订阅",
+      { lead: "热榜里看到想追的，直接建订阅交给自动化。" }
+    );
+  }
+
+  function trendingDetail(row) {
+    const info = (label, value) =>
+      el("div", { class: "kv-item" }, [
+        el("div", { class: "kv-label", text: label }),
+        el("div", { text: value }),
+      ]);
+
+    panelModal(
+      row.title,
+      "热度构成：做种数 + 站点覆盖 + 资源条目 + 新鲜度 + 画质加成",
+      el("div", {}, [
+        el("div", { class: "kv" }, [
+          info("类型", typeLabel(row.media_type)),
+          info("季", row.season === null || row.season === undefined ? "-" : "第 " + row.season + " 季"),
+          info("热度分", String(row.heat)),
+          info("收录站点", String(row.site_count)),
+          info("资源条目", String(row.resource_count)),
+          info("累计做种", String(row.seeders)),
+          info("覆盖集数", row.episode_count ? row.episode_count + " 集（至 " + row.latest_episode + "）" : "-"),
+          info("最大体积", fmtSize(row.size)),
+        ]),
+        el("div", { class: "divider" }),
+        el("div", { class: "chips" }, [
+          ...(row.resolutions || []).map((item) => el("span", { class: "tag brand", text: item })),
+          ...(row.kinds || []).map((item) => el("span", { class: "tag", text: kindLabel(item) })),
+          ...(row.sites || []).map((item) => el("span", { class: "tag", text: item })),
+        ]),
+        el("div", { class: "divider" }),
+        el("div", { class: "dim tiny", style: "margin-bottom:8px", text: "样例资源" }),
+        table(
+          [
+            {
+              title: "标题",
+              render: (item) => el("div", { class: "truncate", title: item.title, text: item.title }),
+            },
+            { title: "站点", render: (item) => el("span", { class: "tag", text: item.site || "-" }) },
+            { title: "大小", class: "num", render: (item) => fmtSize(item.size) },
+            { title: "做种", class: "num", render: (item) => item.seeders || "-" },
+            { title: "操作", render: (item) => downloadButton(item) },
+          ],
+          row.samples || [],
+          "无样例"
+        ),
+      ]),
+      true
+    );
+  }
+
+  function rankingTable(items, opts) {
+    return table(
+      [
+        { title: "#", render: (row) => rankCell(row.rank) },
+        {
+          title: "作品",
+          render: (row) =>
+            el("div", {}, [
+              el("div", { class: "row tight center" }, [
+                icon(typeIcon(row.media_type), "sm"),
+                el("span", { class: "truncate", title: row.title, text: row.title }),
+              ]),
+              el("div", { class: "cell-sub", text:
+                typeLabel(row.media_type) +
+                (row.season ? " · 第 " + row.season + " 季" : "") +
+                (row.latest_episode ? " · 更新至第 " + row.latest_episode + " 集" : "") }),
+            ]),
+        },
+        {
+          title: "热度",
+          render: (row) => heatCell(row.heat_percent, Math.round(row.heat)),
+        },
+        { title: "站点", class: "num", render: (row) => row.site_count },
+        { title: "资源", class: "num", render: (row) => row.resource_count },
+        { title: "做种", class: "num", render: (row) => row.seeders || "-" },
+        {
+          title: "画质",
+          render: (row) =>
+            el("div", { class: "chips" },
+              (row.resolutions || []).slice(0, 2).map((item) => el("span", { class: "tag", text: item }))),
+        },
+        {
+          title: "更新",
+          render: (row) => el("span", { class: "tiny dim", text: fmtRelative(row.latest_at) }),
+        },
+        {
+          title: "操作",
+          render: (row) =>
+            el("div", { class: "row tight" }, [
+              iconButton("详情", "info", () => trendingDetail(row), "sm ghost"),
+              iconButton("订阅", "star", () => subscribeFromTrending(row), "sm"),
+              iconButton("搜索", "search", () => {
+                searchState.keyword = row.title;
+                searchState.items = [];
+                go("search");
+              }, "sm ghost"),
+            ]),
+        },
+      ],
+      items,
+      opts && opts.empty
+    );
+  }
+
+  async function pageTrending() {
+    shell(loading(), "热度排行", "多维度热度榜：资源 / 实时 / 热词 / 站点");
+
+    const body = el("div", {});
+    const meta = el("div", { class: "dim tiny" });
+
+    const load = async () => {
+      body.replaceChildren(loading());
+      try {
+        if (trendingState.tab === "live") {
+          const response = await api(
+            "/trending/live?limit=25&limit_per_site=40" +
+              (trendingState.mediaType ? "&media_type=" + trendingState.mediaType : "")
+          );
+          const data = response.data;
+          meta.textContent = "实时拉取站点最新流 " + data.feed_total + " 条，聚合出 " + data.total + " 部作品";
+          body.replaceChildren(
+            el("div", { class: "card flush" }, [
+              el("div", { class: "card-head" }, [
+                el("h3", {}, [icon("radar", "sm"), el("span", { text: "实时热榜（站点最新流）" })]),
+                el("span", { class: "tag brand", text: "联网实时" }),
+              ]),
+              rankingTable(data.items, {
+                empty: "没有启用的索引站点，或站点未返回最新流；请到站点管理启用站点",
+              }),
+            ])
+          );
+          return;
+        }
+
+        if (trendingState.tab === "sites") {
+          const response = await api("/trending/sites?limit=25&days=" + trendingState.days);
+          const data = response.data;
+          meta.textContent = "近 " + data.window_days + " 天共 " + data.total + " 个站点有贡献";
+          body.replaceChildren(
+            el("div", { class: "card flush" }, [
+              el("div", { class: "card-head" }, [
+                el("h3", {}, [icon("server", "sm"), el("span", { text: "站点贡献榜" })]),
+              ]),
+              table(
+                [
+                  { title: "#", render: (row) => rankCell(row.rank) },
+                  { title: "站点", render: (row) => row.site },
+                  { title: "占比", render: (row) => heatCell(row.heat_percent, row.resources) },
+                  { title: "资源数", class: "num", render: (row) => row.resources },
+                  { title: "累计做种", class: "num", render: (row) => row.seeders },
+                  { title: "平均评分", class: "num", render: (row) => row.avg_score },
+                  { title: "最近入榜", render: (row) => el("span", { class: "tiny dim", text: fmtRelative(row.last_at) }) },
+                ],
+                data.items,
+                "还没有站点数据，搜索一次后即可统计"
+              ),
+            ])
+          );
+          return;
+        }
+
+        if (trendingState.tab === "keywords") {
+          const response = await api("/trending/keywords?limit=30&days=" + trendingState.days);
+          const data = response.data;
+          meta.textContent = "近 " + data.window_days + " 天共 " + data.total + " 个热词";
+          body.replaceChildren(
+            el("div", { class: "card flush" }, [
+              el("div", { class: "card-head" }, [
+                el("h3", {}, [icon("search", "sm"), el("span", { text: "搜索热词榜" })]),
+              ]),
+              table(
+                [
+                  { title: "#", render: (row) => rankCell(row.rank) },
+                  { title: "关键词", render: (row) => row.keyword },
+                  { title: "热度", render: (row) => heatCell(row.heat_percent, row.times) },
+                  { title: "搜索次数", class: "num", render: (row) => row.times },
+                  { title: "累计命中", class: "num", render: (row) => row.results },
+                  { title: "最近搜索", render: (row) => el("span", { class: "tiny dim", text: fmtRelative(row.last_at) }) },
+                  {
+                    title: "操作",
+                    render: (row) =>
+                      iconButton("再搜一次", "search", () => {
+                        searchState.keyword = row.keyword;
+                        searchState.items = [];
+                        go("search");
+                      }, "sm ghost"),
+                  },
+                ],
+                data.items,
+                "还没有搜索历史"
+              ),
+            ])
+          );
+          return;
+        }
+
+        const response = await api(
+          "/trending/resources?limit=30&days=" + trendingState.days +
+            (trendingState.mediaType ? "&media_type=" + trendingState.mediaType : "")
+        );
+        const data = response.data;
+        meta.textContent =
+          "近 " + data.window_days + " 天扫描 " + data.scanned + " 条缓存资源，聚合出 " + data.total + " 部作品";
+        body.replaceChildren(
+          el("div", { class: "card flush" }, [
+            el("div", { class: "card-head" }, [
+              el("h3", {}, [icon("flame", "sm"), el("span", { text: "资源热度榜" })]),
+              el("span", { class: "tag", text: "本地缓存聚合" }),
+            ]),
+            rankingTable(data.items, {
+              empty: "暂无数据：热度榜来自搜索缓存，先在资源搜索里搜几次即可生成",
+            }),
+          ])
+        );
+      } catch (error) {
+        body.replaceChildren(el("div", { class: "card" }, [emptyBox(error.message, "alert")]));
+      }
+    };
+
+    const tabs = segment(
+      [
+        { value: "resources", label: "资源热榜" },
+        { value: "live", label: "实时热榜" },
+        { value: "keywords", label: "搜索热词" },
+        { value: "sites", label: "站点贡献" },
+      ],
+      trendingState.tab,
+      (value) => {
+        trendingState.tab = value;
+        pageTrending();
+      }
+    );
+
+    const windows = segment(
+      [
+        { value: 7, label: "7 天" },
+        { value: 14, label: "14 天" },
+        { value: 30, label: "30 天" },
+        { value: 90, label: "90 天" },
+      ],
+      trendingState.days,
+      (value) => {
+        trendingState.days = value;
+        pageTrending();
+      }
+    );
+
+    const types = segment(
+      [
+        { value: "", label: "全部" },
+        { value: "tv", label: "剧集" },
+        { value: "movie", label: "电影" },
+        { value: "anime", label: "动漫" },
+      ],
+      trendingState.mediaType,
+      (value) => {
+        trendingState.mediaType = value;
+        pageTrending();
+      }
+    );
+
+    const filterBar = el("div", { class: "card" }, [
+      el("div", { class: "row center" }, [
+        el("div", { style: "flex:0 0 auto" }, [
+          el("div", { class: "dim tiny", style: "margin-bottom:6px", text: "榜单" }),
+          tabs,
+        ]),
+        el("div", { style: "flex:0 0 auto" }, [
+          el("div", { class: "dim tiny", style: "margin-bottom:6px", text: "统计窗口" }),
+          windows,
+        ]),
+        el("div", { style: "flex:0 0 auto" }, [
+          el("div", { class: "dim tiny", style: "margin-bottom:6px", text: "类型" }),
+          types,
+        ]),
+      ]),
+      el("div", { class: "divider" }),
+      meta,
+    ]);
+
+    shell(
+      el("div", { class: "grid" }, [filterBar, body]),
+      "热度排行",
+      "热度 = 做种数 + 站点覆盖 + 资源条目 + 新鲜度 + 画质加成",
+      [iconButton("刷新", "refresh", () => load())]
+    );
+    load();
   }
 
   // ---------------- 订阅追新 ----------------
@@ -665,13 +1422,64 @@
         toast("订阅已创建，稍后会自动搜索", "ok");
         pageSubscribes();
       },
-      "创建订阅"
+      "创建订阅",
+      { lead: "创建后由「订阅巡检」与「追新雷达」两个定时任务自动追更。" }
     );
+  }
+
+  /** 订阅页内嵌的定时任务快捷设置（与定时任务页共用编辑器）。 */
+  function scheduleQuickCard(items) {
+    const rows = items.filter((item) => item.key === "subscribe" || item.key === "radar");
+    return el("div", { class: "card" }, [
+      el("div", { class: "card-head" }, [
+        el("h3", {}, [icon("clock", "sm"), el("span", { text: "追新定时任务" })]),
+        iconButton("全部任务设置", "settings", () => go("schedules"), "sm ghost"),
+      ]),
+      el(
+        "div",
+        { class: "grid cols-2" },
+        rows.map((row) =>
+          el("div", { class: "card" }, [
+            el("div", { class: "row center", style: "justify-content:space-between" }, [
+              el("div", { style: "flex:1" }, [
+                el("div", { class: "row tight center" }, [
+                  icon(row.key === "radar" ? "radar" : "star", "sm"),
+                  el("strong", { text: row.name }),
+                  row.enabled
+                    ? el("span", { class: "tag dot ok", text: "运行中" })
+                    : el("span", { class: "tag dot warn", text: "已关闭" }),
+                  row.customized ? el("span", { class: "tag brand", text: "已自定义" }) : null,
+                ]),
+                el("div", { class: "cell-sub", text: row.description }),
+              ]),
+            ]),
+            el("div", { class: "divider" }),
+            el("div", { class: "kv" }, [
+              el("div", { class: "kv-item" }, [
+                el("div", { class: "kv-label", text: "触发规则" }),
+                el("div", { class: "mono", text: row.trigger === "cron" ? row.cron : "每 " + row.minutes + " 分钟" }),
+              ]),
+              el("div", { class: "kv-item" }, [
+                el("div", { class: "kv-label", text: "下次执行" }),
+                el("div", { text: fmtRelative(row.next_run_time) }),
+              ]),
+            ]),
+            el("div", { class: "row tight", style: "margin-top:14px" }, [
+              iconButton("修改周期", "edit", () => scheduleForm(row, pageSubscribes), "sm"),
+              iconButton("立即执行", "play", () => runSchedule(row, pageSubscribes), "sm ghost"),
+            ]),
+          ])
+        )
+      ),
+    ]);
   }
 
   async function pageSubscribes() {
     shell(loading(), "订阅追新", "自动跟踪剧集更新并下载入库");
-    const items = await api("/subscribes?limit=500");
+    const [items, schedules] = await Promise.all([
+      api("/subscribes?limit=500"),
+      api("/schedules"),
+    ]);
 
     const progressCell = (row) => {
       const done = (row.downloaded_episodes || []).length;
@@ -679,12 +1487,11 @@
       const percent = total ? Math.min(100, Math.round((done / total) * 100)) : 0;
       return el("div", {}, [
         el("div", {
-          class: "muted",
-          style: "font-size:11px",
-          text: total ? done + "/" + total + " 集" : done + " 集（持续追新）",
+          class: "tiny",
+          text: total ? done + " / " + total + " 集（" + percent + "%）" : done + " 集（持续追新）",
         }),
         total
-          ? el("div", { class: "progress", style: "margin-top:4px" }, [
+          ? el("div", { class: "progress" + (percent >= 100 ? " done" : ""), style: "margin-top:5px" }, [
               el("i", { style: "width:" + percent + "%" }),
             ])
           : null,
@@ -692,10 +1499,13 @@
     };
 
     const actionsCell = (row) => {
-      const search = el("button", { class: "btn sm", text: "搜索" });
+      const search = el("button", { class: "btn sm" }, [
+        icon("search", "sm"),
+        el("span", { text: "搜索" }),
+      ]);
       search.addEventListener("click", async () => {
         search.disabled = true;
-        search.textContent = "搜索中…";
+        search.querySelector("span").textContent = "搜索中…";
         try {
           const result = await api("/subscribes/" + row.id + "/run", { method: "POST" });
           toast(
@@ -707,28 +1517,28 @@
         } catch (error) {
           toast(error.message, "err");
           search.disabled = false;
-          search.textContent = "搜索";
+          search.querySelector("span").textContent = "搜索";
         }
       });
 
-      const toggle = el("button", {
-        class: "btn sm",
-        text: row.status === "active" ? "暂停" : "启用",
-      });
-      toggle.addEventListener("click", async () => {
-        try {
-          await api("/subscribes/" + row.id, {
-            method: "PATCH",
-            body: { status: row.status === "active" ? "paused" : "active" },
-          });
-          pageSubscribes();
-        } catch (error) {
-          toast(error.message, "err");
-        }
-      });
+      const toggle = iconButton(
+        row.status === "active" ? "暂停" : "启用",
+        row.status === "active" ? "pause" : "play",
+        async () => {
+          try {
+            await api("/subscribes/" + row.id, {
+              method: "PATCH",
+              body: { status: row.status === "active" ? "paused" : "active" },
+            });
+            pageSubscribes();
+          } catch (error) {
+            toast(error.message, "err");
+          }
+        },
+        "sm"
+      );
 
-      const remove = el("button", { class: "btn sm danger", text: "删除" });
-      remove.addEventListener("click", async () => {
+      const remove = iconButton("删除", "trash", async () => {
         if (!confirm("确定删除订阅《" + row.title + "》？")) return;
         try {
           await api("/subscribes/" + row.id, { method: "DELETE" });
@@ -737,22 +1547,27 @@
         } catch (error) {
           toast(error.message, "err");
         }
-      });
+      }, "sm danger");
 
       return el("div", { class: "row tight" }, [search, toggle, remove]);
     };
 
-    const content = el("div", { class: "card" }, [
+    const content = el("div", { class: "card flush" }, [
+      el("div", { class: "card-head" }, [
+        el("h3", {}, [icon("star", "sm"), el("span", { text: "订阅列表（" + items.length + "）" })]),
+      ]),
       table(
         [
           {
             title: "片名",
             render: (row) =>
               el("div", {}, [
-                el("div", { text: row.title }),
+                el("div", { class: "row tight center" }, [
+                  icon(typeIcon(row.media_type), "sm"),
+                  el("span", { text: row.title }),
+                ]),
                 el("div", {
-                  class: "muted",
-                  style: "font-size:11px",
+                  class: "cell-sub",
                   text:
                     typeLabel(row.media_type) +
                     (row.year ? " · " + row.year : "") +
@@ -764,20 +1579,27 @@
           { title: "状态", render: (row) => statusTag(row.status) },
           {
             title: "过滤",
-            render: (row) =>
-              el("div", {
-                class: "muted",
-                style: "font-size:11px",
-                text:
-                  [row.resolution, row.include ? "含:" + row.include : "", row.exclude ? "排:" + row.exclude : ""]
-                    .filter(Boolean)
-                    .join(" ") || "默认",
-              }),
+            render: (row) => {
+              const tags = [
+                row.resolution,
+                row.include ? "含:" + row.include : "",
+                row.exclude ? "排:" + row.exclude : "",
+              ].filter(Boolean);
+              if (!tags.length) return el("span", { class: "dim tiny", text: "默认策略" });
+              return el(
+                "div",
+                { class: "chips" },
+                tags.map((text) => el("span", { class: "tag", text: text }))
+              );
+            },
           },
           {
             title: "最近检查",
             render: (row) =>
-              el("span", { class: "muted", style: "font-size:11px", text: fmtTime(row.last_check_at) }),
+              el("div", {}, [
+                el("div", { class: "tiny", text: fmtRelative(row.last_check_at) }),
+                el("div", { class: "cell-sub", text: fmtTime(row.last_check_at) }),
+              ]),
           },
           { title: "操作", render: actionsCell },
         ],
@@ -786,7 +1608,10 @@
       ),
     ]);
 
-    const runAll = el("button", { class: "btn", text: "巡检全部" });
+    const runAll = el("button", { class: "btn" }, [
+      icon("refresh", "sm"),
+      el("span", { text: "巡检全部" }),
+    ]);
     runAll.addEventListener("click", async () => {
       runAll.disabled = true;
       try {
@@ -799,10 +1624,207 @@
       }
     });
 
-    shell(content, "订阅追新", "共 " + items.length + " 个订阅", [
-      el("button", { class: "btn primary", text: "+ 新增订阅", onclick: subscribeForm }),
-      runAll,
+    const add = el("button", { class: "btn primary" }, [
+      icon("plus", "sm"),
+      el("span", { text: "新增订阅" }),
     ]);
+    add.addEventListener("click", subscribeForm);
+
+    shell(
+      el("div", { class: "grid" }, [scheduleQuickCard(schedules.items), content]),
+      "订阅追新",
+      "共 " + items.length + " 个订阅 · 定时任务可在下方直接调整",
+      [add, runAll]
+    );
+  }
+
+  // ---------------- 定时任务设置 ----------------
+  const CRON_PRESETS = [
+    { label: "每天 04:00", value: "0 4 * * *" },
+    { label: "每天 02:30", value: "30 2 * * *" },
+    { label: "每 6 小时", value: "0 */6 * * *" },
+    { label: "每周一 05:00", value: "0 5 * * 1" },
+  ];
+
+  const MINUTE_PRESETS = [5, 10, 15, 30, 60, 120, 360, 720, 1440];
+
+  /** 定时任务编辑弹窗：间隔 / cron 两种触发方式。 */
+  function scheduleForm(row, onDone) {
+    modal(
+      "定时设置：" + row.name,
+      [
+        { key: "enabled", label: "启用该定时任务", type: "checkbox", value: row.enabled },
+        {
+          key: "trigger",
+          label: "触发方式",
+          type: "select",
+          value: row.trigger,
+          options: [
+            { value: "interval", label: "固定间隔（每 N 分钟）" },
+            { value: "cron", label: "cron 表达式（指定时刻）" },
+          ],
+        },
+        {
+          key: "minutes",
+          label: "间隔分钟（触发方式为固定间隔时生效）",
+          type: "select",
+          value: String(row.minutes),
+          options: MINUTE_PRESETS.map((value) => ({
+            value: String(value),
+            label: value >= 60 ? value / 60 + " 小时（" + value + " 分钟）" : value + " 分钟",
+          })),
+        },
+        {
+          key: "cron",
+          label: "cron 表达式（触发方式为 cron 时生效）",
+          value: row.cron,
+          placeholder: "分 时 日 月 周，如 0 4 * * *",
+          hint: "常用：" + CRON_PRESETS.map((item) => item.label + "=" + item.value).join("｜"),
+        },
+      ],
+      async (values) => {
+        const payload = {
+          enabled: values.enabled,
+          trigger: values.trigger,
+          minutes: Number(values.minutes),
+          cron: values.cron,
+        };
+        const response = await api("/schedules/" + row.key, { method: "PUT", body: payload });
+        const data = response.data;
+        toast(
+          data.enabled
+            ? row.name + " 已更新：" + (data.trigger === "cron" ? "cron " + data.cron : "每 " + data.minutes + " 分钟")
+            : row.name + " 已关闭",
+          "ok"
+        );
+        if (onDone) onDone();
+      },
+      "保存并生效",
+      {
+        lead:
+          "修改立即改期并写入数据库，重启后依然生效；默认值为 " +
+          (row.default.trigger === "cron"
+            ? "cron " + row.default.cron
+            : "每 " + row.default.minutes + " 分钟"),
+      }
+    );
+  }
+
+  async function runSchedule(row, onDone) {
+    try {
+      const result = await api("/schedules/" + row.key + "/run", { method: "POST" });
+      toast(result.message, "ok");
+      if (onDone) setTimeout(onDone, 800);
+    } catch (error) {
+      toast(error.message, "err");
+    }
+  }
+
+  async function pageSchedules() {
+    shell(loading(), "定时任务", "追新与入库的自动化节奏");
+    const [data, jobs] = await Promise.all([api("/schedules"), api("/system/jobs")]);
+
+    const cards = data.items.map((row) =>
+      el("div", { class: "card" }, [
+        el("div", { class: "card-head" }, [
+          el("h3", {}, [
+            icon(
+              { subscribe: "star", radar: "radar", download: "download", library: "library" }[row.key] || "clock",
+              "sm"
+            ),
+            el("span", { text: row.name }),
+          ]),
+          el("div", { class: "row tight center" }, [
+            row.enabled
+              ? el("span", { class: "tag dot ok", text: "已启用" })
+              : el("span", { class: "tag dot warn", text: "已关闭" }),
+            row.customized ? el("span", { class: "tag brand", text: "已自定义" }) : null,
+          ]),
+        ]),
+        el("div", { class: "muted", text: row.description }),
+        el("div", { class: "divider" }),
+        el("div", { class: "kv" }, [
+          el("div", { class: "kv-item" }, [
+            el("div", { class: "kv-label", text: "触发方式" }),
+            el("div", { text: row.trigger === "cron" ? "cron 表达式" : "固定间隔" }),
+          ]),
+          el("div", { class: "kv-item" }, [
+            el("div", { class: "kv-label", text: "当前规则" }),
+            el("div", { class: "mono", text: row.trigger === "cron" ? row.cron : "每 " + row.minutes + " 分钟" }),
+          ]),
+          el("div", { class: "kv-item" }, [
+            el("div", { class: "kv-label", text: "下次执行" }),
+            el("div", {}, [
+              el("div", { text: fmtRelative(row.next_run_time) }),
+              el("div", { class: "cell-sub", text: fmtTime(row.next_run_time) }),
+            ]),
+          ]),
+          el("div", { class: "kv-item" }, [
+            el("div", { class: "kv-label", text: "默认值" }),
+            el("div", {
+              class: "mono dim",
+              text: row.default.trigger === "cron" ? row.default.cron : "每 " + row.default.minutes + " 分钟",
+            }),
+          ]),
+        ]),
+        el("div", { class: "row tight", style: "margin-top:16px" }, [
+          iconButton("修改周期", "edit", () => scheduleForm(row, pageSchedules), "sm primary"),
+          iconButton("立即执行", "play", () => runSchedule(row, pageSchedules), "sm"),
+          row.customized
+            ? iconButton("恢复默认", "refresh", async () => {
+                try {
+                  await api("/schedules/" + row.key + "/reset", { method: "POST" });
+                  toast(row.name + " 已恢复默认周期", "ok");
+                  pageSchedules();
+                } catch (error) {
+                  toast(error.message, "err");
+                }
+              }, "sm ghost")
+            : null,
+        ]),
+      ])
+    );
+
+    const pluginJobs = jobs.items.filter((item) => !item.builtin);
+    const pluginCard = el("div", { class: "card flush" }, [
+      el("div", { class: "card-head" }, [
+        el("h3", {}, [icon("plugin", "sm"), el("span", { text: "插件任务（" + pluginJobs.length + "）" })]),
+      ]),
+      table(
+        [
+          { title: "任务", render: (row) => row.name },
+          { title: "ID", render: (row) => el("span", { class: "mono dim", text: row.id }) },
+          { title: "触发规则", render: (row) => el("span", { class: "mono dim tiny", text: row.trigger }) },
+          { title: "下次执行", render: (row) => fmtRelative(row.next_run_time) },
+          {
+            title: "操作",
+            render: (row) =>
+              iconButton("立即执行", "play", async () => {
+                try {
+                  await api("/system/jobs/" + encodeURIComponent(row.id) + "/run", { method: "POST" });
+                  toast("已触发", "ok");
+                } catch (error) {
+                  toast(error.message, "err");
+                }
+              }, "sm ghost"),
+          },
+        ],
+        pluginJobs,
+        "启用带定时任务的插件后会出现在这里"
+      ),
+    ]);
+
+    shell(
+      el("div", { class: "grid" }, [
+        el("div", { class: "grid cols-2" }, cards),
+        pluginCard,
+      ]),
+      "定时任务",
+      data.running
+        ? "调度器运行中 · 共 " + data.items.length + " 个内置任务"
+        : "调度器已停止（CF_SCHEDULER_ENABLED=false）",
+      [iconButton("刷新", "refresh", () => pageSchedules())]
+    );
   }
 
   // ---------------- 下载任务 ----------------
@@ -822,95 +1844,110 @@
     const actionsCell = (row) => {
       const buttons = [];
       if (row.status === "downloading") {
-        buttons.push(
-          el("button", { class: "btn sm", text: "暂停", onclick: () => control(row.id, "pause") })
-        );
+        buttons.push(iconButton("暂停", "pause", () => control(row.id, "pause"), "sm"));
       }
       if (row.status === "paused") {
-        buttons.push(
-          el("button", { class: "btn sm", text: "继续", onclick: () => control(row.id, "resume") })
-        );
+        buttons.push(iconButton("继续", "play", () => control(row.id, "resume"), "sm"));
       }
       if (row.kind === "pan" && row.meta && row.meta.page_url) {
-        buttons.push(
-          el("a", {
-            class: "btn sm",
-            href: row.meta.page_url,
-            target: "_blank",
-            rel: "noreferrer",
-            text: row.meta.password ? "打开(码:" + row.meta.password + ")" : "打开网盘",
-          })
-        );
+        const open = el("a", {
+          class: "btn sm",
+          href: row.meta.page_url,
+          target: "_blank",
+          rel: "noreferrer",
+        }, [
+          icon("cloud", "sm"),
+          el("span", { text: row.meta.password ? "打开(码:" + row.meta.password + ")" : "打开网盘" }),
+        ]);
+        buttons.push(open);
       }
-      const remove = el("button", { class: "btn sm danger", text: "删除" });
-      remove.addEventListener("click", async () => {
-        if (!confirm("确定删除该任务？")) return;
-        try {
-          await api("/downloads/" + row.id, { method: "DELETE" });
-          toast("已删除", "ok");
-          pageDownloads();
-        } catch (error) {
-          toast(error.message, "err");
-        }
-      });
-      buttons.push(remove);
+      buttons.push(
+        iconButton("删除", "trash", async () => {
+          if (!confirm("确定删除该任务？")) return;
+          try {
+            await api("/downloads/" + row.id, { method: "DELETE" });
+            toast("已删除", "ok");
+            pageDownloads();
+          } catch (error) {
+            toast(error.message, "err");
+          }
+        }, "sm danger")
+      );
       return el("div", { class: "row tight" }, buttons);
     };
 
-    const content = el("div", { class: "card" }, [
-      table(
-        [
-          {
-            title: "任务",
-            render: (row) =>
-              el("div", {}, [
-                el("div", { class: "truncate", title: row.title, text: row.title }),
-                el("div", {
-                  class: "muted",
-                  style: "font-size:11px",
-                  text:
-                    kindLabel(row.kind) + " · " + (row.site || "-") + " · " + fmtSize(row.size),
-                }),
-              ]),
-          },
-          {
-            title: "进度",
-            render: (row) => {
-              const percent = Math.round((row.progress || 0) * 100);
-              return el("div", {}, [
-                el("div", { class: "progress" }, [el("i", { style: "width:" + percent + "%" })]),
-                el("div", {
-                  class: "muted",
-                  style: "font-size:11px;margin-top:4px",
-                  text: percent + "% · " + fmtSpeed(row.speed),
-                }),
-              ]);
+    const counts = { downloading: 0, pending: 0, done: 0 };
+    items.forEach((row) => {
+      if (row.status === "downloading") counts.downloading += 1;
+      else if (row.status === "pending") counts.pending += 1;
+      else if (row.status === "completed" || row.status === "transferred") counts.done += 1;
+    });
+
+    const content = el("div", { class: "grid" }, [
+      el("div", { class: "grid cols-4" }, [
+        statCard("下载中", counts.downloading, "实时同步下载器", "download"),
+        statCard("等待中", counts.pending, "含网盘待转存", "clock"),
+        statCard("已完成", counts.done, "含已入库", "check"),
+        statCard("任务总数", items.length, "最多展示 300 条", "box"),
+      ]),
+      el("div", { class: "card flush" }, [
+        el("div", { class: "card-head" }, [
+          el("h3", {}, [icon("download", "sm"), el("span", { text: "任务列表" })]),
+        ]),
+        table(
+          [
+            {
+              title: "任务",
+              render: (row) =>
+                el("div", {}, [
+                  el("div", { class: "truncate", title: row.title, text: row.title }),
+                  el("div", { class: "cell-sub", text:
+                    kindLabel(row.kind) + " · " + (row.site || "-") + " · " + fmtSize(row.size) }),
+                ]),
             },
-          },
-          { title: "状态", render: (row) => statusTag(row.status) },
-          {
-            title: "季集",
-            render: (row) =>
-              row.episodes && row.episodes.length
-                ? "S" + pad2(row.season || 1) + "E" + row.episodes.join(",")
-                : "-",
-          },
-          {
-            title: "创建时间",
-            render: (row) =>
-              el("span", { class: "muted", style: "font-size:11px", text: fmtTime(row.created_at) }),
-          },
-          { title: "操作", render: actionsCell },
-        ],
-        items,
-        "暂无下载任务"
-      ),
+            {
+              title: "进度",
+              render: (row) => {
+                const percent = Math.round((row.progress || 0) * 100);
+                return el("div", {}, [
+                  el("div", { class: "progress" + (percent >= 100 ? " done" : "") }, [
+                    el("i", { style: "width:" + percent + "%" }),
+                  ]),
+                  el("div", { class: "cell-sub", text: percent + "% · " + fmtSpeed(row.speed) }),
+                ]);
+              },
+            },
+            { title: "状态", render: (row) => statusTag(row.status) },
+            {
+              title: "季集",
+              render: (row) =>
+                row.episodes && row.episodes.length
+                  ? "S" + pad2(row.season || 1) + "E" + row.episodes.join(",")
+                  : "-",
+            },
+            {
+              title: "创建时间",
+              render: (row) =>
+                el("div", {}, [
+                  el("div", { class: "tiny", text: fmtRelative(row.created_at) }),
+                  el("div", { class: "cell-sub", text: fmtTime(row.created_at) }),
+                ]),
+            },
+            { title: "操作", render: actionsCell },
+          ],
+          items,
+          "暂无下载任务"
+        ),
+      ]),
     ]);
 
-    const sync = el("button", { class: "btn primary", text: "同步状态并整理" });
+    const sync = el("button", { class: "btn primary" }, [
+      icon("refresh", "sm"),
+      el("span", { text: "同步状态并整理" }),
+    ]);
     sync.addEventListener("click", async () => {
       sync.disabled = true;
-      sync.textContent = "同步中…";
+      sync.querySelector("span").textContent = "同步中…";
       try {
         const result = await api("/downloads/sync", { method: "POST" });
         toast("检查 " + result.checked + " 个，完成 " + result.completed + " 个", "ok");
@@ -918,7 +1955,7 @@
       } catch (error) {
         toast(error.message, "err");
         sync.disabled = false;
-        sync.textContent = "同步状态并整理";
+        sync.querySelector("span").textContent = "同步状态并整理";
       }
     });
 
@@ -978,24 +2015,32 @@
 
     const content = el("div", { class: "grid" }, [
       el("div", { class: "grid cols-4" }, [
-        statCard("文件总数", data.files),
-        statCard("占用空间", fmtSize(data.size)),
-        statCard("剧集数", data.series, data.episodes + " 集"),
-        statCard("电影数", data.movies),
+        statCard("文件总数", data.files, null, "library"),
+        statCard("占用空间", fmtSize(data.size), null, "box"),
+        statCard("剧集数", data.series, data.episodes + " 集", "tv"),
+        statCard("电影数", data.movies, null, "film"),
       ]),
-      el("div", { class: "card" }, [
-        el("h3", { text: "入库文件" }),
+      el("div", { class: "card flush" }, [
+        el("div", { class: "card-head" }, [
+          el("h3", {}, [icon("inbox", "sm"), el("span", { text: "入库文件" })]),
+        ]),
         table(
           [
-            { title: "标题", render: (row) => row.title },
-            { title: "类型", render: (row) => typeLabel(row.media_type) },
+            {
+              title: "标题",
+              render: (row) =>
+                el("div", { class: "row tight center" }, [
+                  icon(typeIcon(row.media_type), "sm"),
+                  el("span", { text: row.title }),
+                ]),
+            },
             { title: "季集", render: (row) => seasonEpisode(row.season, row.episode) },
             { title: "画质", render: (row) => row.resolution || "-" },
-            { title: "大小", render: (row) => fmtSize(row.size) },
+            { title: "大小", class: "num", render: (row) => fmtSize(row.size) },
             {
               title: "路径",
               render: (row) =>
-                el("div", { class: "truncate mono muted", title: row.path, text: row.path }),
+                el("div", { class: "truncate mono dim", title: row.path, text: row.path }),
             },
           ],
           files.items,
@@ -1004,10 +2049,13 @@
       ]),
     ]);
 
-    const scan = el("button", { class: "btn", text: "扫描媒体库" });
+    const scan = el("button", { class: "btn" }, [
+      icon("refresh", "sm"),
+      el("span", { text: "扫描媒体库" }),
+    ]);
     scan.addEventListener("click", async () => {
       scan.disabled = true;
-      scan.textContent = "扫描中…";
+      scan.querySelector("span").textContent = "扫描中…";
       try {
         const result = await api("/library/scan", { method: "POST" });
         toast("扫描 " + result.scanned + " 个文件，新增 " + result.added + " 个", "ok");
@@ -1015,24 +2063,21 @@
       } catch (error) {
         toast(error.message, "err");
         scan.disabled = false;
-        scan.textContent = "扫描媒体库";
-      }
-    });
-
-    const refresh = el("button", { class: "btn", text: "刷新媒体服务器" });
-    refresh.addEventListener("click", async () => {
-      try {
-        const result = await api("/library/refresh", { method: "POST" });
-        toast("已通知 " + result.refreshed + " 个媒体服务器", "ok");
-      } catch (error) {
-        toast(error.message, "err");
+        scan.querySelector("span").textContent = "扫描媒体库";
       }
     });
 
     shell(content, "媒体库", data.files + " 个文件 · " + fmtSize(data.size), [
-      el("button", { class: "btn", text: "手动整理", onclick: transferForm }),
+      iconButton("手动整理", "plus", transferForm),
       scan,
-      refresh,
+      iconButton("刷新媒体服务器", "server", async () => {
+        try {
+          const result = await api("/library/refresh", { method: "POST" });
+          toast("已通知 " + result.refreshed + " 个媒体服务器", "ok");
+        } catch (error) {
+          toast(error.message, "err");
+        }
+      }),
     ]);
   }
 
@@ -1046,11 +2091,21 @@
     metadata: "元数据",
   };
 
+  const KIND_ICONS = {
+    indexer: "search",
+    pan: "cloud",
+    downloader: "download",
+    mediaserver: "server",
+    notifier: "info",
+    metadata: "box",
+  };
+
   function optionsField(value) {
     return {
       key: "options",
       label: "高级选项 options（JSON，字段映射/接口路径）",
       type: "textarea",
+      rows: 6,
       value: value ? JSON.stringify(value, null, 2) : "",
       hint: "自定义站点的接口路径与字段映射写在这里；留空表示使用默认值",
     };
@@ -1164,46 +2219,32 @@
     const presets = await api("/sites/presets");
     const cards = presets.map((item) =>
       el("div", { class: "card", style: "margin-bottom:10px" }, [
-        el("div", { class: "row", style: "justify-content:space-between;align-items:center" }, [
+        el("div", { class: "card-head", style: "margin-bottom:6px" }, [
           el("div", {}, [
-            el("div", { text: item.name }),
-            el("div", { class: "muted mono", style: "font-size:11px", text: item.provider }),
+            el("div", { class: "row tight center" }, [
+              icon(KIND_ICONS[item.kind] || "box", "sm"),
+              el("strong", { text: item.name }),
+            ]),
+            el("div", { class: "cell-sub mono", text: item.provider }),
           ]),
           item.verified
-            ? el("span", { class: "tag ok", text: "已验证" })
-            : el("span", { class: "tag warn", text: "需填映射" }),
+            ? el("span", { class: "tag dot ok", text: "已验证" })
+            : el("span", { class: "tag dot warn", text: "需填映射" }),
         ]),
-        el("div", { class: "muted", style: "font-size:12px;margin:6px 0", text: item.description }),
-        el("button", {
-          class: "btn sm primary",
-          text: "使用此模板",
-          onclick: () => {
-            document.getElementById("modal-root").innerHTML = "";
-            siteForm(providers, item);
-          },
-        }),
+        el("div", { class: "muted tiny", style: "margin:6px 0 12px", text: item.description }),
+        iconButton("使用此模板", "check", () => {
+          document.getElementById("modal-root").innerHTML = "";
+          siteForm(providers, item);
+        }, "sm primary"),
       ])
     );
 
-    const root = document.getElementById("modal-root");
-    const close = () => {
-      root.innerHTML = "";
-    };
-    const mask = el("div", { class: "modal-mask" }, [
-      el("div", { class: "modal" }, [
-        el("h3", { text: "选择站点模板" }),
-        el("div", { class: "muted", style: "margin-bottom:10px", text:
-          "模板已预填接口路径与字段映射，选择后可继续微调。" }),
-        ...cards,
-        el("div", { class: "modal-actions" }, [
-          el("button", { class: "btn ghost", text: "关闭", onclick: close }),
-        ]),
-      ]),
-    ]);
-    mask.addEventListener("click", (event) => {
-      if (event.target === mask) close();
-    });
-    root.appendChild(mask);
+    panelModal(
+      "选择站点模板",
+      "模板已预填接口路径与字段映射，选择后可继续微调。",
+      el("div", {}, cards),
+      false
+    );
   }
 
   async function discoverDialog() {
@@ -1217,10 +2258,13 @@
       el("div", { class: "muted", text: "点击「开始发现」抓取导航站收录的资源站清单。" }),
     ]);
 
-    const scan = el("button", { class: "btn primary", text: "开始发现" });
+    const scan = el("button", { class: "btn primary" }, [
+      icon("radar", "sm"),
+      el("span", { text: "开始发现" }),
+    ]);
     scan.addEventListener("click", async () => {
       scan.disabled = true;
-      scan.textContent = "抓取中…";
+      scan.querySelector("span").textContent = "抓取中…";
       try {
         const params = new URLSearchParams();
         if (urlInput.value.trim()) params.set("url", urlInput.value.trim());
@@ -1228,7 +2272,7 @@
         const response = await api("/sites/discover?" + params.toString());
         const data = response.data;
         listBox.replaceChildren(
-          el("div", { class: "muted", style: "margin-bottom:8px", text:
+          el("div", { class: "muted tiny", style: "margin-bottom:8px", text:
             "发现 " + data.total + " 个站点。导航站只提供入口，需配置为自定义站点后才能搜索。" }),
           table(
             [
@@ -1247,15 +2291,15 @@
               {
                 title: "标签",
                 render: (row) =>
-                  el("div", { class: "row tight" },
+                  el("div", { class: "chips" },
                     (row.tags || []).slice(0, 3).map((tag) => el("span", { class: "tag", text: tag }))),
               },
               {
                 title: "状态",
                 render: (row) =>
                   row.already_added
-                    ? el("span", { class: "tag ok", text: "已添加" })
-                    : el("span", { class: "muted", text: "未添加" }),
+                    ? el("span", { class: "tag dot ok", text: "已添加" })
+                    : el("span", { class: "dim tiny", text: "未添加" }),
               },
             ],
             data.sites,
@@ -1267,32 +2311,20 @@
         toast(error.message, "err");
       }
       scan.disabled = false;
-      scan.textContent = "开始发现";
+      scan.querySelector("span").textContent = "开始发现";
     });
 
-    const root = document.getElementById("modal-root");
-    const close = () => {
-      root.innerHTML = "";
-    };
-    const mask = el("div", { class: "modal-mask" }, [
-      el("div", { class: "modal", style: "max-width:820px" }, [
-        el("h3", { text: "从导航站发现资源站点" }),
+    panelModal(
+      "从导航站发现资源站点",
+      null,
+      el("div", {}, [
         el("div", { class: "field" }, [el("label", { text: "导航站地址" }), urlInput]),
-        el("label", { class: "field", style: "display:flex;gap:8px;align-items:center" }, [
-          mediaOnly,
-          el("span", { text: "只显示影视相关站点" }),
-        ]),
-        el("div", { class: "row tight", style: "margin-bottom:10px" }, [scan]),
+        el("label", { class: "field-check" }, [mediaOnly, el("span", { text: "只显示影视相关站点" })]),
+        el("div", { class: "row tight", style: "margin-bottom:12px" }, [scan]),
         listBox,
-        el("div", { class: "modal-actions" }, [
-          el("button", { class: "btn ghost", text: "关闭", onclick: close }),
-        ]),
       ]),
-    ]);
-    mask.addEventListener("click", (event) => {
-      if (event.target === mask) close();
-    });
-    root.appendChild(mask);
+      true
+    );
   }
 
   async function pageSites() {
@@ -1303,10 +2335,13 @@
     ]);
 
     const actionsCell = (row) => {
-      const test = el("button", { class: "btn sm", text: "测试" });
+      const test = el("button", { class: "btn sm" }, [
+        icon("check", "sm"),
+        el("span", { text: "测试" }),
+      ]);
       test.addEventListener("click", async () => {
         test.disabled = true;
-        test.textContent = "检测中…";
+        test.querySelector("span").textContent = "检测中…";
         try {
           const result = await api("/sites/" + row.id + "/test", { method: "POST" });
           toast(row.name + "：" + result.message, result.success ? "ok" : "err");
@@ -1314,25 +2349,30 @@
         } catch (error) {
           toast(error.message, "err");
           test.disabled = false;
-          test.textContent = "测试";
+          test.querySelector("span").textContent = "测试";
         }
       });
 
-      const toggle = el("button", { class: "btn sm", text: row.enabled ? "禁用" : "启用" });
-      toggle.addEventListener("click", async () => {
-        try {
-          await api("/sites/" + row.id, {
-            method: "PATCH",
-            body: { enabled: !row.enabled },
-          });
-          pageSites();
-        } catch (error) {
-          toast(error.message, "err");
-        }
-      });
+      const toggle = iconButton(
+        row.enabled ? "禁用" : "启用",
+        row.enabled ? "pause" : "play",
+        async () => {
+          try {
+            await api("/sites/" + row.id, {
+              method: "PATCH",
+              body: { enabled: !row.enabled },
+            });
+            pageSites();
+          } catch (error) {
+            toast(error.message, "err");
+          }
+        },
+        "sm"
+      );
 
-      const remove = el("button", { class: "btn sm danger", text: "删除" });
-      remove.addEventListener("click", async () => {
+      const edit = iconButton("编辑", "edit", () => siteEditForm(row), "sm ghost");
+
+      const remove = iconButton("删除", "trash", async () => {
         if (!confirm("确定删除站点 " + row.name + "？")) return;
         try {
           await api("/sites/" + row.id, { method: "DELETE" });
@@ -1341,23 +2381,25 @@
         } catch (error) {
           toast(error.message, "err");
         }
-      });
-
-      const edit = el("button", {
-        class: "btn sm ghost",
-        text: "编辑",
-        onclick: () => siteEditForm(row),
-      });
+      }, "sm danger");
 
       return el("div", { class: "row tight" }, [test, toggle, edit, remove]);
     };
+
+    const enabledCount = sites.filter((item) => item.enabled).length;
 
     const groups = Object.keys(KIND_LABELS)
       .map((kind) => {
         const rows = sites.filter((item) => item.kind === kind);
         if (!rows.length) return null;
-        return el("div", { class: "card" }, [
-          el("h3", { text: KIND_LABELS[kind] + "（" + rows.length + "）" }),
+        return el("div", { class: "card flush" }, [
+          el("div", { class: "card-head" }, [
+            el("h3", {}, [
+              icon(KIND_ICONS[kind], "sm"),
+              el("span", { text: KIND_LABELS[kind] + "（" + rows.length + "）" }),
+            ]),
+            el("span", { class: "tag", text: "已启用 " + rows.filter((item) => item.enabled).length }),
+          ]),
           table(
             [
               {
@@ -1365,14 +2407,14 @@
                 render: (row) =>
                   el("div", {}, [
                     el("div", { text: row.name }),
-                    el("div", { class: "muted mono", style: "font-size:11px", text: row.provider }),
+                    el("div", { class: "cell-sub mono", text: row.provider }),
                   ]),
               },
               {
                 title: "地址",
                 render: (row) =>
                   el("div", {
-                    class: "truncate mono muted",
+                    class: "truncate mono dim",
                     title: row.url,
                     text: row.url || "-",
                   }),
@@ -1381,19 +2423,15 @@
                 title: "状态",
                 render: (row) =>
                   el("span", {
-                    class: "tag " + (row.enabled ? "ok" : ""),
+                    class: "tag dot " + (row.enabled ? "ok" : ""),
                     text: row.enabled ? "已启用" : "已禁用",
                   }),
               },
-              { title: "优先级", key: "priority" },
+              { title: "优先级", class: "num", key: "priority" },
               {
                 title: "最近检测",
                 render: (row) =>
-                  el("div", {
-                    class: "muted",
-                    style: "font-size:11px",
-                    text: row.last_status || "未检测",
-                  }),
+                  el("div", { class: "tiny dim", text: row.last_status || "未检测" }),
               },
               { title: "操作", render: actionsCell },
             ],
@@ -1407,26 +2445,16 @@
       el(
         "div",
         { class: "grid" },
-        groups.length ? groups : [el("div", { class: "card empty", text: "还没有配置站点" })]
+        groups.length
+          ? groups
+          : [el("div", { class: "card" }, [emptyBox("还没有配置站点", "settings")])]
       ),
       "站点管理",
-      "共 " + sites.length + " 个配置",
+      "共 " + sites.length + " 个配置 · 已启用 " + enabledCount + " 个",
       [
-        el("button", {
-          class: "btn",
-          text: "◎ 发现站点",
-          onclick: () => discoverDialog(),
-        }),
-        el("button", {
-          class: "btn",
-          text: "▤ 从模板添加",
-          onclick: () => presetPicker(providers),
-        }),
-        el("button", {
-          class: "btn primary",
-          text: "+ 新增站点",
-          onclick: () => siteForm(providers),
-        }),
+        iconButton("发现站点", "radar", () => discoverDialog()),
+        iconButton("从模板添加", "box", () => presetPicker(providers)),
+        iconButton("新增站点", "plus", () => siteForm(providers), "primary"),
       ]
     );
   }
@@ -1437,10 +2465,10 @@
     const data = await api("/plugins");
 
     const cards = data.items.map((item) => {
-      const toggle = el("button", {
-        class: "btn sm " + (item.enabled ? "" : "primary"),
-        text: item.enabled ? "停用" : "启用",
-      });
+      const toggle = el("button", { class: "btn sm " + (item.enabled ? "" : "primary") }, [
+        icon(item.enabled ? "pause" : "play", "sm"),
+        el("span", { text: item.enabled ? "停用" : "启用" }),
+      ]);
       toggle.addEventListener("click", async () => {
         toggle.disabled = true;
         try {
@@ -1455,11 +2483,7 @@
         }
       });
 
-      const configButton = el("button", {
-        class: "btn sm ghost",
-        text: "配置",
-      });
-      configButton.addEventListener("click", () => {
+      const configButton = iconButton("配置", "settings", () => {
         const schema = item.config_schema || [];
         if (!schema.length) {
           toast("该插件无可配置项", "warn");
@@ -1488,10 +2512,13 @@
           toast("配置已保存", "ok");
           pagePlugins();
         }, "保存");
-      });
+      }, "sm ghost");
 
       const actionButtons = (item.actions || []).map((action) => {
-        const button = el("button", { class: "btn sm", text: action });
+        const button = el("button", { class: "btn sm" }, [
+          icon("play", "sm"),
+          el("span", { text: action }),
+        ]);
         button.addEventListener("click", async () => {
           button.disabled = true;
           try {
@@ -1499,7 +2526,15 @@
               method: "POST",
               body: { action: action, params: {} },
             });
-            toast("执行成功：" + JSON.stringify(result.result).slice(0, 80), "ok");
+            toast(item.name + " · " + action + " 执行完成", "ok");
+            const detail = result && result.result;
+            if (detail && detail.body) {
+              panelModal(
+                item.name + " · " + action,
+                null,
+                el("pre", { class: "logs", style: "height:auto;max-height:420px", text: detail.body })
+              );
+            }
           } catch (error) {
             toast(error.message, "err");
           } finally {
@@ -1509,94 +2544,107 @@
         return button;
       });
 
-      return el("div", { class: "card" }, [
-        el("div", { class: "row", style: "align-items:flex-start" }, [
+      return el("div", { class: "card plugin-card" }, [
+        el("div", { class: "plugin-top" }, [
           el("div", { style: "flex:1" }, [
-            el("h3", { style: "margin-bottom:6px" }, [
-              item.name,
-              " ",
+            el("div", { class: "plugin-title" }, [
+              icon("plugin", "sm"),
+              el("span", { text: item.name }),
               el("span", { class: "tag", text: "v" + item.version }),
-              item.enabled
-                ? el("span", { class: "tag ok", style: "margin-left:6px", text: "已启用" })
-                : null,
+              item.enabled ? el("span", { class: "tag dot ok", text: "已启用" }) : null,
             ]),
-            el("div", {
-              class: "muted",
-              style: "font-size:12px",
-              text: item.description || "无描述",
-            }),
+            el("div", { class: "muted tiny", style: "margin-top:6px", text: item.description || "无描述" }),
             item.author
-              ? el("div", {
-                  class: "muted",
-                  style: "font-size:11px;margin-top:4px",
-                  text: "作者：" + item.author,
-                })
+              ? el("div", { class: "dim tiny", style: "margin-top:4px", text: "作者：" + item.author })
               : null,
             item.last_error
               ? el("div", { class: "tag err", style: "margin-top:8px", text: item.last_error })
               : null,
           ]),
-          el("div", { class: "row tight", style: "flex:0 0 auto" }, [
-            toggle,
-            configButton,
-            ...actionButtons,
-          ]),
         ]),
+        el("div", { class: "row tight" }, [toggle, configButton, ...actionButtons]),
       ]);
     });
 
     shell(
       el(
         "div",
-        { class: "grid" },
+        { class: "grid cols-2" },
         cards.length
           ? cards
           : [
-              el("div", {
-                class: "card empty",
-                text: "plugins/ 目录下暂无插件，放入插件目录后刷新即可。",
-              }),
+              el("div", { class: "card" }, [
+                emptyBox("plugins/ 目录下暂无插件，放入插件目录后刷新即可。", "plugin"),
+              ]),
             ]
       ),
       "插件",
-      "共 " + data.total + " 个插件"
+      "共 " + data.total + " 个插件",
+      [iconButton("刷新", "refresh", () => pagePlugins())]
     );
   }
 
   // ---------------- 运行日志 ----------------
+  const logState = { level: "" };
+
   async function pageLogs() {
     shell(loading(), "运行日志", "调度任务与最近日志");
     const [logs, jobs] = await Promise.all([
-      api("/system/logs?limit=500"),
+      api("/system/logs?limit=500" + (logState.level ? "&level=" + logState.level : "")),
       api("/system/jobs"),
     ]);
 
     const box = el(
       "div",
       { class: "logs" },
-      logs.items.map((item) =>
-        el("div", {
-          class: "log-line log-" + item.level,
-          text: item.time + " [" + item.level + "] " + item.logger + " - " + item.message,
-        })
-      )
+      logs.items.length
+        ? logs.items.map((item) =>
+            el("div", {
+              class: "log-line log-" + item.level,
+              text: item.time + " [" + item.level + "] " + item.logger + " - " + item.message,
+            })
+          )
+        : [el("div", { class: "dim", text: "暂无该级别日志" })]
     );
 
-    const jobsCard = el("div", { class: "card" }, [
-      el("h3", { text: "定时任务" }),
+    const jobsCard = el("div", { class: "card flush" }, [
+      el("div", { class: "card-head" }, [
+        el("h3", {}, [icon("clock", "sm"), el("span", { text: "调度任务" })]),
+        iconButton("任务设置", "settings", () => go("schedules"), "sm ghost"),
+      ]),
       table(
         [
-          { title: "任务", render: (row) => row.name },
+          {
+            title: "任务",
+            render: (row) =>
+              el("div", {}, [
+                el("div", { text: row.name }),
+                el("div", { class: "cell-sub mono", text: row.id }),
+              ]),
+          },
+          {
+            title: "类型",
+            render: (row) =>
+              row.builtin
+                ? el("span", { class: "tag brand", text: "内置" })
+                : el("span", { class: "tag", text: "插件" }),
+          },
           {
             title: "触发规则",
-            render: (row) => el("span", { class: "mono muted", text: row.trigger }),
+            render: (row) => el("span", { class: "mono dim tiny", text: row.trigger }),
           },
-          { title: "下次执行", render: (row) => fmtTime(row.next_run_time) },
+          {
+            title: "下次执行",
+            render: (row) =>
+              el("div", {}, [
+                el("div", { class: "tiny", text: fmtRelative(row.next_run_time) }),
+                el("div", { class: "cell-sub", text: fmtTime(row.next_run_time) }),
+              ]),
+          },
           {
             title: "操作",
-            render: (row) => {
-              const button = el("button", { class: "btn sm", text: "立即执行" });
-              button.addEventListener("click", async () => {
+            render: (row) =>
+              iconButton("立即执行", "play", async () => {
                 try {
                   await api("/system/jobs/" + encodeURIComponent(row.id) + "/run", {
                     method: "POST",
@@ -1605,9 +2653,7 @@
                 } catch (error) {
                   toast(error.message, "err");
                 }
-              });
-              return button;
-            },
+              }, "sm ghost"),
           },
         ],
         jobs.items,
@@ -1615,24 +2661,41 @@
       ),
     ]);
 
-    const testNotify = el("button", { class: "btn", text: "测试通知" });
-    testNotify.addEventListener("click", async () => {
-      try {
-        const result = await api("/system/notify/test", { method: "POST" });
-        toast(result.message, result.success ? "ok" : "err");
-      } catch (error) {
-        toast(error.message, "err");
-      }
-    });
+    const logCard = el("div", { class: "card" }, [
+      el("div", { class: "card-head" }, [
+        el("h3", {}, [icon("logs", "sm"), el("span", { text: "日志" })]),
+        segment(
+          [
+            { value: "", label: "全部" },
+            { value: "INFO", label: "INFO" },
+            { value: "WARNING", label: "WARN" },
+            { value: "ERROR", label: "ERROR" },
+          ],
+          logState.level,
+          (value) => {
+            logState.level = value;
+            pageLogs();
+          }
+        ),
+      ]),
+      box,
+    ]);
 
     shell(
-      el("div", { class: "grid" }, [
-        jobsCard,
-        el("div", { class: "card" }, [el("h3", { text: "日志" }), box]),
-      ]),
+      el("div", { class: "grid" }, [jobsCard, logCard]),
       "运行日志",
       logs.total + " 条",
-      [el("button", { class: "btn", text: "刷新", onclick: pageLogs }), testNotify]
+      [
+        iconButton("刷新", "refresh", () => pageLogs()),
+        iconButton("测试通知", "info", async () => {
+          try {
+            const result = await api("/system/notify/test", { method: "POST" });
+            toast(result.message, result.success ? "ok" : "err");
+          } catch (error) {
+            toast(error.message, "err");
+          }
+        }),
+      ]
     );
     box.scrollTop = box.scrollHeight;
   }
@@ -1640,19 +2703,22 @@
   // ---------------- 追新雷达 ----------------
   async function pageRadar() {
     shell(loading(), "追新雷达", "拉取各站点最新资源，自动匹配订阅并下载");
-    const [jobs, sites] = await Promise.all([
-      api("/radar/jobs"),
+    const [schedules, sites] = await Promise.all([
+      api("/schedules"),
       api("/sites?kind=indexer&enabled_only=true"),
     ]);
+    const radar = schedules.items.filter((item) => item.key === "radar");
 
     const feedBox = el("div", { class: "card" }, [
-      el("h3", { text: "最新资源流" }),
+      el("h3", {}, [icon("radar", "sm"), el("span", { text: "最新资源流" })]),
       el("div", { class: "muted", text: "点击「预览最新流」拉取各站点最新发布的资源。" }),
     ]);
 
     const renderFeed = (items) => {
       feedBox.replaceChildren(
-        el("h3", { text: "最新资源流（" + items.length + " 条）" }),
+        el("div", { class: "card-head" }, [
+          el("h3", {}, [icon("radar", "sm"), el("span", { text: "最新资源流（" + items.length + " 条）" })]),
+        ]),
         table(
           [
             {
@@ -1664,13 +2730,15 @@
             {
               title: "类型",
               render: (row) =>
-                el("span", {
-                  class: "tag " + (row.kind === "pan" ? "brand" : "ok"),
-                  text: row.kind === "pan" ? "网盘" : "BT",
-                }),
+                el("span", { class: "tag " + (row.kind === "pan" ? "brand" : "ok") }, [
+                  icon(row.kind === "pan" ? "cloud" : "link", "sm"),
+                  el("span", { text: row.kind === "pan" ? "网盘" : "BT" }),
+                ]),
             },
-            { title: "体积", render: (row) => fmtSize(row.size) },
-            { title: "发布", render: (row) => fmtTime(row.publish_at) },
+            { title: "做种", class: "num", render: (row) => row.seeders || "-" },
+            { title: "体积", class: "num", render: (row) => fmtSize(row.size) },
+            { title: "发布", render: (row) => el("span", { class: "tiny dim", text: fmtTime(row.publish_at) }) },
+            { title: "操作", render: (row) => downloadButton(row) },
           ],
           items,
           "没有获取到最新资源，请确认已启用支持最新流的站点"
@@ -1679,7 +2747,7 @@
     };
 
     const resultBox = el("div", { class: "card" }, [
-      el("h3", { text: "匹配结果" }),
+      el("h3", {}, [icon("check", "sm"), el("span", { text: "匹配结果" })]),
       el("div", {
         class: "muted",
         text: "「预览匹配」只做匹配不下载；「立即追新」会真实投递下载任务。",
@@ -1689,16 +2757,21 @@
     const renderRun = (data) => {
       const rows = data.downloads || [];
       resultBox.replaceChildren(
-        el("h3", { text: data.dry_run ? "预览匹配结果" : "追新执行结果" }),
-        el("div", { class: "row tight", style: "margin-bottom:10px;flex-wrap:wrap" }, [
-          el("span", { class: "tag", text: "资源 " + (data.resources || 0) }),
-          el("span", { class: "tag", text: "活跃订阅 " + (data.subscribes || 0) }),
-          el("span", { class: "tag ok", text: "命中订阅 " + (data.matched || 0) }),
-          el("span", {
-            class: "tag " + (data.dry_run ? "warn" : "brand"),
-            text: (data.dry_run ? "待下载 " : "已投递 ") + rows.length,
-          }),
-          el("span", { class: "muted", text: (data.elapsed_ms || 0) + "ms" }),
+        el("div", { class: "card-head" }, [
+          el("h3", {}, [
+            icon("check", "sm"),
+            el("span", { text: data.dry_run ? "预览匹配结果" : "追新执行结果" }),
+          ]),
+          el("div", { class: "chips" }, [
+            el("span", { class: "tag", text: "资源 " + (data.resources || 0) }),
+            el("span", { class: "tag", text: "活跃订阅 " + (data.subscribes || 0) }),
+            el("span", { class: "tag ok", text: "命中订阅 " + (data.matched || 0) }),
+            el("span", {
+              class: "tag " + (data.dry_run ? "warn" : "brand"),
+              text: (data.dry_run ? "待下载 " : "已投递 ") + rows.length,
+            }),
+            el("span", { class: "tag", text: (data.elapsed_ms || 0) + "ms" }),
+          ]),
         ]),
         table(
           [
@@ -1710,18 +2783,18 @@
             },
             { title: "集数", render: (row) => (row.episodes || []).join(",") || "-" },
             { title: "站点", render: (row) => el("span", { class: "tag", text: row.site || "-" }) },
-            { title: "评分", render: (row) => (row.score || 0).toFixed(1) },
+            { title: "评分", class: "num", render: (row) => (row.score || 0).toFixed(1) },
           ],
           rows,
           "本轮没有命中任何缺集资源"
         ),
         (data.skipped || []).length
-          ? el("div", { style: "margin-top:12px" }, [
-              el("h4", { text: "被过滤的订阅" }),
+          ? el("div", { style: "margin-top:14px" }, [
+              el("div", { class: "dim tiny", style: "margin-bottom:6px", text: "被过滤的订阅" }),
               table(
                 [
                   { title: "订阅", render: (row) => row.title },
-                  { title: "候选数", render: (row) => row.candidates },
+                  { title: "候选数", class: "num", render: (row) => row.candidates },
                   { title: "原因", render: (row) => el("span", { class: "muted", text: row.reason }) },
                 ],
                 data.skipped
@@ -1731,10 +2804,13 @@
       );
     };
 
-    const previewFeed = el("button", { class: "btn", text: "预览最新流" });
+    const previewFeed = el("button", { class: "btn" }, [
+      icon("radar", "sm"),
+      el("span", { text: "预览最新流" }),
+    ]);
     previewFeed.addEventListener("click", async () => {
       previewFeed.disabled = true;
-      previewFeed.textContent = "拉取中…";
+      previewFeed.querySelector("span").textContent = "拉取中…";
       try {
         const data = await api("/radar/feed?limit_per_site=30");
         renderFeed(data.data.items);
@@ -1743,13 +2819,16 @@
         toast(error.message, "err");
       }
       previewFeed.disabled = false;
-      previewFeed.textContent = "预览最新流";
+      previewFeed.querySelector("span").textContent = "预览最新流";
     });
 
-    const dryRun = el("button", { class: "btn", text: "预览匹配" });
+    const dryRun = el("button", { class: "btn" }, [
+      icon("check", "sm"),
+      el("span", { text: "预览匹配" }),
+    ]);
     dryRun.addEventListener("click", async () => {
       dryRun.disabled = true;
-      dryRun.textContent = "匹配中…";
+      dryRun.querySelector("span").textContent = "匹配中…";
       try {
         const data = await api("/radar/run?dry_run=true", { method: "POST" });
         renderRun(data.data);
@@ -1758,14 +2837,17 @@
         toast(error.message, "err");
       }
       dryRun.disabled = false;
-      dryRun.textContent = "预览匹配";
+      dryRun.querySelector("span").textContent = "预览匹配";
     });
 
-    const runNow = el("button", { class: "btn primary", text: "立即追新" });
+    const runNow = el("button", { class: "btn primary" }, [
+      icon("play", "sm"),
+      el("span", { text: "立即追新" }),
+    ]);
     runNow.addEventListener("click", async () => {
       if (!confirm("将拉取各站点最新资源并对缺集自动投递下载，确认继续？")) return;
       runNow.disabled = true;
-      runNow.textContent = "执行中…";
+      runNow.querySelector("span").textContent = "执行中…";
       try {
         const data = await api("/radar/run", { method: "POST" });
         renderRun(data.data);
@@ -1774,22 +2856,52 @@
         toast(error.message, "err");
       }
       runNow.disabled = false;
-      runNow.textContent = "立即追新";
+      runNow.querySelector("span").textContent = "立即追新";
     });
 
     const jobCard = el("div", { class: "card" }, [
-      el("h3", { text: "定时追新任务" }),
-      jobs.data.jobs.length
+      el("div", { class: "card-head" }, [
+        el("h3", {}, [icon("clock", "sm"), el("span", { text: "定时追新任务" })]),
+        iconButton("任务设置", "settings", () => go("schedules"), "sm ghost"),
+      ]),
+      radar.length
         ? table(
             [
               { title: "任务", render: (row) => row.name },
-              { title: "触发规则", render: (row) => el("span", { class: "mono muted", text: row.trigger }) },
-              { title: "下次执行", render: (row) => fmtTime(row.next_run_time) },
+              {
+                title: "状态",
+                render: (row) =>
+                  row.enabled
+                    ? el("span", { class: "tag dot ok", text: "已启用" })
+                    : el("span", { class: "tag dot warn", text: "已关闭" }),
+              },
+              {
+                title: "触发规则",
+                render: (row) =>
+                  el("span", { class: "mono", text: row.trigger === "cron" ? row.cron : "每 " + row.minutes + " 分钟" }),
+              },
+              {
+                title: "下次执行",
+                render: (row) =>
+                  el("div", {}, [
+                    el("div", { class: "tiny", text: fmtRelative(row.next_run_time) }),
+                    el("div", { class: "cell-sub", text: fmtTime(row.next_run_time) }),
+                  ]),
+              },
+              {
+                title: "操作",
+                render: (row) =>
+                  el("div", { class: "row tight" }, [
+                    iconButton("修改周期", "edit", () => scheduleForm(row, pageRadar), "sm"),
+                    iconButton("立即执行", "play", () => runSchedule(row, pageRadar), "sm ghost"),
+                  ]),
+              },
             ],
-            jobs.data.jobs
+            radar
           )
-        : el("div", { class: "empty", text: "雷达定时任务未启用（CF_RADAR_ENABLED=false 或调度器已关闭）" }),
-      el("div", { class: "muted", style: "margin-top:10px", text:
+        : emptyBox("雷达定时任务未启用（CF_RADAR_ENABLED=false 或调度器已关闭）", "clock"),
+      el("div", { class: "divider" }),
+      el("div", { class: "dim tiny", text:
         "当前启用的索引站点：" + (sites.length ? sites.map((s) => s.name).join("、") : "无（请先在站点管理启用站点）") }),
     ]);
 
@@ -1805,7 +2917,9 @@
   const ROUTES = {
     dashboard: pageDashboard,
     search: pageSearch,
+    trending: pageTrending,
     subscribes: pageSubscribes,
+    schedules: pageSchedules,
     downloads: pageDownloads,
     library: pageLibrary,
     radar: pageRadar,
@@ -1831,7 +2945,7 @@
     } catch (error) {
       if (store.token) {
         shell(
-          el("div", { class: "card empty", text: error.message }),
+          el("div", { class: "card" }, [emptyBox(error.message, "alert")]),
           "出错了",
           "请检查服务状态或重新登录"
         );

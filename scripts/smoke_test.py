@@ -194,6 +194,29 @@ print(
 )
 
 print("\n" + "=" * 70)
+print("4d) 热度排行：资源榜 / 热词 / 站点榜 / 实时榜")
+print("=" * 70)
+overview = call("GET", "/trending?days=30&limit=5", token=token)
+ov = overview.get("data") or {}
+print(
+    f"       总览：资源榜 {len(ov.get('resources') or [])} 条 / "
+    f"热词 {len(ov.get('keywords') or [])} 个 / 站点 {len(ov.get('sites') or [])} 个"
+)
+ranking = call("GET", "/trending/resources?days=30&limit=10", token=token)
+rows = (ranking.get("data") or {}).get("items") or []
+print(f"       资源热度榜 {len(rows)} 条（无历史搜索缓存时为 0 属正常）")
+for row in rows[:3]:
+    print(
+        f"         #{row.get('rank')} {str(row.get('title'))[:24]} "
+        f"heat={row.get('heat')} {row.get('heat_percent')}%"
+    )
+call("GET", "/trending/keywords?days=60&limit=8", token=token)
+call("GET", "/trending/sites?days=30&limit=10", token=token)
+live = call("GET", "/trending/live?limit=5&limit_per_site=10", token=token)
+live_rows = (live.get("data") or {}).get("items") or []
+print(f"       实时热榜 {len(live_rows)} 条（未启用站点时为 0 属正常）")
+
+print("\n" + "=" * 70)
 print("5) 搜索（无启用站点时应优雅返回空）")
 print("=" * 70)
 search = call("GET", "/search?keyword=" + urllib.parse.quote("庆余年") + "&media_type=tv", token=token)
@@ -276,6 +299,45 @@ for job in items_of(jobs):
 
 for plugin_id in ("auto_cleanup", "pan_transfer", "daily_digest"):
     call("POST", f"/plugins/{plugin_id}/disable", token=token)
+
+print("\n" + "=" * 70)
+print("9b) 定时任务设置：查看 / 改期 / 重置 / 立即执行")
+print("=" * 70)
+schedules = call("GET", "/schedules", token=token)
+sched_items = items_of(schedules)
+print(f"       内置任务 {len(sched_items)} 个")
+for item in sched_items:
+    rule = (
+        f"{item.get('minutes')} 分钟"
+        if item.get("trigger") == "interval"
+        else f"cron {item.get('cron')}"
+    )
+    print(
+        f"         {item.get('key'):10} {item.get('name')[:18]:20} "
+        f"{rule:16} enabled={item.get('enabled')} next={item.get('next_run_time')}"
+    )
+call("GET", "/schedules/subscribe", token=token)
+call("GET", "/schedules/no-such-job", token=token, expect=(404,))
+
+# 改期 → 校验生效 → 重置回默认
+updated = call("PUT", "/schedules/subscribe", token=token,
+               body={"trigger": "interval", "minutes": 45, "enabled": True})
+udata = updated.get("data") or {}
+print(f"       改期后：minutes={udata.get('minutes')} customized={udata.get('customized')} "
+      f"applied={udata.get('applied')} next={udata.get('next_run_time')}")
+call("PUT", "/schedules/library", token=token,
+     body={"trigger": "cron", "cron": "30 5 * * *"})
+# 非法规则必须被拒
+call("PUT", "/schedules/subscribe", token=token,
+     body={"trigger": "cron", "cron": "bad expr"}, expect=(400, 422))
+call("PUT", "/schedules/subscribe", token=token,
+     body={"trigger": "interval", "minutes": 0}, expect=(400, 422))
+
+reset = call("POST", "/schedules/subscribe/reset", token=token)
+rdata = reset.get("data") or {}
+print(f"       重置后：minutes={rdata.get('minutes')} customized={rdata.get('customized')}")
+call("POST", "/schedules/library/reset", token=token)
+call("POST", "/schedules/radar/run", token=token, expect=(200, 400))
 
 print("\n" + "=" * 70)
 print("10) 清理测试数据")

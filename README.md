@@ -9,7 +9,7 @@
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)](#-docker-部署推荐)
-[![Tests](https://img.shields.io/badge/tests-136%20passed-brightgreen)](#-测试)
+[![Tests](https://img.shields.io/badge/tests-156%20passed-brightgreen)](#-测试)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 </div>
@@ -147,6 +147,74 @@ CineFlow 是一个**从零实现**的 NAS 影视自动化项目，设计上参�
 - **只统计已播出集**：新番不会因为"总集数 12 集"而一直提示缺集
 - **跨站去重**：磁力链按 infohash 归一，同一资源在多站出现只处理一次
 
+### 🔥 热度排行
+
+搜索页与「热度排行」页都能看到榜单，**不依赖任何第三方榜单接口**，
+完全由你自己站点的真实搜索结果算出来：
+
+| 榜单 | 数据来源 | 说明 |
+|---|---|---|
+| 资源热度榜 | 本地搜索缓存（`resources` 表） | 按「作品 + 季」归并，跨站聚合 |
+| 实时热榜 | 联网拉取各站最新发布流 | 不依赖历史数据，冷启动也有榜 |
+| 搜索热词 | 历史搜索关键词 | 点击热词直接发起搜索 |
+| 站点贡献榜 | 各站命中条目数 | 判断哪个站真的在出货 |
+
+热度是一个**可解释的加权分**，而不是黑盒：
+
+```
+heat = min(做种数, 5000) ^ 0.5 × 3      # 做种数（开方避免头部通吃）
+     + 站点数 × 14                       # 多站都有 → 是热资源
+     + min(条目数, 40) × 1.6             # 同作品资源条目越多越热
+     + min(集数, 60) × 0.8               # 更新集数
+     + 新鲜度                             # 24h 内满分 20，之后 96h 半衰
+     + 画质加成                           # 2160p +12 / 1080p +8 / 720p +4
+     + 有网盘资源 +6
+```
+
+最终线性归一化成 `heat_percent`（0~100）用于渲染热度条，
+`rank` 前三名带金/银/铜徽标。榜单支持按 `media_type`（电影/剧集）与
+`kind`（BT / 网盘）过滤，统计窗口 `days` 可调（默认 14 天）。
+榜单里任意一项都能**一键订阅**，直接进入自动追新。
+
+**榜单会做去碎片化归并**。发布站常把同一集打成多种封装，
+若直接按标题分组，一部剧会被拆成十几条并列占满榜单：
+
+```
+师兄太稳健[第16-17集][国语配音+中文字幕].Pull.Strings.S01.2026.2160p.WEB-DL
+师兄太稳健[高码版][第10-11集]...
+师兄太稳健[60帧率版本][杜比视界版本][高码版][第08-09集]...
+第18集 师兄太稳健[第18集][国语音轨]...
+✅「师兄太稳健」全17集...
+                    ↓ 归并后
+           师兄太稳健 · S01 · 8 条资源 / 2 站点
+```
+
+归并规则：剥离**版本标记**（高码版 / 60帧率版本 / 杜比视界版本 / 国语配音 / 中文字幕…）、
+**集数标记**（`第09集`、`第01,02集`、`第12-13集`、`全36集`、`更15集`、`EP05`）、
+**季标记**（`第二季` / `S02`）与装饰符号（`✅` `★` `「」`），
+再按「作品名 + 季号」聚合；季号缺失的剧集按第 1 季归并（站点常省略单季剧的季号）。
+不同季仍然分开成榜。该归并**只作用于榜单展示**，不影响资源名解析、
+下载命名与缺集计算。
+
+### ⏱ 定时任务可视化设置
+
+4 个内置任务的触发规则都能在界面上改，**不用改配置文件、不用重启**：
+
+| 任务 | 默认 | 作用 |
+|---|---|---|
+| 订阅巡检（自动追新） | 每 30 分钟 | 逐个活跃订阅去各站搜索缺失集 |
+| 追新雷达 | 每 15 分钟 | 拉各站最新流再匹配订阅，延迟最低 |
+| 下载状态同步与自动整理 | 每 5 分钟 | 同步进度，完成即硬链入库并刷新媒体服务器 |
+| 媒体库全量扫描 | 每天 `0 4 * * *` | 重建入库索引，用于缺集计算与去重 |
+
+- 两种触发方式：**interval**（1 ~ 10080 分钟）与 **cron**（标准 5 段表达式）
+- 非法规则**当场拒绝**并给出原因（如 `非法 cron 表达式`），不会把调度器搞坏
+- 改完**立即改期**并显示新的下次执行时间，同时可单独启停某个任务
+- 改动写入 `settings` 表 → **重启后依然生效**；静态配置（`.env` / `config.yaml`）
+  只作为默认值，随时可「重置为默认」
+- 每个任务都能**立即执行一次**，用于验证配置
+- 「订阅追新」页顶部内嵌快捷卡片，可直接调周期或立即跑一次
+
 ### 🧩 插件系统
 
 三种能力任选，放进 `plugins/<id>/` 目录即可被发现，Web 端可视化启停与配置：
@@ -163,13 +231,38 @@ CineFlow 是一个**从零实现**的 NAS 影视自动化项目，设计上参�
 - **`pan_transfer` 网盘转存助手** — 汇总待转存网盘资源，可对接自建转存 Webhook 实现全自动
 - **`daily_digest` 每日追剧日报** — 每天 cron 推送新入库、订阅进度、缺集与下载状态
 
-### 🖥 其他
+### 🎨 界面与主题
 
-- **Web 控制台零依赖**：原生 JS + CSS，**不加载任何 CDN**，NAS 离线内网可用
-- **8 个功能页**：仪表盘 / 资源搜索 / 订阅追新 / 下载任务 / 媒体库 / 站点管理 / 插件 / 运行日志
+**零依赖前端**：原生 JS + CSS 手写，**不加载任何 CDN / 不用构建工具**，
+NAS 离线内网直接可用，整个前端只有 `index.html` + `app.js` + `style.css` 三个文件。
+
+- **三档主题**：暗色 / 浅色 / **跟随系统**。选择写入 `localStorage.cf_theme`，
+  `<head>` 内有一段极小的内联脚本在首屏渲染前就定好 `data-theme`，
+  **切换与刷新都不会闪白**；选「跟随系统」时监听 `prefers-color-scheme` 实时响应
+- **完整 token 化设计系统**：所有颜色走语义变量
+  （`--surface-0..3` / `--text` / `--accent` / `--ok|warn|err` / `--ring` / `--shadow-1..3`），
+  两套主题各自一份取值，组件代码零改动即可换肤
+- **11 个功能页**分五组导航（总览 / 发现 / 追剧 / 入库 / 系统），侧边栏按组折行
+- **约 35 个内联 SVG 线性图标**，无字体图标、无图片请求
+- **骨架屏加载**（不再是白屏转圈）、空态插画、热度条、排名徽标、
+  分段控件（segment）、标签云（chips）等组件
+- **响应式**：980px 折叠侧边栏，560px 单列排布；支持
+  `prefers-reduced-motion`（关闭动画）与打印样式
 - **双认证**：JWT（Web）+ `X-API-Token`（外部脚本自动化）
 - **优雅降级**：没配 TMDB、没配站点、没配下载器，系统都不崩，只返回空结果或明确提示
 - **自带 OpenAPI 文档**：`/docs`（Swagger）、`/redoc`
+
+#### 参考的开源设计方案
+
+视觉体系并非凭感觉调色，而是从以下开源项目里取用了**公开的设计 token 与命名范式**
+（仅参考色阶数值与命名思路，未拷贝任何代码）：
+
+| 项目 | 取用内容 |
+|---|---|
+| [radix-ui/colors](https://github.com/radix-ui/colors) | 12 级色阶体系。暗/浅两套主题的 slate / indigo / violet / grass / amber / red 取值直接对齐其 `dark.ts` / `light.ts`（如 `indigo9=#3e63dd`、`grass9=#46a758`、`red9=#e5484d`） |
+| [argyleink/open-props](https://github.com/argyleink/open-props) | 灰阶 HSL 分层思路，以及圆角 / 间距 / 阴影的尺度 token 命名 |
+| [shadcn-ui/ui](https://github.com/shadcn-ui/ui) | 语义化 token 命名法：`surface` / `muted` / `accent` / `ring` / `destructive` |
+| [feathericons/feather](https://github.com/feathericons/feather) | 线性图标风格（1.5px 描边、24 网格、圆头端点），图标路径为等价手写 |
 
 ---
 
@@ -179,21 +272,24 @@ CineFlow 是一个**从零实现**的 NAS 影视自动化项目，设计上参�
 ┌──────────────────────────────────────────────────────────────┐
 │  web/  零依赖 Web 控制台（原生 JS，无 CDN）                     │
 └────────────────────────────┬─────────────────────────────────┘
-                             │ REST /api/v1（53 个端点）
+                             │ REST /api/v1（63 个端点）
 ┌────────────────────────────▼─────────────────────────────────┐
-│  app/api/      10 个 router：auth search subscribes downloads │
-│                 library media sites plugins system radar      │
+│  app/api/      12 个 router：auth search trending subscribes  │
+│                 radar schedules downloads library media       │
+│                 sites plugins system                          │
 ├──────────────────────────────────────────────────────────────┤
 │  app/services/  业务编排层                                     │
 │    search    多级关键词 · 并发聚合 · 去重                       │
 │    subscribe 缺集计算 · 择优下载 · 巡检                         │
 │    radar     站点最新流 → 匹配订阅 → 自动追新                    │
+│    trending  热度加权打分 → 资源榜/实时榜/热词/站点榜             │
 │    discovery 导航站解析 → 候选资源站发现                         │
 │    presets   自定义站点配置模板                                 │
 │    download  投递下载器 · 进度同步                             │
 │    library   整理入库 · 扫描 · 刷新媒体服务器                    │
 │    notify    事件总线 + 多渠道推送                              │
-│    scheduler APScheduler（4 内置任务 + 插件任务）                │
+│    scheduler APScheduler（4 内置任务 + 插件任务），可视化改期      │
+│    settings_store 运行期设置持久化（settings 表）               │
 │    sites     DB 配置 → Provider 实例                           │
 ├──────────────────────────────────────────────────────────────┤
 │  app/core/      纯函数内核（无 IO，易测）                        │
@@ -643,18 +739,20 @@ curl -X POST -H "X-API-Token: your-token" \
      http://127.0.0.1:6060/api/v1/subscribes/run-all
 ```
 
-主要端点分组（共 53 个）：
+主要端点分组（共 63 个）：
 
 | 前缀 | 用途 |
 |---|---|
 | `/api/v1/auth` | 登录、当前用户、改密 |
 | `/api/v1/search` | 聚合搜索（GET 快查 / POST 带完整过滤条件） |
+| `/api/v1/trending` | 热度排行：总览、资源榜、实时榜、搜索热词、站点贡献榜 |
 | `/api/v1/subscribes` | 订阅 CRUD、缺集查询、单个/全部巡检 |
 | `/api/v1/downloads` | 任务列表、手动添加、暂停恢复、删除、同步 |
 | `/api/v1/library` | 统计、文件列表、扫描、手动整理、整理记录、刷新 |
 | `/api/v1/media` | 资源名识别、TMDB 搜索/详情/分集/热榜 |
 | `/api/v1/sites` | 站点 CRUD、连通性测试、Provider 清单、预设模板、导航站发现 |
 | `/api/v1/radar` | 追新雷达：手动追新、预览匹配、最新流预览、任务状态 |
+| `/api/v1/schedules` | 定时任务：查看、改期（interval/cron）、重置、立即执行 |
 | `/api/v1/plugins` | 列表、启停、配置、执行动作 |
 | `/api/v1/system` | 仪表盘、系统信息、调度任务、日志、通知 |
 
@@ -664,7 +762,7 @@ curl -X POST -H "X-API-Token: your-token" \
 
 ```bash
 pip install -r requirements-dev.txt
-pytest -q                 # 136 passed
+pytest -q                 # 156 passed
 ruff check app tests      # 静态检查
 ```
 
@@ -679,6 +777,7 @@ ruff check app tests      # 静态检查
 | `test_plugins.py` | 插件发现、启停、配置、动作、事件、cron/interval 注册 |
 | `test_custom_sites.py` | **自定义站点**：JSON 字段映射、两阶段详情抓取、正则解析、导航站发现、预设 |
 | `test_radar.py` | **追新雷达**：标题匹配、跨站去重、缺集命中、过滤规则、dry-run |
+| `test_trending.py` | **热度排行 + 定时任务**：热度打分与排序、窗口过滤、热词、站点榜、**发布版本/集号归并去碎片化**、cron/interval 校验、改期持久化 |
 
 全部测试使用内存假 Provider，**全程不触网**。
 
@@ -689,8 +788,8 @@ ruff check app tests      # 静态检查
 ```bash
 python -m app.main &                  # 先起服务
 
-python scripts/smoke_test.py          # 67 项真实 HTTP 接口用例
-python scripts/ui_check.py            # Playwright 真浏览器逐页点检 9 个页面，捕获 JS 报错
+python scripts/smoke_test.py          # 82 项真实 HTTP 接口用例
+python scripts/ui_check.py            # Playwright 真浏览器逐页点检 11 个页面 + 主题切换，捕获 JS 报错
 python scripts/demo_pipeline.py       # 真实文件演示解析→硬链入库→缺集收敛（无需服务）
 python scripts/live_check.py          # 真实站点端到端：启用 mukaku→搜索→订阅→雷达匹配（联网）
 python scripts/verify_docs.py         # 校验 README 事实声明与代码一致
@@ -707,15 +806,15 @@ cineflow/
 │   ├── db/            session base models init_db
 │   ├── providers/     base registry + indexer/ pan/ downloader/ mediaserver/ notify/ metadata/
 │   ├── services/      sites search notify download library subscribe scheduler
-│   │                  radar discovery presets
+│   │                  radar trending discovery presets settings_store
 │   ├── plugins/       base manager
-│   ├── api/           deps router + routers/(10)
+│   ├── api/           deps router + routers/(12)
 │   ├── schemas/       enums models
 │   ├── utils/         http strings
 │   └── main.py        应用入口（lifespan / CORS / 静态资源）
 ├── web/               index.html + assets/(app.js style.css)  ← 零依赖前端
 ├── plugins/           auto_cleanup pan_transfer daily_digest  ← 示例插件
-├── tests/             9 个测试文件
+├── tests/             10 个测试文件
 ├── scripts/           smoke_test / ui_check / demo_pipeline 验证脚本
 ├── config/            config.yaml.example
 ├── docker/            entrypoint.sh

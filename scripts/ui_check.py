@@ -15,10 +15,12 @@ SHOTS.mkdir(parents=True, exist_ok=True)
 PAGES = [
     ("dashboard", "仪表盘"),
     ("search", "资源搜索"),
+    ("trending", "热度排行"),
     ("subscribes", "订阅追新"),
+    ("radar", "追新雷达"),
+    ("schedules", "定时任务"),
     ("downloads", "下载任务"),
     ("library", "媒体库"),
-    ("radar", "追新雷达"),
     ("sites", "站点管理"),
     ("plugins", "插件"),
     ("logs", "运行日志"),
@@ -66,8 +68,14 @@ def main():
         page.wait_for_timeout(1500)
         page.screenshot(path=str(SHOTS / "01-after-login.png"))
 
-        nav_count = page.locator("nav a, .nav a, aside a").count()
-        print(f"   登录成功，侧边导航项 {nav_count} 个")
+        nav_count = page.locator("aside .nav-item").count()
+        group_count = page.locator("aside .nav-label").count()
+        print(f"   登录成功，侧边导航项 {nav_count} 个（分组 {group_count} 个）")
+        # 11 个功能页 + 1 个退出按钮
+        if nav_count != len(PAGES) + 1:
+            errors.append(
+                f"[nav] 导航项 {nav_count} 个，期望 {len(PAGES) + 1} 个"
+            )
 
         print("\n" + "=" * 68)
         print("3) 逐页点检")
@@ -223,6 +231,114 @@ def main():
             body = page.inner_text("body")
             print(f"   最新流区块渲染：{'最新资源流' in body}")
             page.screenshot(path=str(SHOTS / "18-radar-feed.png"), full_page=True)
+
+        print("\n" + "=" * 68)
+        print("6d) 交互测试：暗色 / 浅色主题切换")
+        print("=" * 68)
+        page.goto(f"{BASE}/#dashboard", wait_until="networkidle")
+        page.wait_for_timeout(900)
+        theme_before = page.evaluate("() => document.documentElement.dataset.theme")
+        print(f"   初始主题：{theme_before}")
+        switched = []
+        btn = page.locator(".theme-toggle").first
+        if btn.count():
+            # 依次点击主题切换控件内的每个可点击项
+            options = page.locator(".theme-toggle button[data-theme-btn]")
+            total = options.count()
+            print(f"   主题切换控件按钮 {total} 个")
+            for i in range(total):
+                options.nth(i).click()
+                page.wait_for_timeout(500)
+                now = page.evaluate("() => document.documentElement.dataset.theme")
+                stored = page.evaluate("() => localStorage.getItem('cf_theme')")
+                switched.append((stored, now))
+                print(f"     点击 #{i + 1} -> data-theme={now} localStorage.cf_theme={stored}")
+            page.screenshot(path=str(SHOTS / "19-theme.png"), full_page=True)
+            themes_seen = {item[1] for item in switched}
+            print(f"   出现过的主题：{sorted(themes_seen)}")
+            print(f"   主题确实发生切换：{len(themes_seen) > 1}")
+            # 校验浅色主题下背景色确实变化
+            page.evaluate("() => { localStorage.setItem('cf_theme','light'); }")
+            page.reload(wait_until="networkidle")
+            page.wait_for_timeout(900)
+            light_bg = page.evaluate(
+                "() => getComputedStyle(document.body).backgroundColor"
+            )
+            light_attr = page.evaluate("() => document.documentElement.dataset.theme")
+            page.screenshot(path=str(SHOTS / "20-theme-light.png"), full_page=True)
+            page.evaluate("() => { localStorage.setItem('cf_theme','dark'); }")
+            page.reload(wait_until="networkidle")
+            page.wait_for_timeout(900)
+            dark_bg = page.evaluate(
+                "() => getComputedStyle(document.body).backgroundColor"
+            )
+            dark_attr = page.evaluate("() => document.documentElement.dataset.theme")
+            print(f"   浅色：data-theme={light_attr} body bg={light_bg}")
+            print(f"   暗色：data-theme={dark_attr} body bg={dark_bg}")
+            print(f"   两主题背景色不同：{light_bg != dark_bg}")
+            if light_bg == dark_bg:
+                errors.append("[theme] 浅色与暗色背景色相同，主题未生效")
+        else:
+            errors.append("[theme] 未找到 .theme-toggle 控件")
+            print("   未找到主题切换控件")
+
+        print("\n" + "=" * 68)
+        print("6e) 交互测试：热度排行榜单切换")
+        print("=" * 68)
+        page.goto(f"{BASE}/#trending", wait_until="networkidle")
+        page.wait_for_timeout(1500)
+        body = page.inner_text("body")
+        print(f"   热度页含「热度排行」：{'热度排行' in body}")
+        segs = page.locator(".segment button")
+        print(f"   榜单切换按钮 {segs.count()} 个")
+        for i in range(min(segs.count(), 4)):
+            label = segs.nth(i).inner_text()
+            segs.nth(i).click()
+            page.wait_for_timeout(1800)
+            text = page.inner_text("body")
+            print(f"     切到「{label}」-> 文本长度 {len(text)}")
+        page.screenshot(path=str(SHOTS / "21-trending.png"), full_page=True)
+        heat_bars = page.locator(".heat-bar")
+        rank_cells = page.locator(".rank")
+        print(f"   热度条 {heat_bars.count()} 个 / 排名徽标 {rank_cells.count()} 个")
+
+        print("\n" + "=" * 68)
+        print("6f) 交互测试：定时任务设置改期弹窗")
+        print("=" * 68)
+        page.goto(f"{BASE}/#schedules", wait_until="networkidle")
+        page.wait_for_timeout(1500)
+        body = page.inner_text("body")
+        print(f"   定时任务页含「定时任务」：{'定时任务' in body}")
+        for name in ("订阅巡检", "追新雷达", "下载状态同步", "媒体库全量扫描"):
+            print(f"   任务「{name}」显示：{name in body}")
+        page.screenshot(path=str(SHOTS / "22-schedules.png"), full_page=True)
+
+        edit = page.get_by_text("修改周期", exact=False).first
+        if not edit.count():
+            edit = page.get_by_text("编辑", exact=True).first
+        if edit.count():
+            edit.click()
+            page.wait_for_timeout(800)
+            modal = page.locator(".modal")
+            print(f"   改期弹窗渲染：{modal.count() > 0}")
+            if modal.count():
+                modal_text = page.inner_text(".modal")
+                print(f"   弹窗含触发方式选择：{'interval' in modal_text or '间隔' in modal_text}")
+                print(f"   弹窗含 cron 输入：{'cron' in modal_text.lower()}")
+                page.screenshot(path=str(SHOTS / "23-schedule-modal.png"))
+            close = page.get_by_text("取消", exact=True).first
+            if close.count():
+                close.click()
+                page.wait_for_timeout(400)
+        else:
+            print("   未找到改期按钮")
+
+        run_now = page.get_by_text("立即执行", exact=False).first
+        if run_now.count():
+            run_now.click()
+            page.wait_for_timeout(2500)
+            print(f"   立即执行后页面文本长度：{len(page.inner_text('body'))}")
+            page.screenshot(path=str(SHOTS / "24-schedule-run.png"), full_page=True)
 
         print("\n" + "=" * 68)
         print("7) 响应式检查（移动端 430x900）")
