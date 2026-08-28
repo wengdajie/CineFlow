@@ -1,0 +1,104 @@
+# ============================================================
+# CineFlow —— docker compose 部署示例
+#   docker compose up -d
+#   浏览器打开 http://<NAS_IP>:8611  默认账号 admin / cineflow
+# ------------------------------------------------------------
+# 重要：downloads 目录必须与下载器（qBittorrent 等）容器中的路径一致，
+#       否则 CineFlow 找不到下载完成的文件，也无法使用硬链接。
+#       library 与 downloads 建议放在同一个卷/文件系统上以启用硬链接。
+# ============================================================
+services:
+  cineflow:
+    image: cineflow:latest
+    build: .
+    container_name: cineflow
+    restart: unless-stopped
+    ports:
+      - "8611:8611"
+    environment:
+      # 群晖/威联通请改为实际用户，避免文件权限问题（id 命令可查）
+      PUID: 1000
+      PGID: 1000
+      TZ: Asia/Shanghai
+      # 首次启动的管理员账号，登录后请立即改密
+      CF_SUPERUSER: admin
+      CF_SUPERUSER_PASSWORD: cineflow
+      # 请替换为随机字符串
+      CF_SECRET_KEY: please-change-this-to-a-random-string
+      CF_TMDB_API_KEY: ""
+      CF_TRANSFER_MODE: link
+      CF_SUBSCRIBE_INTERVAL_MINUTES: 30
+    volumes:
+      - ./data:/app/data              # 数据库、日志（务必持久化）
+      - ./config:/app/config          # config.yaml
+      - ./plugins:/app/plugins        # 自定义插件
+      - /volume1/downloads:/downloads # ← 改成你的下载目录
+      - /volume1/media:/library       # ← 改成你的媒体库目录
+      - ./strm:/strm
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8611/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  # ---------------------------------------------------------
+  # 以下为可选配套服务，按需取消注释
+  # ---------------------------------------------------------
+
+  # BT 索引聚合器：把 PT/公开站点统一成 Torznab 接口供 CineFlow 调用
+  # 启用后在 CineFlow「站点管理」新增 torznab 站点，
+  # 地址填 http://jackett:9117/api/v2.0/indexers/<indexer>/results/torznab
+  # jackett:
+  #   image: lscr.io/linuxserver/jackett:latest
+  #   container_name: jackett
+  #   restart: unless-stopped
+  #   ports:
+  #     - "9117:9117"
+  #   environment:
+  #     PUID: 1000
+  #     PGID: 1000
+  #     TZ: Asia/Shanghai
+  #   volumes:
+  #     - ./jackett:/config
+
+  # BT 下载器
+  # qbittorrent:
+  #   image: lscr.io/linuxserver/qbittorrent:latest
+  #   container_name: qbittorrent
+  #   restart: unless-stopped
+  #   ports:
+  #     - "8080:8080"
+  #     - "6881:6881"
+  #     - "6881:6881/udp"
+  #   environment:
+  #     PUID: 1000
+  #     PGID: 1000
+  #     TZ: Asia/Shanghai
+  #     WEBUI_PORT: 8080
+  #   volumes:
+  #     - ./qbittorrent:/config
+  #     - /volume1/downloads:/downloads   # ← 必须与 cineflow 的 downloads 完全一致
+
+  # 网盘资源搜索（盘搜）：CineFlow 内置 pansou provider 直接对接
+  # pansou:
+  #   image: ghcr.io/fish2018/pansou:latest
+  #   container_name: pansou
+  #   restart: unless-stopped
+  #   ports:
+  #     - "8888:8888"
+
+  # 媒体服务器
+  # emby:
+  #   image: lscr.io/linuxserver/emby:latest
+  #   container_name: emby
+  #   restart: unless-stopped
+  #   ports:
+  #     - "8096:8096"
+  #   environment:
+  #     PUID: 1000
+  #     PGID: 1000
+  #     TZ: Asia/Shanghai
+  #   volumes:
+  #     - ./emby:/config
+  #     - /volume1/media:/library:ro      # ← 与 cineflow 的 library 一致

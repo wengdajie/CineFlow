@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+data/
+downloads/
+library/
+strm/
+config/config.yaml
+.env
+*.db
+*.log
+data/ui_shots/
+*.egg-info/
+.venv*/
+node_modules/

@@ -1,0 +1,81 @@
+# ============================================================
+# CineFlow 配置文件示例
+# ------------------------------------------------------------
+# 使用方法：复制为 config/config.yaml 后按需修改。
+# 优先级：代码默认值 < 本文件 < 环境变量（前缀 CF_）/ .env
+# 二级 key 会被拍平成 CF_<父>_<子>，例如 tmdb.api_key -> CF_TMDB_API_KEY
+# ============================================================
+
+# ---------- 基础 ----------
+host: "0.0.0.0"
+port: 8611
+debug: false
+timezone: "Asia/Shanghai"
+log_level: "INFO"          # DEBUG / INFO / WARNING / ERROR
+
+# ---------- 目录（Docker 中请保持与挂载点一致）----------
+data_dir: "./data"          # 数据库、日志、缓存
+download_dir: "./downloads" # 下载器落盘目录（必须与下载器内看到的路径一致）
+library_dir: "./library"    # 媒体库根目录（Emby/Jellyfin/Plex 指向这里）
+strm_dir: "./strm"          # STRM 文件输出目录
+plugin_dir: "./plugins"     # 插件目录
+
+# ---------- 安全 ----------
+# 首次启动会用下面的账号创建管理员，请务必修改！
+secret_key: "please-change-this-to-a-random-string"
+superuser: "admin"
+superuser_password: "cineflow"
+token_expire_minutes: 10080        # 7 天
+# 供外部脚本/自动化调用的固定令牌（请求头 X-API-Token），留空则关闭
+api_token: ""
+allow_origins:
+  - "*"
+
+# ---------- 媒体整理 ----------
+# link=硬链接（推荐，秒完成且不占额外空间，需同一文件系统）
+# copy=复制  move=移动  softlink=软链接  strm=生成 .strm 文件
+transfer_mode: "link"
+movie_template: "{title} ({year})/{title} ({year}) - {quality}{ext}"
+tv_template: "{title} ({year})/Season {season:02d}/{title} - S{season:02d}E{episode:02d}{ext}"
+min_file_size_mb: 100              # 小于此体积的文件视为样片，不入库
+
+# ---------- 调度 ----------
+scheduler_enabled: true
+subscribe_interval_minutes: 30     # 订阅巡检（自动追新）间隔
+download_check_interval_minutes: 5 # 下载进度同步间隔
+library_scan_cron: "0 4 * * *"     # 媒体库全量扫描（5 段 cron）
+
+# ---------- 搜索与择优策略 ----------
+search_timeout: 25
+search_max_results: 200
+search_concurrency: 8
+auto_download_best: true           # 订阅巡检命中后自动下载最优资源
+prefer_resolutions:                # 越靠前优先级越高
+  - "2160p"
+  - "1080p"
+  - "720p"
+exclude_keywords:                  # 命中即丢弃（支持正则）
+  - "枪版"
+  - "抢先版"
+  - "CAM"
+  - "预告片"
+  - "Sample"
+include_keywords: []               # 非空时必须命中其一
+min_seeders: 0                     # 做种数下限，0 为不限
+
+# ---------- 元数据（TMDB，可留空）----------
+# 留空时系统仍可正常工作：靠文件名解析，只是没有海报/总集数
+tmdb:
+  api_key: ""
+  api_host: "https://api.themoviedb.org"
+  image_host: "https://image.tmdb.org"
+  language: "zh-CN"
+
+metadata_cache_ttl: 43200          # 元数据缓存秒数（12 小时）
+
+# ---------- 网络 ----------
+http_proxy: ""                     # 例如 http://127.0.0.1:7890
+
+# ---------- STRM（网盘直连播放，可选）----------
+strm_enabled: false
+strm_base_url: "http://127.0.0.1:8611"

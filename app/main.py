@@ -1,0 +1,116 @@
+"""CineFlow 应用入口。"""
+
+from __future__ import annotations
+
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+
+from app.api.router import api_router
+from app.core.config import settings
+from app.core.exceptions import CineFlowError
+from app.core.logger import get_logger, setup_logging
+from app.core.version import API_PREFIX, APP_TITLE, APP_VERSION
+from app.db.init_db import init_db
+from app.plugins.manager import plugin_manager
+from app.providers.registry import load_builtin_providers
+from app.services.scheduler import scheduler_service
+
+logger = get_logger(__name__)
+
+WEB_DIR = Path(__file__).resolve().parent.parent / "web"
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """启动与关闭流程。"""
+    setup_logging()
+    logger.info("=" * 60)
+    logger.info("%s v%s 正在启动…", APP_TITLE, APP_VERSION)
+
+    init_db()
+    load_builtin_providers()
+    await plugin_manager.load_enabled()
+    scheduler_service.start()
+
+    logger.info("服务已就绪：http://%s:%s", settings.HOST, settings.PORT)
+    logger.info("=" * 60)
+    try:
+        yield
+    finally:
+        scheduler_service.shutdown()
+        logger.info("%s 已停止", APP_TITLE)
+
+
+app = FastAPI(
+    title=APP_TITLE,
+    version=APP_VERSION,
+    description=(
+        "面向 NAS 的自动化观影追剧平台：聚合 BT 站点与网盘搜索，"
+        "自动追新、下载、刮削命名、入库并通知。"
+    ),
+    lifespan=lifespan,
+    docs_url="/docs",
+    redoc_url="/redoc",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.ALLOW_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(api_router, prefix=API_PREFIX)
+
+
+@app.exception_handler(CineFlowError)
+async def cineflow_error_handler(_: Request, exc: CineFlowError) -> JSONResponse:
+    """统一业务异常响应。"""
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"success": False, "message": exc.message, "detail": exc.detail},
+    )
+
+
+@app.get("/api/health", include_in_schema=False)
+async def health() -> dict:
+    """健康检查（供 Docker/反代使用）。"""
+    return {
+        "status": "ok",
+        "version": APP_VERSION,
+        "scheduler": scheduler_service.running,
+    }
+
+
+if WEB_DIR.exists():
+    assets_dir = WEB_DIR / "assets"
+    if assets_dir.exists():
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+    @app.get("/", include_in_schema=False)
+    async def index() -> FileResponse:
+        """Web 控制台。"""
+        return FileResponse(WEB_DIR / "index.html")
+
+
+def run() -> None:
+    """以 uvicorn 启动（供 ``python -m app.main`` 使用）。"""
+    import uvicorn
+
+    uvicorn.run(
+        "app.main:app",
+        host=settings.HOST,
+        port=settings.PORT,
+        reload=settings.DEBUG,
+        log_config=None,
+    )
+
+
+if __name__ == "__main__":
+    run()

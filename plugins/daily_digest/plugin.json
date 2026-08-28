@@ -1,0 +1,23 @@
+{
+  "id": "daily_digest",
+  "name": "每日追剧日报",
+  "version": "1.0.0",
+  "description": "每天定时推送一份追剧日报：新入库剧集、订阅进度、缺集提醒与下载器状态。",
+  "author": "CineFlow",
+  "enabled_by_default": false,
+  "default_config": {
+    "enabled": true,
+    "cron": "0 9 * * *",
+    "include_library": true,
+    "include_subscribes": true,
+    "include_downloads": true,
+    "max_items": 12
+  },
+  "config_schema": [
+    {"key": "cron", "label": "推送时间（5 段 cron）", "type": "text", "default": "0 9 * * *", "placeholder": "0 9 * * *"},
+    {"key": "include_library", "label": "包含近 24 小时新入库", "type": "checkbox", "default": true},
+    {"key": "include_subscribes", "label": "包含订阅进度与缺集", "type": "checkbox", "default": true},
+    {"key": "include_downloads", "label": "包含下载中任务", "type": "checkbox", "default": true},
+    {"key": "max_items", "label": "每段最多列出条数", "type": "number", "default": 12}
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "id": "pan_transfer",
+  "name": "网盘转存助手",
+  "version": "1.0.0",
+  "description": "汇总盘搜命中的网盘待处理任务，按需推送提醒，并支持对接自建转存 Webhook（如 alist / cloud-saver）自动转存。",
+  "author": "CineFlow",
+  "enabled_by_default": false,
+  "default_config": {
+    "enabled": true,
+    "interval_minutes": 30,
+    "notify_pending": true,
+    "webhook_url": "",
+    "webhook_token": "",
+    "webhook_timeout": 30,
+    "mark_transferred": false,
+    "allow_pan_types": ""
+  },
+  "config_schema": [
+    {"key": "interval_minutes", "label": "巡检间隔（分钟）", "type": "number", "default": 30},
+    {"key": "notify_pending", "label": "有待转存任务时推送提醒", "type": "checkbox", "default": true},
+    {"key": "webhook_url", "label": "转存 Webhook 地址（留空则仅提醒）", "type": "text", "placeholder": "http://alist-helper:8080/api/save"},
+    {"key": "webhook_token", "label": "Webhook 鉴权 Token", "type": "text"},
+    {"key": "webhook_timeout", "label": "Webhook 超时（秒）", "type": "number", "default": 30},
+    {"key": "mark_transferred", "label": "Webhook 成功后把任务标记为已完成", "type": "checkbox", "default": false},
+    {"key": "allow_pan_types", "label": "仅处理指定网盘（逗号分隔，如 quark,aliyun）", "type": "text"}
+  ]
+}

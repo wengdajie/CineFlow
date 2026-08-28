@@ -1,0 +1,30 @@
+[project]
+name = "cineflow"
+version = "1.0.0"
+description = "面向 NAS 的自动化观影追剧平台：聚合 BT 站点与网盘搜索，自动追新、下载、命名入库"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+exclude = [".venv", "data", "downloads", "library", "strm"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF"]
+ignore = [
+    "E501",    # 行宽由 formatter 保证，中文注释易误报
+    "B008",    # FastAPI 依赖注入惯用 Depends() 作默认值
+    "RUF001",  # 中文文档中的全角标点属预期
+    "RUF002",
+    "RUF003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "RUF012"]
+"plugins/*" = ["RUF012"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = ["ignore::DeprecationWarning"]

@@ -1,0 +1,29 @@
+{
+  "id": "auto_cleanup",
+  "name": "自动清理",
+  "version": "1.0.0",
+  "description": "定时清理已入库的下载任务、失败任务与过期通知记录，保持数据库与下载器整洁。",
+  "author": "CineFlow",
+  "enabled_by_default": false,
+  "default_config": {
+    "enabled": true,
+    "interval_hours": 6,
+    "clean_transferred": true,
+    "transferred_keep_hours": 72,
+    "delete_source_files": false,
+    "clean_failed": true,
+    "failed_keep_hours": 24,
+    "clean_notifications": true,
+    "notification_keep_days": 30
+  },
+  "config_schema": [
+    {"key": "interval_hours", "label": "巡检间隔（小时）", "type": "number", "default": 6},
+    {"key": "clean_transferred", "label": "清理已入库任务", "type": "checkbox", "default": true},
+    {"key": "transferred_keep_hours", "label": "已入库任务保留（小时）", "type": "number", "default": 72},
+    {"key": "delete_source_files", "label": "同时删除下载器源文件（硬链模式请勿开启）", "type": "checkbox", "default": false},
+    {"key": "clean_failed", "label": "清理失败任务", "type": "checkbox", "default": true},
+    {"key": "failed_keep_hours", "label": "失败任务保留（小时）", "type": "number", "default": 24},
+    {"key": "clean_notifications", "label": "清理历史通知", "type": "checkbox", "default": true},
+    {"key": "notification_keep_days", "label": "通知保留天数", "type": "number", "default": 30}
+  ]
+}
