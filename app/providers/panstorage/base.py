@@ -121,7 +121,35 @@ class BasePanStorage(BaseProvider):
         password: str | None = None,
         target_dir: str | None = None,
     ) -> SaveResult:
-        """把分享链接转存到自己的网盘。"""
+        """把分享链接转存到自己的网盘（整个分享）。"""
+
+    async def list_share(
+        self, share_url: str, *, password: str | None = None
+    ) -> list[PanFile]:
+        """列出分享链接**内部**的文件清单。
+
+        这是「分享追更」能做增量的前提：先看清分享里有什么，
+        才能只转存新增的那几集。不支持的网盘返回空列表，
+        调用方会退化成「整个分享转存 + 分享级去重」。
+        """
+        return []
+
+    async def save_share_files(
+        self,
+        share_url: str,
+        files: list[PanFile],
+        *,
+        password: str | None = None,
+        target_dir: str | None = None,
+    ) -> SaveResult:
+        """只转存分享内指定的若干文件（增量转存）。
+
+        默认实现退回整体转存——对不支持挑文件的网盘，
+        转多了总比漏更新好（重复文件网盘侧会自己去重或覆盖）。
+        """
+        return await self.save_share(
+            share_url, password=password, target_dir=target_dir
+        )
 
     async def quota(self) -> PanQuota:
         """查询容量（不支持时返回全 0）。"""

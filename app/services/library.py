@@ -59,6 +59,9 @@ async def transfer_completed_tasks() -> dict[str, int]:
                 "subscribe_id": task.subscribe_id,
                 "content_path": (task.meta or {}).get("content_path") or task.save_path,
                 "save_path": task.save_path,
+                # 洗版上下文：新版本入库成功后据此删除旧文件
+                "upgrade_for": (task.meta or {}).get("upgrade_for"),
+                "score": (task.meta or {}).get("score") or 0,
             }
             for task in tasks
         ]
@@ -108,7 +111,13 @@ async def transfer_completed_tasks() -> dict[str, int]:
                 )
                 if result.success and result.target:
                     success_files += 1
-                    _register_library_file(session, result.target, result.meta, result.size)
+                    _register_library_file(
+                        session,
+                        result.target,
+                        result.meta,
+                        result.size,
+                        quality_score=float(snapshot.get("score") or 0),
+                    )
                 elif not result.success:
                     stats["failed"] += 1
 
@@ -141,6 +150,37 @@ async def transfer_completed_tasks() -> dict[str, int]:
                 event=EventType.TRANSFER_COMPLETED.value,
                 payload={"task_id": snapshot["id"], "files": success_files},
             )
+            # 刮削 NFO 与图片。**best-effort**：失败只记日志，绝不影响入库结果
+            if settings.SCRAPE_ENABLED:
+                from app.services import scraper
+
+                for result in results:
+                    if not (result.success and result.target):
+                        continue
+                    try:
+                        await scraper.scrape_file(
+                            result.target,
+                            result.meta,
+                            overwrite=settings.SCRAPE_OVERWRITE,
+                        )
+                    except Exception as exc:
+                        logger.warning("刮削失败 %s: %s", result.target, exc)
+
+            # 洗版收尾：新版本已确实落地，此时才删旧文件（失败下载不会留空洞）
+            if snapshot.get("upgrade_for"):
+                from app.services import upgrade as upgrade_service
+
+                new_target = next(
+                    (str(r.target) for r in results if r.success and r.target), None
+                )
+                if new_target:
+                    outcome = upgrade_service.replace_library_file(
+                        snapshot["upgrade_for"],
+                        new_target,
+                        new_score=float(snapshot.get("score") or 0),
+                    )
+                    logger.info("洗版替换：%s", outcome["message"])
+
             await refresh_media_servers(
                 str(results[0].target) if results[0].target else None
             )
@@ -148,7 +188,7 @@ async def transfer_completed_tasks() -> dict[str, int]:
 
 
 def _register_library_file(
-    session: Any, target: Path, meta: Any, size: int
+    session: Any, target: Path, meta: Any, size: int, *, quality_score: float = 0.0
 ) -> None:
     """把入库文件写入索引（用于缺集计算与去重）。"""
     existing = session.execute(
@@ -186,6 +226,8 @@ def _register_library_file(
             episode=meta.episode_start if meta else None,
             resolution=meta.resolution if meta else None,
             size=size,
+            # 存下入库时的质量评分，洗版时用它和新资源比较
+            quality_score=quality_score,
         )
     )
 

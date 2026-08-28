@@ -28,8 +28,8 @@ from app.providers.registry import list_providers, load_builtin_providers  # noq
 load_builtin_providers()
 providers = list_providers()
 names = {p["name"] for p in providers}
-check("Provider 总数 21", len(providers) == 21, f"实际 {len(providers)}")
-check("README 声明 21 个 Provider", "21 个注册 Provider" in README)
+check("Provider 总数 22", len(providers) == 22, f"实际 {len(providers)}")
+check("README 声明 22 个 Provider", "22 个注册 Provider" in README)
 for expected in ("api_generic", "html_generic", "mukaku", "pan_generic",
                  "torznab", "rss", "nyaa", "pansou"):
     check(f"Provider {expected} 已注册", expected in names)
@@ -38,16 +38,17 @@ for expected in ("api_generic", "html_generic", "mukaku", "pan_generic",
 # ---- 数据库表 ----
 from app.db.models import Base  # noqa: E402
 
-check("14 张表", len(Base.metadata.tables) == 14, f"实际 {len(Base.metadata.tables)}")
-check("README 声明 14 张表", "14 张表" in README)
-for table in ("audit_logs", "pan_saves"):
+check("16 张表", len(Base.metadata.tables) == 16, f"实际 {len(Base.metadata.tables)}")
+check("README 声明 16 张表", "16 张表" in README)
+for table in ("audit_logs", "pan_saves", "pan_subscribes", "strm_records"):
     check(f"新增表 {table} 存在", table in Base.metadata.tables)
 
 # ---- 默认站点 ----
 from app.db.init_db import DEFAULT_SITES  # noqa: E402
 
-check("默认示例站点 11 条", len(DEFAULT_SITES) == 11, f"实际 {len(DEFAULT_SITES)}")
-check("README 声明 11 条示例站点", "写入 11 条" in README)
+check("默认示例站点 12 条", len(DEFAULT_SITES) == 12, f"实际 {len(DEFAULT_SITES)}")
+check("README 声明 12 条示例站点", "写入 12 条" in README)
+check("默认站点含 webdav", any(s["provider"] == "webdav" for s in DEFAULT_SITES))
 check("示例站点全部默认禁用", all(not s.get("enabled", False) for s in DEFAULT_SITES))
 check("默认站点含 mukaku", any(s["provider"] == "mukaku" for s in DEFAULT_SITES))
 check("默认站点含 api_generic", any(s["provider"] == "api_generic" for s in DEFAULT_SITES))
@@ -66,10 +67,11 @@ for key, default in (("RADAR_ENABLED", True), ("RADAR_INTERVAL_MINUTES", 15),
 # ---- 调度任务 ----
 scheduler_src = pathlib.Path("app/services/scheduler.py").read_text(encoding="utf-8")
 job_ids = re.findall(r'^JOB_\w+ = "([^"]+)"', scheduler_src, re.M)
-check("内置调度任务 5 个", len(job_ids) == 5, str(job_ids))
-check("README 声明 5 内置任务", "5 内置任务" in README)
-check("雷达任务已注册", "cineflow.radar" in job_ids)
-check("网盘转存任务已注册", "cineflow.pan_transfer" in job_ids)
+check("内置调度任务 9 个", len(job_ids) == 9, str(job_ids))
+check("README 声明 9 内置任务", "9 内置任务" in README)
+for job in ("cineflow.radar", "cineflow.pan_transfer", "cineflow.pan_subscribe",
+            "cineflow.strm_sync", "cineflow.scrape", "cineflow.upgrade"):
+    check(f"任务已注册 {job}", job in job_ids)
 
 # ---- API 端点 ----
 try:
@@ -81,8 +83,8 @@ try:
         for m in methods
         if m.lower() in ("get", "post", "patch", "delete", "put")
     )
-    check("API 端点 82 个", total == 82, f"实际 {total}")
-    check("README 声明 82 个端点", "82 个端点" in README and "共 82 个" in README)
+    check("API 端点 95 个", total == 95, f"实际 {total}")
+    check("README 声明 95 个端点", "95 个端点" in README and "共 95 个" in README)
     paths = set(spec["paths"])
     for path in ("/api/v1/radar/run", "/api/v1/radar/feed", "/api/v1/radar/jobs",
                  "/api/v1/sites/presets", "/api/v1/sites/discover",
@@ -98,21 +100,21 @@ except Exception as exc:
 # ---- router 数量 ----
 router_src = pathlib.Path("app/api/router.py").read_text(encoding="utf-8")
 router_count = router_src.count("api_router.include_router(")
-check("router 14 个", router_count == 14, f"实际 {router_count}")
-check("README 声明 14 个 router", "14 个 router" in README)
-for name in ("trending", "schedules", "pan", "chatops"):
+check("router 16 个", router_count == 16, f"实际 {router_count}")
+check("README 声明 16 个 router", "16 个 router" in README)
+for name in ("trending", "schedules", "pan", "chatops", "strm", "pan_subscribes"):
     check(f"router {name} 已挂载", f"{name}.router" in router_src)
 
 # ---- 前端页面 ----
 app_js = pathlib.Path("web/assets/app.js").read_text(encoding="utf-8")
 pages_block = app_js[app_js.index("const PAGES"): app_js.index("];", app_js.index("const PAGES"))]
 page_count = pages_block.count("{ key:")
-check("前端页面 14 个", page_count == 14, f"实际 {page_count}")
-check("README 声明点检 14 个页面", "14 个页面" in README)
-check("scripts/README 声明 14 个页面", "14 个前端页面" in SCRIPTS_README)
+check("前端页面 16 个", page_count == 16, f"实际 {page_count}")
+check("README 声明点检 16 个页面", "16 个页面" in README)
+check("scripts/README 声明 16 个页面", "16 个前端页面" in SCRIPTS_README)
 check("前端含热度排行页", '"trending"' in app_js and "pageTrending" in app_js)
 check("前端含定时任务页", '"schedules"' in app_js and "pageSchedules" in app_js)
-check("README 声明 14 个功能页", "14 个功能页" in README)
+check("README 声明 16 个功能页", "16 个功能页" in README)
 check("前端含追新雷达页", '"radar"' in app_js and "pageRadar" in app_js)
 check("前端含站点发现弹窗", "discoverDialog" in app_js)
 check("前端含预设选择器", "presetPicker" in app_js)
@@ -164,28 +166,30 @@ check("README 说明定时任务可改期", "定时任务" in README and "cron" 
 
 # ---- 测试文件 ----
 test_files = sorted(p.name for p in pathlib.Path("tests").glob("test_*.py"))
-check("测试文件 12 个", len(test_files) == 12, str(test_files))
-check("README 声明 12 个测试文件", "12 个测试文件" in README)
+check("测试文件 19 个", len(test_files) == 19, str(test_files))
+check("README 声明 19 个测试文件", "19 个测试文件" in README)
 for name in ("test_custom_sites.py", "test_radar.py", "test_trending.py",
-             "test_panstorage.py", "test_chatops.py"):
+             "test_panstorage.py", "test_chatops.py", "test_nfo.py",
+             "test_scraper.py", "test_webdav.py", "test_strm_sync.py",
+             "test_pan_subscribe.py", "test_upgrade.py", "test_categories.py"):
     check(f"README 提及 {name}", name in README)
 
 # ---- 脚本 ----
 for script in ("smoke_test.py", "ui_check.py", "demo_pipeline.py", "live_check.py",
-               "verify_docs.py"):
+               "verify_docs.py", "research_refs.py"):
     check(f"脚本存在 {script}", pathlib.Path("scripts", script).exists())
     check(f"scripts/README 提及 {script}", script in SCRIPTS_README)
-check("README 声明五个验证脚本", "五个开发期验证工具" in README)
-check("README 测试徽章 270", "tests-270%20passed" in README)
-check("README 版本号 1.3.0", "1.3.0" in README)
+check("README 声明六个验证脚本", "六个开发期验证工具" in README)
+check("README 测试徽章 370", "tests-370%20passed" in README)
+check("README 版本号 1.4.0", "1.4.0" in README)
 version_src = pathlib.Path("app/core/version.py").read_text(encoding="utf-8")
-check("代码版本号为 1.3.0", 'APP_VERSION = "1.3.0"' in version_src)
-check("README 声明 117 项接口用例", "117 项真实 HTTP 接口用例" in README)
-check("scripts/README 声明 117 项", "117 项接口用例" in SCRIPTS_README)
+check("代码版本号为 1.4.0", 'APP_VERSION = "1.4.0"' in version_src)
+check("README 声明 141 项接口用例", "141 项真实 HTTP 接口用例" in README)
+check("scripts/README 声明 141 项", "141 项接口用例" in SCRIPTS_README)
 
 # ---- 服务模块 ----
 for module in ("radar", "discovery", "presets", "trending", "settings_store",
-               "pan_storage"):
+               "pan_storage", "scraper", "strm_sync", "pan_subscribe", "upgrade"):
     check(f"服务模块 app/services/{module}.py 存在",
           pathlib.Path(f"app/services/{module}.py").exists())
     check(f"README 提及 {module} 服务", module in README)
@@ -201,6 +205,7 @@ DOC_FILES = [
     "06-网盘管理.md",
     "07-运维手册.md",
     "08-变更日志.md",
+    "09-竞品对标与差距分析.md",
 ]
 docs_dir = pathlib.Path("docs")
 check("docs/ 目录存在", docs_dir.is_dir())
@@ -220,15 +225,15 @@ roadmap = (docs_dir / "03-升级路线图.md")
 if roadmap.exists():
     roadmap_text = roadmap.read_text(encoding="utf-8")
     check("路线图无「待实测」占位", "待实测" not in roadmap_text)
-    check("路线图无「未开始」残留（v1.3.0 已交付）", "未开始" not in roadmap_text)
-    for milestone in ("M1", "M2", "M3", "M4"):
+    check("路线图无「未开始」残留（v1.4.0 已交付）", "未开始" not in roadmap_text)
+    for milestone in ("M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8", "M9", "M10"):
         check(f"路线图含里程碑 {milestone}", milestone in roadmap_text)
 
 # 变更日志必须记录到当前版本
 changelog = (docs_dir / "08-变更日志.md")
 if changelog.exists():
     changelog_text = changelog.read_text(encoding="utf-8")
-    for version in ("1.0.0", "1.1.0", "1.2.0", "1.3.0"):
+    for version in ("1.0.0", "1.1.0", "1.2.0", "1.3.0", "1.4.0"):
         check(f"变更日志含 v{version}", version in changelog_text)
 
 # ---- 网盘管理（M2） ----
@@ -236,7 +241,7 @@ check("网盘存储 Provider 目录存在", pathlib.Path("app/providers/panstora
 pan_base = pathlib.Path("app/providers/panstorage/base.py").read_text(encoding="utf-8")
 check("BasePanStorage 抽象类存在", "class BasePanStorage" in pan_base)
 for cls, mod in (("AListStorage", "alist"), ("QuarkStorage", "quark"),
-                 ("LocalDirStorage", "local_dir")):
+                 ("LocalDirStorage", "local_dir"), ("WebDavStorage", "webdav")):
     src = pathlib.Path(f"app/providers/panstorage/{mod}.py")
     check(f"网盘 Provider {mod} 文件存在", src.exists())
     check(f"网盘 Provider {cls} 已定义", cls in src.read_text(encoding="utf-8"))
@@ -305,6 +310,132 @@ check("生效配置端点存在", "def effective_settings" in system_src)
 check("敏感配置脱敏", "_mask" in system_src and "已设置" in system_src)
 check("前端含设置页", "pageSettings" in app_js)
 check("README 说明设置页", "设置页" in README)
+
+# ---- NFO 刮削（M5） ----
+nfo_src = pathlib.Path("app/core/nfo.py").read_text(encoding="utf-8")
+check("NFO 渲染模块在 core（无 IO，可离线单测）", "app/core/nfo.py")
+for func in ("build_movie_nfo", "build_tvshow_nfo", "build_season_nfo",
+             "build_episode_nfo", "build_for", "parse_nfo_tmdb_id"):
+    check(f"NFO 函数 {func}", f"def {func}" in nfo_src)
+check("NFO 覆盖四种根节点",
+      all(f'ET.Element("{tag}")' in nfo_src
+          for tag in ("movie", "tvshow", "season", "episodedetails")))
+check("NFO 图片命名符合媒体服务器惯例", "IMAGE_FILENAMES" in nfo_src and "fanart" in nfo_src)
+check("core/nfo 不做网络请求", "httpx" not in nfo_src and "async def" not in nfo_src)
+scraper_src = pathlib.Path("app/services/scraper.py").read_text(encoding="utf-8")
+for func in ("scrape_file", "scrape_library"):
+    check(f"刮削服务函数 {func}", f"def {func}" in scraper_src)
+check("刮削支持 TMDB 不可用降级", "degraded" in scraper_src)
+check("刮削默认不覆盖已有 NFO", "overwrite" in scraper_src)
+for key in ("SCRAPE_ENABLED", "SCRAPE_IMAGES", "SCRAPE_OVERWRITE", "SCRAPE_CRON",
+            "SCRAPE_BATCH"):
+    check(f"配置项 {key} 存在", hasattr(settings, key))
+    check(f"README 提及 CF_{key}", f"CF_{key}" in README)
+check("补刮端点已挂载", "def scrape" in pathlib.Path("app/api/routers/library.py").read_text(encoding="utf-8"))
+check("前端含补刮按钮", "补刮 NFO" in app_js)
+check("README 说明 NFO 刮削", "NFO" in README and "刮削" in README)
+
+# ---- WebDAV（M6） ----
+dav_src = pathlib.Path("app/providers/panstorage/webdav.py").read_text(encoding="utf-8")
+check("WebDAV 用 PROPFIND 列目录", "PROPFIND" in dav_src)
+check("WebDAV 用 MKCOL 建目录", "MKCOL" in dav_src)
+check("WebDAV 支持容量查询", "quota-available-bytes" in dav_src)
+check("WebDAV 明确不支持分享转存", "supports_save = False" in dav_src)
+check("WebDAV 提供 Basic Auth 头（供 302 播放）", "def auth_header" in dav_src)
+check("WebDAV 对路径做 percent 编码", "urllib.parse.quote" in dav_src)
+check("README 说明 WebDAV 覆盖面", "WebDAV" in README)
+
+# ---- STRM 同步 + 302（M7） ----
+strm_src = pathlib.Path("app/services/strm_sync.py").read_text(encoding="utf-8")
+for func in ("sync_storage", "sync_all", "resolve_play_url", "list_records", "stats",
+             "_clean_invalid"):
+    check(f"STRM 服务函数 {func}", f"def {func}" in strm_src)
+check("STRM 支持 proxy/direct 两种链接模式",
+      '"direct"' in strm_src and "STRM_LINK_MODE" in strm_src)
+check("STRM 清理源文件消失的失效记录", "alive" in strm_src)
+strm_router = pathlib.Path("app/api/routers/strm.py").read_text(encoding="utf-8")
+check("STRM 播放端点返回 302", "RedirectResponse" in strm_router and "status_code=302" in strm_router)
+check("STRM 播放端点匿名（不挂 CurrentUser）",
+      "async def play(record_id: int) -> RedirectResponse:" in strm_router)
+for key in ("STRM_LINK_MODE", "STRM_SYNC_INTERVAL_MINUTES", "STRM_CLEAN_INVALID",
+            "STRM_SYNC_METADATA"):
+    check(f"配置项 {key} 存在", hasattr(settings, key))
+    check(f"README 提及 CF_{key}", f"CF_{key}" in README)
+check("默认链接模式为 proxy（链接不过期）", settings.STRM_LINK_MODE == "proxy",
+      f"实际 {settings.STRM_LINK_MODE}")
+check("前端含 STRM 页", "pageStrm" in app_js and '"strm"' in app_js)
+check("README 说明 STRM 与 302", "STRM" in README and "302" in README)
+
+# ---- 网盘分享追更（M8） ----
+ps_src = pathlib.Path("app/services/pan_subscribe.py").read_text(encoding="utf-8")
+for func in ("check_one", "check_all", "match_files", "apply_rename", "_should_run"):
+    check(f"分享追更函数 {func}", f"def {func}" in ps_src)
+check("分享追更做增量（记已转存文件名）", "saved_files" in ps_src)
+check("不支持增量的网盘用哨兵防重复整体转存", "__whole_share__" in ps_src)
+check("错误正则不会搞崩巡检", "def _compile" in ps_src and "re.error" in ps_src)
+check("连续失败到阈值标记失效", "PAN_SUBSCRIBE_MAX_FAILURES" in ps_src and "invalid" in ps_src)
+check("支持按星期与到期时间限制执行", "weekdays" in ps_src and "expire_at" in ps_src)
+check("夸克支持列举与逐文件转存分享",
+      "async def list_share" in pathlib.Path("app/providers/panstorage/quark.py").read_text(encoding="utf-8")
+      and "async def save_share_files" in pathlib.Path("app/providers/panstorage/quark.py").read_text(encoding="utf-8"))
+check("基类给出 list_share/save_share_files 降级默认",
+      "async def list_share" in pan_base and "async def save_share_files" in pan_base)
+for key in ("PAN_SUBSCRIBE_INTERVAL_MINUTES", "PAN_SUBSCRIBE_MAX_FAILURES"):
+    check(f"配置项 {key} 存在", hasattr(settings, key))
+    check(f"README 提及 CF_{key}", f"CF_{key}" in README)
+check("前端含分享追更页", "pagePanSub" in app_js and '"pansub"' in app_js)
+check("README 说明分享追更", "分享追更" in README)
+
+# ---- 洗版（M9） ----
+upgrade_src = pathlib.Path("app/services/upgrade.py").read_text(encoding="utf-8")
+for func in ("evaluate", "check_subscribe", "replace_library_file", "run"):
+    check(f"洗版函数 {func}", f"def {func}" in upgrade_src)
+check("洗版有评分阈值防横跳", "UPGRADE_SCORE_DELTA" in upgrade_src)
+check("洗版有次数上限", "UPGRADE_MAX_TIMES" in upgrade_src and "upgrade_count" in upgrade_src)
+check("洗版只针对 best_version 订阅", "best_version" in upgrade_src)
+check("洗版默认关闭（会删已入库文件）", settings.UPGRADE_ENABLED is False)
+check("洗版先下载后删旧文件（避免留空洞）",
+      "upgrade_for" in upgrade_src and "replace_library_file" in upgrade_src)
+check("入库时才执行旧文件替换",
+      "replace_library_file" in pathlib.Path("app/services/library.py").read_text(encoding="utf-8"))
+for key in ("UPGRADE_ENABLED", "UPGRADE_SCORE_DELTA", "UPGRADE_MAX_TIMES"):
+    check(f"配置项 {key} 存在", hasattr(settings, key))
+    check(f"README 提及 CF_{key}", f"CF_{key}" in README)
+check("前端含洗版试算报告", "upgradeReport" in app_js)
+check("README 说明洗版", "洗版" in README)
+
+# ---- 媒体分类归档（M10） ----
+cat_src = pathlib.Path("app/core/categories.py").read_text(encoding="utf-8")
+for func in ("detect", "directory_for"):
+    check(f"分类函数 {func}", f"def {func}" in cat_src)
+check("分类覆盖 6 类", "CATEGORY_NAMES" in cat_src
+      and all(word in cat_src for word in ("电影", "电视剧", "动漫", "纪录片", "综艺", "儿童")))
+check("分类优先用 TMDB genre", "_GENRE_MAP" in cat_src)
+check("分类判不出返回 None 不猜", "return None" in cat_src)
+check("core/categories 无 IO", "httpx" not in cat_src and "async def" not in cat_src)
+organizer_src = pathlib.Path("app/core/organizer.py").read_text(encoding="utf-8")
+check("整理时按分类建二级目录", "CATEGORY_ENABLED" in organizer_src and "directory_for" in organizer_src)
+check("配置项 CATEGORY_ENABLED 存在", hasattr(settings, "CATEGORY_ENABLED"))
+check("README 提及 CF_CATEGORY_ENABLED", "CF_CATEGORY_ENABLED" in README)
+check("分类默认关闭（不擅自改动已有库布局）", settings.CATEGORY_ENABLED is False)
+
+# ---- 老库升级路径 ----
+initdb_src = pathlib.Path("app/db/init_db.py").read_text(encoding="utf-8")
+check("老库自动补新增列", "def migrate_columns" in initdb_src and "ADD COLUMN" in initdb_src)
+check("补列在 init_db 里调用", "migrate_columns()" in initdb_src)
+check("补列覆盖 v1.4.0 新字段",
+      "quality_score" in initdb_src and "upgrade_count" in initdb_src)
+
+# ---- 竞品对标文档 ----
+gap_doc = docs_dir / "09-竞品对标与差距分析.md"
+if gap_doc.exists():
+    gap_text = gap_doc.read_text(encoding="utf-8")
+    for repo in ("quark-auto-save", "SmartStrm", "MediaWarp", "TgtoDrive"):
+        check(f"对标文档提及 {repo}", repo in gap_text)
+    check("对标文档给出差距矩阵", "差距" in gap_text)
+    check("对标文档写明不做的事与原因", "不做" in gap_text)
+check("复查脚本存在", pathlib.Path("scripts/research_refs.py").exists())
+check("scripts/README 提及 research_refs.py", "research_refs.py" in SCRIPTS_README)
 
 # ---- 文档中的 JSON 示例必须合法 ----
 blocks = re.findall(r"```json\n(.*?)```", README, re.S)

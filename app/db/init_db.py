@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from sqlalchemy import inspect, text
+
 from app.core.config import settings
 from app.core.logger import get_logger
 from app.core.security import hash_password
@@ -122,6 +124,20 @@ DEFAULT_SITES = [
         },
     },
     {
+        "name": "WebDAV 网盘",
+        "kind": ProviderKind.PANSTORAGE.value,
+        "provider": "webdav",
+        "url": "http://127.0.0.1:5005/dav",
+        "username": "",
+        "enabled": False,
+        "priority": 30,
+        "options": {
+            "note": "一份实现覆盖 Nextcloud/坚果云/群晖/TeraCLOUD/AList 的 DAV 端点；"
+                    "填 URL + 账号密码即可浏览并生成 STRM",
+            "root_path": "/",
+        },
+    },
+    {
         "name": "本地/挂载目录",
         "kind": ProviderKind.PANSTORAGE.value,
         "provider": "local_dir",
@@ -148,6 +164,37 @@ def create_tables() -> None:
     """建表。"""
     Base.metadata.create_all(bind=engine)
     logger.info("数据库表已就绪：%s", settings.DB_URL)
+
+
+#: 版本升级时给已有表补的列：``表名 -> [(列名, SQL 类型与默认值)]``
+#: 为什么需要：``create_all`` 只建**缺失的表**，不会给已存在的表加列。
+#: 老用户直接升级后，新代码 SELECT 新列会直接 500（v1.4.0 的 quality_score 就是这样）。
+#: 用 ALTER TABLE ADD COLUMN 补齐即可——SQLite 对它支持良好且不重写数据。
+_ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    "library_files": [
+        ("quality_score", "FLOAT DEFAULT 0"),
+        ("upgrade_count", "INTEGER DEFAULT 0"),
+    ],
+}
+
+
+def migrate_columns() -> None:
+    """给已存在的表补齐新版本新增的列（幂等，可反复执行）。"""
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
+    for table, columns in _ADDED_COLUMNS.items():
+        if table not in tables:
+            continue  # 表本身是新建的，create_all 已经带上全部列
+        present = {column["name"] for column in inspector.get_columns(table)}
+        for name, ddl in columns:
+            if name in present:
+                continue
+            try:
+                with engine.begin() as connection:
+                    connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
+                logger.info("数据库升级：%s 表补充列 %s", table, name)
+            except Exception as exc:  # 补列失败不该让服务起不来
+                logger.warning("为 %s 补列 %s 失败：%s", table, name, exc)
 
 
 def create_superuser() -> None:
@@ -196,5 +243,6 @@ def create_default_sites() -> None:
 def init_db() -> None:
     """初始化数据库。"""
     create_tables()
+    migrate_columns()
     create_superuser()
     create_default_sites()

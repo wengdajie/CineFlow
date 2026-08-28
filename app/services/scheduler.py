@@ -26,6 +26,10 @@ JOB_DOWNLOAD = "cineflow.download"
 JOB_LIBRARY = "cineflow.library"
 JOB_RADAR = "cineflow.radar"
 JOB_PAN_TRANSFER = "cineflow.pan_transfer"
+JOB_PAN_SUBSCRIBE = "cineflow.pan_subscribe"
+JOB_STRM_SYNC = "cineflow.strm_sync"
+JOB_SCRAPE = "cineflow.scrape"
+JOB_UPGRADE = "cineflow.upgrade"
 _PLUGIN_PREFIX = "plugin."
 
 #: 间隔型任务允许的分钟范围
@@ -109,6 +113,42 @@ def builtin_specs() -> list[JobSpec]:
             trigger="interval",
             minutes=settings.PAN_TRANSFER_INTERVAL_MINUTES or 20,
             enabled=bool(settings.PAN_AUTO_SAVE and settings.PAN_TRANSFER_INTERVAL_MINUTES > 0),
+        ),
+        JobSpec(
+            key="pan_subscribe",
+            job_id=JOB_PAN_SUBSCRIBE,
+            name="网盘分享追更",
+            description="盯住持续更新的分享链接，只转存新增文件（增量追更）",
+            trigger="interval",
+            minutes=settings.PAN_SUBSCRIBE_INTERVAL_MINUTES or 60,
+            enabled=bool(settings.PAN_SUBSCRIBE_INTERVAL_MINUTES > 0),
+        ),
+        JobSpec(
+            key="strm_sync",
+            job_id=JOB_STRM_SYNC,
+            name="网盘 STRM 同步",
+            description="把网盘目录映射成本地 STRM 文件，并清理失效条目",
+            trigger="interval",
+            minutes=settings.STRM_SYNC_INTERVAL_MINUTES or 120,
+            enabled=bool(settings.STRM_SYNC_INTERVAL_MINUTES > 0),
+        ),
+        JobSpec(
+            key="scrape",
+            job_id=JOB_SCRAPE,
+            name="媒体库补刮（NFO + 图片）",
+            description="为缺少 NFO 的历史文件补齐元数据，提升媒体服务器识别率",
+            trigger="cron",
+            cron=settings.SCRAPE_CRON or "30 4 * * *",
+            enabled=bool(settings.SCRAPE_ENABLED and settings.SCRAPE_CRON),
+        ),
+        JobSpec(
+            key="upgrade",
+            job_id=JOB_UPGRADE,
+            name="洗版巡检（更优版本替换）",
+            description="为开启「最优版本」的订阅寻找更高画质并替换已入库文件",
+            trigger="interval",
+            minutes=max(settings.SUBSCRIBE_INTERVAL_MINUTES * 4, 60),
+            enabled=bool(settings.UPGRADE_ENABLED),
         ),
         JobSpec(
             key="library",
@@ -198,8 +238,12 @@ class SchedulerService:
         from app.services import download as download_service
         from app.services import library as library_service
         from app.services import pan_storage as pan_service
+        from app.services import pan_subscribe as pan_subscribe_service
         from app.services import radar as radar_service
+        from app.services import scraper as scraper_service
+        from app.services import strm_sync as strm_service
         from app.services import subscribe as subscribe_service
+        from app.services import upgrade as upgrade_service
 
         targets: dict[str, tuple[Callable[..., Any], dict[str, Any]]] = {
             "subscribe": (subscribe_service.run_all, {}),
@@ -213,6 +257,13 @@ class SchedulerService:
                 pan_service.transfer_pending,
                 {"limit": settings.PAN_TRANSFER_BATCH},
             ),
+            "pan_subscribe": (pan_subscribe_service.check_all, {}),
+            "strm_sync": (strm_service.sync_all, {}),
+            "scrape": (
+                scraper_service.scrape_library,
+                {"limit": settings.SCRAPE_BATCH},
+            ),
+            "upgrade": (upgrade_service.run, {}),
         }
         if key not in targets:
             raise ValueError(f"未知任务: {key}")

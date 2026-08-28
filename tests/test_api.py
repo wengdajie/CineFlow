@@ -337,3 +337,202 @@ def test_radar_endpoints(client, auth_headers, monkeypatch):
     jobs = client.get("/api/v1/radar/jobs", headers=auth_headers)
     assert jobs.status_code == 200
     assert "radar_enabled" in jobs.json()["data"]
+
+
+# ---------------------------------------------------------------- STRM 接口
+def test_strm_endpoints(client, auth_headers):
+    """STRM 概览 / 记录 / 同步端点可用；没有网盘时也不能 500。"""
+    overview = client.get("/api/v1/strm", headers=auth_headers)
+    assert overview.status_code == 200, overview.text
+    data = overview.json()["data"]
+    assert {"total", "alive", "invalid", "link_mode", "strm_dir"} <= set(data)
+
+    records = client.get("/api/v1/strm/records?limit=10", headers=auth_headers)
+    assert records.status_code == 200
+    assert isinstance(records.json()["items"], list)
+
+    # 没有可用网盘时给出提示而不是报错
+    synced = client.post("/api/v1/strm/sync", json={}, headers=auth_headers)
+    assert synced.status_code == 200, synced.text
+    assert synced.json()["success"] is True
+
+    missing = client.post(
+        "/api/v1/strm/sync", json={"site_id": 99999999}, headers=auth_headers
+    )
+    assert missing.status_code == 200
+    assert "不存在" in missing.json()["message"] or "未启用" in missing.json()["message"]
+
+
+def test_strm_play_is_anonymous_but_404_for_unknown(client):
+    """播放端点必须免认证（播放器带不了 JWT），但未知记录要回 404。"""
+    response = client.get("/api/v1/strm/play/99999999", follow_redirects=False)
+    assert response.status_code == 404, response.text
+    # 关键：不是 401，说明确实没挂认证依赖
+    assert response.status_code != 401
+
+
+def test_strm_requires_auth(client):
+    """除播放端点外，其余 STRM 接口仍需认证。"""
+    assert client.get("/api/v1/strm").status_code == 401
+    assert client.get("/api/v1/strm/records").status_code == 401
+
+
+# ------------------------------------------------------------ 分享追更接口
+def test_pan_subscribe_crud_api(client, auth_headers):
+    """分享追更 CRUD 全链路。"""
+    created = client.post(
+        "/api/v1/pan-subscribes",
+        json={
+            "name": "接口测试追更",
+            "share_url": "https://pan.quark.cn/s/api-test",
+            "exclude_regex": "预告",
+            "weekdays": [0, 2, 4],
+        },
+        headers=auth_headers,
+    )
+    assert created.status_code == 200, created.text
+    record = created.json()["data"]
+    assert record["weekdays"] == [0, 2, 4]
+    assert record["invalid"] is False
+
+    listed = client.get("/api/v1/pan-subscribes", headers=auth_headers).json()
+    assert listed["success"] is True
+    assert any(item["id"] == record["id"] for item in listed["items"])
+
+    patched = client.patch(
+        f"/api/v1/pan-subscribes/{record['id']}",
+        json={"name": "接口测试追更（改）", "status": "paused"},
+        headers=auth_headers,
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["data"]["status"] == "paused"
+
+    # 暂停状态巡检要被跳过而不是报错
+    checked = client.post(
+        f"/api/v1/pan-subscribes/{record['id']}/check", headers=auth_headers
+    )
+    assert checked.status_code == 200, checked.text
+    assert checked.json()["skipped"] is True
+
+    all_checked = client.post("/api/v1/pan-subscribes/check-all", headers=auth_headers)
+    assert all_checked.status_code == 200
+    assert "checked" in all_checked.json()
+
+    assert (
+        client.delete(
+            f"/api/v1/pan-subscribes/{record['id']}", headers=auth_headers
+        ).status_code
+        == 200
+    )
+    assert (
+        client.delete(
+            f"/api/v1/pan-subscribes/{record['id']}", headers=auth_headers
+        ).status_code
+        == 404
+    )
+
+
+def test_pan_subscribe_unknown_id_returns_404(client, auth_headers):
+    assert (
+        client.patch(
+            "/api/v1/pan-subscribes/99999999", json={"name": "x"}, headers=auth_headers
+        ).status_code
+        == 404
+    )
+    assert (
+        client.post(
+            "/api/v1/pan-subscribes/99999999/check", headers=auth_headers
+        ).status_code
+        == 404
+    )
+
+
+# ------------------------------------------------------------- 刮削与洗版接口
+def test_library_scrape_endpoint(client, auth_headers, tmp_media):
+    """补刮接口：对空库也要返回统计而不是报错。"""
+    response = client.post(
+        "/api/v1/library/scrape",
+        json={"limit": 5, "overwrite": False},
+        headers=auth_headers,
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert {"scanned", "scraped", "skipped", "degraded"} <= set(body)
+
+
+def test_subscribe_upgrade_endpoint(client, auth_headers):
+    """洗版试算：未开最优版本的订阅要明确说明，不存在的回 404。"""
+    created = client.post(
+        "/api/v1/subscribes",
+        json={"title": "洗版接口测试剧", "media_type": "tv", "season": 1},
+        headers=auth_headers,
+    )
+    assert created.status_code == 200, created.text
+    sub_id = created.json()["id"]
+
+    result = client.post(
+        f"/api/v1/subscribes/{sub_id}/upgrade",
+        json={"dry_run": True},
+        headers=auth_headers,
+    )
+    assert result.status_code == 200, result.text
+    assert "最优版本" in result.json()["message"]
+
+    missing = client.post(
+        "/api/v1/subscribes/99999999/upgrade",
+        json={"dry_run": True},
+        headers=auth_headers,
+    )
+    assert missing.status_code == 404
+
+    batch = client.post(
+        "/api/v1/subscribes/upgrade-all", json={"dry_run": False}, headers=auth_headers
+    )
+    assert batch.status_code == 200
+    assert "未启用" in batch.json()["message"]
+
+    client.delete(f"/api/v1/subscribes/{sub_id}", headers=auth_headers)
+
+
+def test_settings_groups_include_new_features(client, auth_headers):
+    """新增的配置组必须出现在设置页数据里，否则用户不知道怎么开关。"""
+    body = client.get("/api/v1/system/settings", headers=auth_headers).json()
+    titles = {group["title"] for group in body["groups"]}
+    assert {"刮削与分类", "STRM 同步", "分享追更与洗版"} <= titles
+    keys = {item["key"] for group in body["groups"] for item in group["items"]}
+    assert {"SCRAPE_ENABLED", "STRM_LINK_MODE", "UPGRADE_ENABLED", "CATEGORY_ENABLED"} <= keys
+
+
+def test_migrate_columns_upgrades_legacy_table(tmp_path):
+    """老版本数据库缺 v1.4.0 新增列时，必须能自动补齐。
+
+    这是真实踩过的坑：``create_all`` 只建缺失的**表**，不会给已存在的表加列，
+    老用户升级后一 SELECT 新列就 500。
+    """
+    import sqlite3
+
+    from sqlalchemy import create_engine, inspect
+
+    from app.db import init_db as init_module
+
+    legacy = tmp_path / "legacy.db"
+    connection = sqlite3.connect(legacy)
+    # 造一个 v1.3.0 时期的 library_files（没有 quality_score / upgrade_count）
+    connection.execute(
+        "CREATE TABLE library_files (id INTEGER PRIMARY KEY, path TEXT, title TEXT)"
+    )
+    connection.commit()
+    connection.close()
+
+    engine = create_engine(f"sqlite:///{legacy}")
+    original = init_module.engine
+    init_module.engine = engine
+    try:
+        init_module.migrate_columns()
+        columns = {item["name"] for item in inspect(engine).get_columns("library_files")}
+        assert {"quality_score", "upgrade_count"} <= columns
+        # 幂等：再跑一次不能报错
+        init_module.migrate_columns()
+    finally:
+        init_module.engine = original
+        engine.dispose()

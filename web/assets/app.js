@@ -135,6 +135,13 @@
   };
 
   const fmtSpeed = (value) => (Number(value) ? fmtSize(value) + "/s" : "-");
+
+  /** 取路径最后一段（Windows/Unix 分隔符都吃）。 */
+  const baseName = (value) => {
+    const text = String(value || "");
+    const index = Math.max(text.lastIndexOf("/"), text.lastIndexOf("\\"));
+    return index >= 0 ? text.slice(index + 1) : text;
+  };
   const fmtTime = (value) =>
     value ? String(value).replace("T", " ").slice(0, 19) : "-";
   const pad2 = (value) => String(value).padStart(2, "0");
@@ -507,6 +514,8 @@
     { key: "downloads", label: "下载任务", icon: "download", group: "入库" },
     { key: "library", label: "媒体库", icon: "library", group: "入库" },
     { key: "storage", label: "网盘管理", icon: "cloud", group: "入库" },
+    { key: "pansub", label: "分享追更", icon: "link", group: "入库" },
+    { key: "strm", label: "STRM 同步", icon: "film", group: "入库" },
     { key: "sites", label: "站点管理", icon: "server", group: "系统" },
     { key: "chatops", label: "机器人", icon: "robot", group: "系统" },
     { key: "plugins", label: "插件", icon: "plugin", group: "系统" },
@@ -1554,7 +1563,22 @@
         }
       }, "sm danger");
 
-      return el("div", { class: "row tight" }, [search, toggle, remove]);
+      // 洗版只对开了「最优版本」的订阅有意义，别的订阅不显示这个按钮免得误点
+      const upgrade = row.best_version
+        ? iconButton("洗版试算", "chart", async () => {
+            try {
+              const result = await api("/subscribes/" + row.id + "/upgrade", {
+                method: "POST",
+                body: { dry_run: true },
+              });
+              upgradeReport(row, result);
+            } catch (error) {
+              toast(error.message, "err");
+            }
+          }, "sm ghost")
+        : null;
+
+      return el("div", { class: "row tight" }, [search, upgrade, toggle, remove].filter(Boolean));
     };
 
     const content = el("div", { class: "card flush" }, [
@@ -1641,6 +1665,69 @@
       "共 " + items.length + " 个订阅 · 定时任务可在下方直接调整",
       [add, runAll]
     );
+  }
+
+  /** 洗版试算结果弹窗：先让用户看清「哪一集会被什么替换」再决定是否执行。 */
+  function upgradeReport(row, result) {
+    const candidates = result.candidates || [];
+    const willUpgrade = candidates.filter((item) => item.upgrade);
+    const body = el("div", { class: "grid" }, [
+      el("div", { class: "kv" }, [
+        el("div", { class: "kv-item" }, [
+          el("div", { class: "kv-label", text: "可洗版" }),
+          el("div", { text: willUpgrade.length + " 集" }),
+        ]),
+        el("div", { class: "kv-item" }, [
+          el("div", { class: "kv-label", text: "已跳过" }),
+          el("div", { text: (result.skipped || 0) + " 集" }),
+        ]),
+      ]),
+      el("div", { class: "muted", text: result.message || "" }),
+      table(
+        [
+          {
+            title: "已入库文件",
+            render: (item) =>
+              el("div", { class: "truncate tiny mono dim", title: item.library_file || "", text: baseName(item.library_file) }),
+          },
+          { title: "集", class: "num", render: (item) => (item.episode ? "E" + item.episode : "整季") },
+          { title: "现有评分", class: "num", render: (item) => Number(item.current_score || 0).toFixed(1) },
+          { title: "候选评分", class: "num", render: (item) => Number(item.candidate_score || 0).toFixed(1) },
+          {
+            title: "候选资源",
+            render: (item) =>
+              el("div", { class: "truncate tiny", title: item.candidate || "", text: item.candidate || "-" }),
+          },
+          {
+            title: "结论",
+            render: (item) =>
+              el("div", {}, [
+                item.upgrade
+                  ? el("span", { class: "tag dot ok", text: "值得替换" })
+                  : el("span", { class: "tag dot warn", text: "保持现状" }),
+                el("div", { class: "cell-sub", text: item.reason || "" }),
+              ]),
+          },
+        ],
+        candidates,
+        "没有找到更优版本"
+      ),
+      willUpgrade.length
+        ? iconButton("确认执行洗版（会替换已入库文件）", "check", async () => {
+            try {
+              const done = await api("/subscribes/" + row.id + "/upgrade", {
+                method: "POST",
+                body: { dry_run: false },
+              });
+              toast("已提交 " + (done.upgraded || 0) + " 个洗版下载任务", "ok");
+              pageSubscribes();
+            } catch (error) {
+              toast(error.message, "err");
+            }
+          }, "primary")
+        : null,
+    ]);
+    panelModal("洗版试算 · " + row.title, "只在评分提升足够时才替换；旧文件会在新文件确实入库后才删除。", body, true);
   }
 
   // ---------------- 定时任务设置 ----------------
@@ -1734,7 +1821,9 @@
         el("div", { class: "card-head" }, [
           el("h3", {}, [
             icon(
-              { subscribe: "star", radar: "radar", download: "download", library: "library" }[row.key] || "clock",
+              { subscribe: "star", radar: "radar", download: "download", library: "library",
+                pan_transfer: "cloud", pan_subscribe: "link", strm_sync: "film",
+                scrape: "box", upgrade: "chart" }[row.key] || "clock",
               "sm"
             ),
             el("span", { text: row.name }),
@@ -2072,8 +2161,34 @@
       }
     });
 
+    // 补刮按钮：只处理缺 NFO 的文件，可反复点，因此不做二次确认
+    const scrape = el("button", { class: "btn" }, [
+      icon("box", "sm"),
+      el("span", { text: "补刮 NFO" }),
+    ]);
+    scrape.addEventListener("click", async () => {
+      scrape.disabled = true;
+      scrape.querySelector("span").textContent = "刮削中…";
+      try {
+        const result = await api("/library/scrape", {
+          method: "POST",
+          body: { limit: 200, overwrite: false },
+        });
+        const degraded = result.degraded ? "（其中 " + result.degraded + " 个因 TMDB 不可用写了最小 NFO）" : "";
+        toast(
+          "扫描 " + result.scanned + " 个 · 新刮 " + result.scraped + " 个 · 跳过 " + result.skipped + " 个" + degraded,
+          "ok"
+        );
+      } catch (error) {
+        toast(error.message, "err");
+      }
+      scrape.disabled = false;
+      scrape.querySelector("span").textContent = "补刮 NFO";
+    });
+
     shell(content, "媒体库", data.files + " 个文件 · " + fmtSize(data.size), [
       iconButton("手动整理", "plus", transferForm),
+      scrape,
       scan,
       iconButton("刷新媒体服务器", "server", async () => {
         try {
@@ -3241,6 +3356,444 @@
     );
   }
 
+  // ---------------- STRM 同步 ----------------
+  /** STRM 页面的筛选状态（切页保留，便于来回对比）。 */
+  const strmState = { siteId: null, aliveOnly: false };
+
+  /** 手动同步弹窗：选盘 + 起始目录 + 链接模式。 */
+  function strmSyncForm(storages, onDone) {
+    const options = [{ value: "", label: "全部启用的网盘（遍历同步）" }].concat(
+      (storages || []).map((item) => ({ value: String(item.site_id), label: item.name }))
+    );
+    modal(
+      "手动同步 STRM",
+      [
+        { key: "site_id", label: "网盘", type: "select", value: strmState.siteId ? String(strmState.siteId) : "", options },
+        { key: "pan_path", label: "起始目录", value: "/", hint: "只同步该目录及其子目录下的视频文件" },
+        { key: "strm_subdir", label: "STRM 子目录", value: "", hint: "留空则直接落在 STRM 根目录；多盘并存时建议按盘名分开" },
+        {
+          key: "link_mode",
+          label: "链接模式",
+          type: "select",
+          value: "",
+          options: [
+            { value: "", label: "跟随全局配置" },
+            { value: "proxy", label: "proxy · 写 302 端点，链接永不过期（推荐）" },
+            { value: "direct", label: "direct · 写网盘临时直链，会过期" },
+          ],
+        },
+        { key: "clean", label: "清理失效 STRM", type: "checkbox", value: true, hint: "网盘上源文件已消失时，同步删掉对应的 .strm，避免媒体库出现点不开的空剧集" },
+      ],
+      async (values) => {
+        const payload = {
+          pan_path: values.pan_path || "/",
+          clean: values.clean,
+        };
+        if (values.site_id) payload.site_id = Number(values.site_id);
+        if (values.strm_subdir) payload.strm_subdir = values.strm_subdir;
+        if (values.link_mode) payload.link_mode = values.link_mode;
+        const result = await api("/strm/sync", { method: "POST", body: payload });
+        const created = result.created !== undefined ? result.created : 0;
+        const removed = result.removed !== undefined ? result.removed : 0;
+        toast(result.message || "同步完成：新增 " + created + " · 清理 " + removed, "ok");
+        if (onDone) onDone();
+      },
+      "开始同步"
+    );
+  }
+
+  async function pageStrm() {
+    shell(loading(), "STRM 同步", "把网盘目录映射成本地 .strm，媒体服务器秒级入库");
+    const query =
+      "/strm/records?limit=300" +
+      (strmState.siteId ? "&site_id=" + strmState.siteId : "") +
+      (strmState.aliveOnly ? "&alive_only=true" : "");
+    const [overview, records, storages] = await Promise.all([
+      api("/strm"),
+      api(query).catch(() => ({ items: [] })),
+      api("/pan").catch(() => ({ items: [] })),
+    ]);
+
+    const data = overview.data || {};
+    const list = records.items || [];
+    const panList = storages.items || [];
+    const proxyMode = (data.link_mode || "proxy") === "proxy";
+
+    const stats = el("div", { class: "grid cols-4" }, [
+      statCard("STRM 总数", String(data.total || 0), "已生成的 .strm 文件", "film"),
+      statCard("有效", String(data.alive || 0), "源文件仍在网盘上", "check"),
+      statCard("失效", String(data.invalid || 0), data.invalid ? "源文件已消失，建议同步清理" : "没有失效记录", "alert"),
+      statCard("覆盖体积", data.total_size_text || "-", "这些视频在网盘上的总大小", "cloud"),
+    ]);
+
+    // 链接模式说明卡：这一条最容易配错，直接把差异写在界面上
+    const modeCard = el("div", { class: "card" }, [
+      el("div", { class: "card-head" }, [
+        el("h3", {}, [icon("link", "sm"), el("span", { text: "链接模式" })]),
+        el("span", { class: "tag " + (proxyMode ? "brand" : "warn"), text: data.link_mode || "proxy" }),
+      ]),
+      el("div", { class: "kv" }, [
+        el("div", { class: "kv-item" }, [
+          el("div", { class: "kv-label", text: "STRM 目录" }),
+          el("div", { class: "mono tiny", text: data.strm_dir || "-" }),
+        ]),
+        el("div", { class: "kv-item" }, [
+          el("div", { class: "kv-label", text: "当前写入内容" }),
+          el("div", {
+            class: "mono tiny",
+            text: proxyMode ? "/api/v1/strm/play/{记录ID}" : "网盘临时直链",
+          }),
+        ]),
+        el("div", { class: "kv-item" }, [
+          el("div", { class: "kv-label", text: "过期风险" }),
+          el("div", { text: proxyMode ? "无：播放时才实时换直链" : "有：直链过期后需重新同步" }),
+        ]),
+        el("div", { class: "kv-item" }, [
+          el("div", { class: "kv-label", text: "切换方式" }),
+          el("div", { class: "mono tiny", text: "CF_STRM_LINK_MODE=proxy|direct" }),
+        ]),
+      ]),
+      el("div", { class: "muted", style: "margin-top:12px" }, [
+        el("span", {
+          text: proxyMode
+            ? "播放端点是匿名 302 跳转（播放器带不了登录态），只回 Location 头不代理流量。"
+            : "direct 模式 NAS 零流量，但网盘直链有有效期，建议配合定时同步任务使用。",
+        }),
+      ]),
+    ]);
+
+    const filters = el("div", { class: "row tight center wrap" }, [
+      segment(
+        [{ value: "", label: "全部网盘" }].concat(
+          panList.map((item) => ({ value: String(item.site_id), label: item.name }))
+        ),
+        strmState.siteId ? String(strmState.siteId) : "",
+        (value) => {
+          strmState.siteId = value ? Number(value) : null;
+          pageStrm();
+        }
+      ),
+      segment(
+        [
+          { value: "all", label: "全部记录" },
+          { value: "alive", label: "只看有效" },
+        ],
+        strmState.aliveOnly ? "alive" : "all",
+        (value) => {
+          strmState.aliveOnly = value === "alive";
+          pageStrm();
+        }
+      ),
+    ]);
+
+    const recordCard = el("div", { class: "card flush" }, [
+      el("div", { class: "card-head" }, [
+        el("h3", {}, [icon("library", "sm"), el("span", { text: "STRM 记录（" + list.length + "）" })]),
+        filters,
+      ]),
+      table(
+        [
+          {
+            title: "STRM 文件",
+            render: (row) =>
+              el("div", {}, [
+                el("div", { class: "truncate", title: row.strm_path, text: baseName(row.strm_path) }),
+                el("div", { class: "cell-sub mono tiny truncate", title: row.strm_path, text: row.strm_path }),
+              ]),
+          },
+          {
+            title: "网盘源文件",
+            render: (row) =>
+              el("span", { class: "mono tiny dim truncate", title: row.source_path, text: row.source_path }),
+          },
+          { title: "大小", class: "num", render: (row) => row.size_text || fmtSize(row.size) },
+          {
+            title: "模式",
+            render: (row) => el("span", { class: "tag" + (row.link_mode === "proxy" ? " brand" : ""), text: row.link_mode }),
+          },
+          {
+            title: "状态",
+            render: (row) =>
+              row.alive
+                ? el("span", { class: "tag dot ok", text: "有效" })
+                : el("span", { class: "tag dot warn", text: "失效" }),
+          },
+          { title: "最近同步", render: (row) => fmtRelative(row.last_synced_at) },
+          {
+            title: "操作",
+            render: (row) =>
+              el("div", { class: "row tight" }, [
+                iconButton("测直链", "play", async () => {
+                  try {
+                    // 只请求不跟随跳转，用状态码判断这条 STRM 现在还能不能播
+                    const response = await fetch("/api/v1/strm/play/" + row.id, { redirect: "manual" });
+                    const ok = response.type === "opaqueredirect" || (response.status >= 200 && response.status < 400);
+                    toast(ok ? "换取直链成功，这条 STRM 可正常播放" : "换取失败（HTTP " + response.status + "）", ok ? "ok" : "err");
+                  } catch (error) {
+                    toast(error.message, "err");
+                  }
+                }, "sm ghost"),
+                iconButton("复制播放地址", "link", () => {
+                  copyText(location.origin + "/api/v1/strm/play/" + row.id);
+                  toast("播放地址已复制", "ok");
+                }, "sm ghost"),
+              ]),
+          },
+        ],
+        list,
+        panList.length
+          ? "还没有生成 STRM，点右上角「手动同步」把网盘目录映射成 .strm 文件"
+          : "先到「站点管理」启用一个网盘存储（AList / 夸克 / WebDAV / 本地目录）"
+      ),
+    ]);
+
+    shell(
+      el("div", { class: "grid" }, [stats, modeCard, recordCard]),
+      "STRM 同步",
+      "共 " + (data.total || 0) + " 个 STRM · " + (data.total_size_text || "0") + " 网盘内容",
+      [
+        iconButton("手动同步", "cloud", () => strmSyncForm(panList, pageStrm), "primary"),
+        iconButton("刷新", "refresh", () => pageStrm()),
+      ]
+    );
+  }
+
+  // ---------------- 网盘分享追更 ----------------
+  const WEEKDAY_NAMES = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
+
+  /** 把 weekdays 数组渲染成人话。 */
+  function weekdayText(days) {
+    if (!days || !days.length) return "每天";
+    return days
+      .slice()
+      .sort((a, b) => a - b)
+      .map((day) => WEEKDAY_NAMES[day] || day)
+      .join("、");
+  }
+
+  /** 新建/编辑分享追更任务。row 为空表示新建。 */
+  async function panSubForm(row, onDone) {
+    let storages = { items: [] };
+    try {
+      storages = await api("/pan");
+    } catch (error) {
+      /* 网盘列不出来也允许建任务：留空即自动挑同家网盘 */
+    }
+    const siteOptions = [{ value: "", label: "自动选择（按链接匹配同家网盘）" }].concat(
+      (storages.items || []).map((item) => ({ value: String(item.site_id), label: item.name }))
+    );
+    const current = row || {};
+    modal(
+      row ? "编辑分享追更 · " + row.name : "新建分享追更",
+      [
+        { key: "name", label: "任务名称", value: current.name || "", placeholder: "如：庆余年第二季（连载）" },
+        { key: "share_url", label: "分享链接", value: current.share_url || "", placeholder: "https://pan.quark.cn/s/xxxxxx" },
+        { key: "password", label: "提取码", value: current.password || "", hint: "没有就留空" },
+        { key: "site_id", label: "转存到", type: "select", value: current.site_id ? String(current.site_id) : "", options: siteOptions },
+        { key: "target_dir", label: "落地目录", value: current.target_dir || "", placeholder: "/来自：分享/庆余年", hint: "留空用网盘根目录" },
+        { key: "include_regex", label: "只要匹配（正则）", value: current.include_regex || "", placeholder: "\\.(mkv|mp4)$", hint: "留空表示全都要" },
+        { key: "exclude_regex", label: "排除匹配（正则）", value: current.exclude_regex || "", placeholder: "预告|花絮|sample" },
+        { key: "rename_search", label: "重命名匹配（正则）", value: current.rename_search || "", placeholder: "^第(\\d+)集.*$" },
+        { key: "rename_replace", label: "重命名为", value: current.rename_replace || "", placeholder: "S02E\\1.mkv", hint: "支持 \\1 反向引用；两项都填才生效" },
+        { key: "weekdays", label: "仅在这些星期几执行", value: (current.weekdays || []).join(","), placeholder: "1,3,5", hint: "0=周一 … 6=周日；留空=每天。周更剧只在更新日巡检可省大量请求" },
+        row ? { key: "reset_invalid", label: "清除失效标记", type: "checkbox", value: false, hint: "换了新链接或重填 Cookie 后勾选，让任务重新开始" } : null,
+        row ? { key: "reset_history", label: "清空转存历史", type: "checkbox", value: false, hint: "下次巡检会把分享里的文件重新转存一遍" } : null,
+      ].filter(Boolean),
+      async (values) => {
+        const payload = {
+          name: values.name,
+          share_url: values.share_url,
+          password: values.password || null,
+          target_dir: values.target_dir || null,
+          include_regex: values.include_regex || null,
+          exclude_regex: values.exclude_regex || null,
+          rename_search: values.rename_search || null,
+          rename_replace: values.rename_replace || null,
+          weekdays: String(values.weekdays || "")
+            .split(/[,，\s]+/)
+            .filter((item) => item !== "")
+            .map((item) => Number(item))
+            .filter((item) => !Number.isNaN(item) && item >= 0 && item <= 6),
+        };
+        payload.site_id = values.site_id ? Number(values.site_id) : null;
+        if (row) {
+          payload.reset_invalid = !!values.reset_invalid;
+          payload.reset_history = !!values.reset_history;
+          await api("/pan-subscribes/" + row.id, { method: "PATCH", body: payload });
+          toast("已保存", "ok");
+        } else {
+          if (!payload.name || !payload.share_url) throw new Error("任务名称与分享链接必填");
+          await api("/pan-subscribes", { method: "POST", body: payload });
+          toast("分享追更已创建", "ok");
+        }
+        if (onDone) onDone();
+      },
+      row ? "保存" : "创建",
+      { wide: true, lead: "盯住一个会持续更新的分享链接，每次巡检只转存新增文件——对标 quark-auto-save 的核心玩法。" }
+    );
+  }
+
+  async function pagePanSub() {
+    shell(loading(), "分享追更", "盯住持续更新的分享链接，增量转存");
+    const [data, schedules] = await Promise.all([
+      api("/pan-subscribes"),
+      api("/schedules").catch(() => ({ items: [] })),
+    ]);
+    const list = data.items || [];
+    const job = (schedules.items || []).find((item) => item.key === "pan_subscribe");
+
+    const active = list.filter((item) => item.status === "active" && !item.invalid).length;
+    const totalSaved = list.reduce((sum, item) => sum + (item.total_saved || 0), 0);
+
+    const stats = el("div", { class: "grid cols-4" }, [
+      statCard("追更任务", String(list.length), "盯住的分享链接总数", "link"),
+      statCard("运行中", String(active), "会被定时巡检的任务", "play"),
+      statCard("已失效", String(data.invalid || 0), data.invalid ? "连续失败达阈值，已自动停手" : "全部健康", "alert"),
+      statCard("累计转存", String(totalSaved), "历史新增的文件数", "cloud"),
+    ]);
+
+    const jobCard = el("div", { class: "card" }, [
+      el("div", { class: "card-head" }, [
+        el("h3", {}, [icon("clock", "sm"), el("span", { text: "巡检节奏" })]),
+        job && job.enabled
+          ? el("span", { class: "tag dot ok", text: "已启用" })
+          : el("span", { class: "tag dot warn", text: job ? "已关闭" : "未注册" }),
+      ]),
+      job
+        ? el("div", { class: "kv" }, [
+            el("div", { class: "kv-item" }, [
+              el("div", { class: "kv-label", text: "当前规则" }),
+              el("div", { class: "mono", text: job.trigger === "cron" ? job.cron : "每 " + job.minutes + " 分钟" }),
+            ]),
+            el("div", { class: "kv-item" }, [
+              el("div", { class: "kv-label", text: "下次执行" }),
+              el("div", {}, [
+                el("div", { text: fmtRelative(job.next_run_time) }),
+                el("div", { class: "cell-sub", text: fmtTime(job.next_run_time) }),
+              ]),
+            ]),
+          ])
+        : emptyBox("调度器未运行，任务只能手动巡检", "clock"),
+      job
+        ? el("div", { class: "row tight", style: "margin-top:16px" }, [
+            iconButton("修改周期", "edit", () => scheduleForm(job, pagePanSub), "sm primary"),
+            iconButton("立即执行", "play", () => runSchedule(job, pagePanSub), "sm"),
+          ])
+        : null,
+    ]);
+
+    const listCard = el("div", { class: "card flush" }, [
+      el("div", { class: "card-head" }, [
+        el("h3", {}, [icon("inbox", "sm"), el("span", { text: "追更任务（" + list.length + "）" })]),
+        el("div", { class: "row tight center" }, [
+          iconButton("立即巡检全部", "play", async () => {
+            try {
+              const result = await api("/pan-subscribes/check-all?limit=50", { method: "POST" });
+              toast(result.message || "巡检完成", result.failed ? "err" : "ok");
+              pagePanSub();
+            } catch (error) {
+              toast(error.message, "err");
+            }
+          }, "sm"),
+          iconButton("新建", "plus", () => panSubForm(null, pagePanSub), "sm primary"),
+        ]),
+      ]),
+      table(
+        [
+          {
+            title: "任务",
+            render: (row) =>
+              el("div", {}, [
+                el("div", { class: "row tight center" }, [
+                  el("span", { text: row.name }),
+                  row.invalid ? el("span", { class: "tag warn", text: "已失效" }) : null,
+                ]),
+                el("div", { class: "cell-sub mono tiny truncate", title: row.share_url, text: row.share_url }),
+              ]),
+          },
+          {
+            title: "过滤 / 重命名",
+            render: (row) =>
+              el("div", { class: "stack tiny" }, [
+                row.include_regex ? el("div", { class: "mono dim", text: "只要 " + row.include_regex }) : null,
+                row.exclude_regex ? el("div", { class: "mono dim", text: "排除 " + row.exclude_regex }) : null,
+                row.rename_search ? el("div", { class: "mono dim", text: row.rename_search + " → " + (row.rename_replace || "") }) : null,
+                !row.include_regex && !row.exclude_regex && !row.rename_search
+                  ? el("span", { class: "dim", text: "全部转存，不改名" })
+                  : null,
+              ]),
+          },
+          { title: "执行日", render: (row) => el("span", { class: "tiny", text: weekdayText(row.weekdays) }) },
+          {
+            title: "已转存",
+            class: "num",
+            render: (row) =>
+              el("div", {}, [
+                el("div", { text: String(row.total_saved || 0) }),
+                el("div", { class: "cell-sub", text: "记录 " + (row.saved_count || 0) }),
+              ]),
+          },
+          {
+            title: "最近巡检",
+            render: (row) =>
+              el("div", {}, [
+                el("div", { text: fmtRelative(row.last_checked_at) }),
+                row.last_message
+                  ? el("div", { class: "cell-sub truncate", title: row.last_message, text: row.last_message })
+                  : null,
+              ]),
+          },
+          {
+            title: "失败",
+            class: "num",
+            render: (row) =>
+              row.failure_count
+                ? el("span", { class: "tag warn", text: String(row.failure_count) })
+                : el("span", { class: "dim", text: "0" }),
+          },
+          {
+            title: "操作",
+            render: (row) =>
+              el("div", { class: "row tight" }, [
+                iconButton("巡检", "play", async () => {
+                  try {
+                    const result = await api("/pan-subscribes/" + row.id + "/check", { method: "POST" });
+                    toast(result.message || "巡检完成", result.success ? "ok" : "err");
+                    pagePanSub();
+                  } catch (error) {
+                    toast(error.message, "err");
+                  }
+                }, "sm"),
+                iconButton("编辑", "edit", () => panSubForm(row, pagePanSub), "sm ghost"),
+                iconButton("删除", "trash", async () => {
+                  if (!confirm("确定删除追更任务「" + row.name + "」？")) return;
+                  try {
+                    await api("/pan-subscribes/" + row.id, { method: "DELETE" });
+                    toast("已删除", "ok");
+                    pagePanSub();
+                  } catch (error) {
+                    toast(error.message, "err");
+                  }
+                }, "sm danger"),
+              ]),
+          },
+        ],
+        list,
+        "还没有分享追更任务。点「新建」贴一个持续更新的网盘分享链接，之后只转存新增文件"
+      ),
+    ]);
+
+    shell(
+      el("div", { class: "grid" }, [stats, jobCard, listCard]),
+      "分享追更",
+      list.length ? "共 " + list.length + " 个任务 · 累计转存 " + totalSaved + " 个文件" : "盯住分享链接做增量转存",
+      [
+        iconButton("新建任务", "plus", () => panSubForm(null, pagePanSub), "primary"),
+        iconButton("刷新", "refresh", () => pagePanSub()),
+      ]
+    );
+  }
+
   // ---------------- ChatOps 机器人 ----------------
   function copyText(text) {
     const value = String(text || "");
@@ -3620,6 +4173,8 @@
     plugins: pagePlugins,
     logs: pageLogs,
     storage: pageStorage,
+    pansub: pagePanSub,
+    strm: pageStrm,
     chatops: pageChatops,
     settings: pageSettings,
   };

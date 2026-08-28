@@ -141,8 +141,14 @@ def transfer_file(
     meta: MetaInfo | None = None,
     overwrite: bool = False,
     dry_run: bool = False,
+    genres: list[str] | None = None,
+    original_language: str | None = None,
 ) -> TransferResult:
-    """把单个媒体文件整理进媒体库。"""
+    """把单个媒体文件整理进媒体库。
+
+    ``genres`` / ``original_language`` 传 TMDB 信息时，
+    开启 ``CF_CATEGORY_ENABLED`` 可按「电影/剧集/动漫/纪录片/综艺」二级归档。
+    """
     source = Path(source)
     mode = (mode or settings.TRANSFER_MODE).lower()
     library = Path(library_dir or settings.LIBRARY_DIR)
@@ -156,6 +162,17 @@ def transfer_file(
 
     extension = source.suffix.lower()
     relative = render_name(info, extension, template)
+
+    # 二级分类目录（判定不出来时不归档，避免把片子塞进错误分类）
+    if settings.CATEGORY_ENABLED:
+        from app.core.categories import directory_for
+
+        category = directory_for(
+            info, genres=genres, original_language=original_language
+        )
+        if category:
+            relative = f"{category}/{relative}"
+
     size = source.stat().st_size
 
     if mode == TransferMode.STRM.value:

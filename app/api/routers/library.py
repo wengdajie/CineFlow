@@ -10,7 +10,7 @@ from sqlalchemy import select
 from app.api.deps import CurrentUser, DbSession
 from app.core.organizer import transfer_directory
 from app.db.models import LibraryFile, TransferRecord
-from app.schemas.models import TransferRequest, TransferResultOut
+from app.schemas.models import ScrapeRequest, TransferRequest, TransferResultOut
 from app.services import library as library_service
 
 router = APIRouter(prefix="/library", tags=["媒体库"])
@@ -90,6 +90,21 @@ def transfer(payload: TransferRequest, user: CurrentUser) -> dict[str, Any]:
         "succeeded": sum(1 for item in items if item.success),
         "items": items,
     }
+
+
+@router.post("/scrape", summary="批量补刮 NFO 与图片")
+async def scrape(payload: ScrapeRequest, user: CurrentUser) -> dict[str, Any]:
+    """给媒体库里**缺 NFO** 的文件补刮元数据。
+
+    默认不覆盖已有 NFO，因此可以反复执行；TMDB 不可用时会退化成
+    只含标题/年份的最小 NFO（统计里的 ``degraded``），不会整批失败。
+    """
+    from app.services import scraper as scraper_service
+
+    result = await scraper_service.scrape_library(
+        payload.path, limit=payload.limit, overwrite=payload.overwrite
+    )
+    return {"success": True, **result}
 
 
 @router.post("/refresh", summary="刷新媒体服务器")

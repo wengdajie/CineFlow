@@ -146,30 +146,17 @@ class QuarkStorage(BasePanStorage):
         match = SHARE_ID_RE.search(str(share_url or ""))
         return match.group(1) if match else ""
 
-    async def save_share(
-        self,
-        share_url: str,
-        *,
-        password: str | None = None,
-        target_dir: str | None = None,
-    ) -> SaveResult:
-        share_id = self.parse_share_id(share_url)
-        if not share_id:
-            return SaveResult(False, "不是有效的夸克分享链接")
-        if not self.cookie:
-            return SaveResult(False, "未配置夸克 Cookie")
-
-        # 1) 换 stoken
-        token_payload = await self._call(
+    async def _share_token(self, share_id: str, password: str | None) -> str | None:
+        """第 1 步：用分享码（+提取码）换 stoken。"""
+        payload = await self._call(
             "/share/sharepage/token",
             method="POST",
             body={"pwd_id": share_id, "passcode": password or ""},
         )
-        stoken = ((token_payload or {}).get("data") or {}).get("stoken")
-        if not stoken:
-            return SaveResult(False, "获取分享 token 失败（链接失效或提取码错误）")
+        return ((payload or {}).get("data") or {}).get("stoken")
 
-        # 2) 列出分享内容
+    async def _share_items(self, share_id: str, stoken: str) -> list[dict[str, Any]]:
+        """第 2 步：列出分享内的文件（含 fid 与 share_fid_token）。"""
         detail = await self._call(
             "/share/sharepage/detail",
             params={
@@ -180,13 +167,72 @@ class QuarkStorage(BasePanStorage):
                 "_size": 200,
             },
         )
-        items = ((detail or {}).get("data") or {}).get("list") or []
-        if not items:
-            return SaveResult(False, "分享内没有可转存的文件")
-        fid_list = [str(i.get("fid")) for i in items if i.get("fid")]
-        token_list = [str(i.get("share_fid_token") or "") for i in items if i.get("fid")]
+        return ((detail or {}).get("data") or {}).get("list") or []
 
-        # 3) 提交转存
+    async def list_share(
+        self, share_url: str, *, password: str | None = None
+    ) -> list[PanFile]:
+        """列出分享内部的文件清单（供「分享追更」做增量判断）。"""
+        share_id = self.parse_share_id(share_url)
+        if not share_id or not self.cookie:
+            return []
+        stoken = await self._share_token(share_id, password)
+        if not stoken:
+            return []
+        files: list[PanFile] = []
+        for item in await self._share_items(share_id, stoken):
+            if not item.get("fid"):
+                continue
+            name = str(item.get("file_name") or "")
+            files.append(
+                PanFile(
+                    name=name,
+                    path=f"/{name}",
+                    is_dir=bool(item.get("dir")),
+                    size=int(item.get("size") or 0),
+                    file_id=str(item["fid"]),
+                    # share_fid_token 是转存时必须回传的凭据，随文件一起带出来
+                    extra={"share_fid_token": str(item.get("share_fid_token") or "")},
+                )
+            )
+        return files
+
+    async def save_share_files(
+        self,
+        share_url: str,
+        files: list[PanFile],
+        *,
+        password: str | None = None,
+        target_dir: str | None = None,
+    ) -> SaveResult:
+        """只转存分享内指定的文件（增量转存）。"""
+        if not files:
+            return SaveResult(False, "没有需要转存的文件")
+        share_id = self.parse_share_id(share_url)
+        if not share_id:
+            return SaveResult(False, "不是有效的夸克分享链接")
+        if not self.cookie:
+            return SaveResult(False, "未配置夸克 Cookie")
+        stoken = await self._share_token(share_id, password)
+        if not stoken:
+            return SaveResult(False, "获取分享 token 失败（链接失效或提取码错误）")
+        fid_list = [str(item.file_id) for item in files if item.file_id]
+        token_list = [str((item.extra or {}).get("share_fid_token") or "") for item in files if item.file_id]
+        if not fid_list:
+            return SaveResult(False, "选中的文件缺少 fid，无法转存")
+        return await self._submit_save(
+            share_id, stoken, fid_list, token_list, target_dir
+        )
+
+    async def _submit_save(
+        self,
+        share_id: str,
+        stoken: str,
+        fid_list: list[str],
+        token_list: list[str],
+        target_dir: str | None,
+    ) -> SaveResult:
+        """第 3~4 步：提交转存任务并轮询结果。"""
         target = self.normalize_path(target_dir or self.root_path)
         to_pdir_fid = await self._resolve_fid(target) or "0"
         save_payload = await self._call(
@@ -206,8 +252,6 @@ class QuarkStorage(BasePanStorage):
         task_id = ((save_payload or {}).get("data") or {}).get("task_id")
         if not task_id:
             return SaveResult(False, "提交转存失败（可能容量不足或文件已存在）")
-
-        # 4) 轮询任务
         ok = await self._wait_task(str(task_id))
         if not ok:
             return SaveResult(
@@ -217,7 +261,40 @@ class QuarkStorage(BasePanStorage):
                 file_count=len(fid_list),
             )
         return SaveResult(
-            True, f"已转存 {len(fid_list)} 个文件", saved_path=target, file_count=len(fid_list)
+            True,
+            f"已转存 {len(fid_list)} 个文件",
+            saved_path=target,
+            file_count=len(fid_list),
+        )
+
+    async def save_share(
+        self,
+        share_url: str,
+        *,
+        password: str | None = None,
+        target_dir: str | None = None,
+    ) -> SaveResult:
+        share_id = self.parse_share_id(share_url)
+        if not share_id:
+            return SaveResult(False, "不是有效的夸克分享链接")
+        if not self.cookie:
+            return SaveResult(False, "未配置夸克 Cookie")
+
+        # 1) 换 stoken
+        stoken = await self._share_token(share_id, password)
+        if not stoken:
+            return SaveResult(False, "获取分享 token 失败（链接失效或提取码错误）")
+
+        # 2) 列出分享内容
+        items = await self._share_items(share_id, stoken)
+        if not items:
+            return SaveResult(False, "分享内没有可转存的文件")
+        fid_list = [str(i.get("fid")) for i in items if i.get("fid")]
+        token_list = [str(i.get("share_fid_token") or "") for i in items if i.get("fid")]
+
+        # 3~4) 提交转存并轮询（与增量转存共用同一段逻辑）
+        return await self._submit_save(
+            share_id, stoken, fid_list, token_list, target_dir
         )
 
     async def _wait_task(self, task_id: str, *, retries: int = 10) -> bool:

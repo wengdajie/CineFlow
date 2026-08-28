@@ -235,6 +235,10 @@ class LibraryFile(IdMixin, TimestampMixin, Base):
     episode: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     resolution: Mapped[str | None] = mapped_column(String(32), nullable=True)
     size: Mapped[int] = mapped_column(BigInteger, default=0)
+    #: 入库时该版本的质量评分，洗版时用它与新资源比较
+    quality_score: Mapped[float] = mapped_column(Float, default=0.0)
+    #: 已洗版次数，用尽 CF_UPGRADE_MAX_TIMES 后不再替换（防止无限横跳）
+    upgrade_count: Mapped[int] = mapped_column(Integer, default=0)
 
     media: Mapped[MediaItem | None] = relationship(back_populates="files")
 
@@ -332,4 +336,75 @@ class SearchHistory(IdMixin, TimestampMixin, Base):
     result_count: Mapped[int] = mapped_column(Integer, default=0)
     sites: Mapped[list[str]] = mapped_column(JSON, default=list)
     elapsed_ms: Mapped[int] = mapped_column(Integer, default=0)
+class PanSubscribe(IdMixin, TimestampMixin, Base):
+    """网盘分享追更订阅。
 
+    对标 quark-auto-save 的核心任务模型：盯住一个**会持续更新**的分享链接
+    （如整季连载的剧集），每次巡检只转存新增文件，并可用正则过滤与重命名。
+    与 ``subscribes`` 表的区别：那个是「按片名去各站搜」，
+    这个是「盯死一个已知分享链接」。
+    """
+
+    __tablename__ = "pan_subscribes"
+
+    name: Mapped[str] = mapped_column(String(255), index=True)
+    share_url: Mapped[str] = mapped_column(Text)
+    password: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    #: 目标网盘站点；为空表示按分享链接自动挑同家网盘
+    site_id: Mapped[int | None] = mapped_column(
+        ForeignKey("sites.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    #: 转存落地目录
+    target_dir: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: 只转存匹配此正则的文件名（空=全部）
+    include_regex: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    #: 排除匹配此正则的文件名
+    exclude_regex: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    #: 转存后重命名：正则 + 替换模板
+    rename_search: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    rename_replace: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(16), default=SubscribeStatus.ACTIVE.value, index=True
+    )
+    #: 已转存过的文件名集合，用于增量判断（避免重复转存）
+    saved_files: Mapped[list[str]] = mapped_column(JSON, default=list)
+    #: 连续失败次数，达到阈值后自动标记失效
+    failure_count: Mapped[int] = mapped_column(Integer, default=0)
+    #: 分享是否已失效（失效后巡检直接跳过，不再浪费请求）
+    invalid: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    last_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_checked_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    #: 累计转存文件数
+    total_saved: Mapped[int] = mapped_column(Integer, default=0)
+    #: 到期时间，过期后不再执行（对标 quark-auto-save 的「任务结束期限」）
+    expire_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    #: 仅在这些星期几执行（0=周一 … 6=周日；空=每天）
+    weekdays: Mapped[list[int]] = mapped_column(JSON, default=list)
+
+
+class StrmRecord(IdMixin, TimestampMixin, Base):
+    """已生成的 STRM 文件索引。
+
+    存在的意义是**增量与清理**：知道每个 STRM 对应网盘上的哪个文件，
+    才能判断哪些是新增（要生成）、哪些源文件已消失（要清理失效 STRM）。
+    """
+
+    __tablename__ = "strm_records"
+    __table_args__ = (UniqueConstraint("strm_path", name="uq_strm_path"),)
+
+    #: 本地 .strm 文件路径
+    strm_path: Mapped[str] = mapped_column(Text)
+    #: 网盘站点
+    site_id: Mapped[int | None] = mapped_column(
+        ForeignKey("sites.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    #: 网盘内的源文件路径
+    source_path: Mapped[str] = mapped_column(Text, index=True)
+    #: 网盘文件 ID（部分网盘用 ID 换直链比用路径更稳）
+    file_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    size: Mapped[int] = mapped_column(BigInteger, default=0)
+    #: 写入 STRM 的链接形式：direct / proxy
+    link_mode: Mapped[str] = mapped_column(String(16), default="proxy")
+    #: 上次校验时源文件是否仍存在
+    alive: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    last_synced_at: Mapped[datetime | None] = mapped_column(nullable=True)

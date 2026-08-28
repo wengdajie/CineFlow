@@ -463,10 +463,85 @@ call("PUT", "/chatops/config", token=token, body={"platforms": {}})
 call("GET", "/chatops/config", expect=(401,))
 
 print("\n" + "=" * 70)
+print("9e) STRM 同步：概览 / 记录 / 手动同步 / 匿名 302 播放端点")
+print("=" * 70)
+strm = call("GET", "/strm", token=token)
+sdata = strm.get("data") or {}
+print(
+    f"       STRM {sdata.get('total')} 个（有效 {sdata.get('alive')} / 失效 {sdata.get('invalid')}）"
+    f" 模式={sdata.get('link_mode')} 目录={sdata.get('strm_dir')}"
+)
+call("GET", "/strm/records?limit=10", token=token)
+call("GET", "/strm/records?limit=10&alive_only=true", token=token)
+synced = call("POST", "/strm/sync", token=token, body={})
+print(f"       全盘同步：{synced.get('message')}")
+call("POST", "/strm/sync", token=token, body={"site_id": 999999})
+# 播放端点必须**免认证**（播放器带不了 JWT），未知记录回 404 而不是 401
+call("GET", "/strm/play/999999", expect=(404,))
+call("GET", "/strm", expect=(401,))
+
+print("\n" + "=" * 70)
+print("9f) 网盘分享追更：CRUD / 巡检 / 批量巡检")
+print("=" * 70)
+ps_created = call(
+    "POST",
+    "/pan-subscribes",
+    token=token,
+    body={
+        "name": "冒烟测试追更",
+        "share_url": "https://pan.quark.cn/s/smoke-test",
+        "exclude_regex": "预告|花絮",
+        "rename_search": r".*第(\d+)集.*",
+        "rename_replace": r"S01E\1.mkv",
+        "weekdays": [0, 3],
+    },
+)
+ps_id = (ps_created.get("data") or {}).get("id")
+print(f"       追更任务 id={ps_id}")
+ps_list = call("GET", "/pan-subscribes", token=token)
+print(f"       追更任务共 {ps_list.get('total')} 个（失效 {ps_list.get('invalid')}）")
+if ps_id:
+    call("PATCH", f"/pan-subscribes/{ps_id}", token=token, body={"name": "冒烟测试追更（改）"})
+    checked = call("POST", f"/pan-subscribes/{ps_id}/check", token=token)
+    print(f"       单条巡检：{checked.get('message')}")
+call("POST", "/pan-subscribes/check-all?limit=10", token=token)
+call("PATCH", "/pan-subscribes/999999", token=token, body={"name": "x"}, expect=(404,))
+call("POST", "/pan-subscribes/999999/check", token=token, expect=(404,))
+call("GET", "/pan-subscribes", expect=(401,))
+
+print("\n" + "=" * 70)
+print("9g) 刮削与洗版：媒体库补刮 / 订阅洗版试算")
+print("=" * 70)
+scraped = call("POST", "/library/scrape", token=token, body={"limit": 20, "overwrite": False})
+print(
+    f"       补刮：扫描 {scraped.get('scanned')} 刮削 {scraped.get('scraped')} "
+    f"跳过 {scraped.get('skipped')} 降级 {scraped.get('degraded')}"
+)
+if sub_id:
+    up = call("POST", f"/subscribes/{sub_id}/upgrade", token=token, body={"dry_run": True})
+    print(f"       洗版试算：{up.get('message')}")
+batch_up = call("POST", "/subscribes/upgrade-all", token=token, body={"dry_run": False})
+print(f"       批量洗版：{batch_up.get('message')}")
+call("POST", "/subscribes/999999/upgrade", token=token, body={"dry_run": True}, expect=(404,))
+
+print("\n" + "=" * 70)
+print("9h) 设置页新配置组（刮削 / STRM / 分享追更与洗版）")
+print("=" * 70)
+settings_body = call("GET", "/system/settings", token=token)
+titles = [group["title"] for group in settings_body.get("groups") or []]
+print(f"       配置分组 {len(titles)} 个：{titles}")
+for expected in ("刮削与分类", "STRM 同步", "分享追更与洗版"):
+    ok = expected in titles
+    results.append((ok, "CHECK", f"设置分组「{expected}」", 200 if ok else 0))
+    print(f"{'PASS' if ok else 'FAIL'} 200 CHECK  设置分组「{expected}」")
+
+print("\n" + "=" * 70)
 print("10) 清理测试数据")
 print("=" * 70)
 if sub_id:
     call("DELETE", f"/subscribes/{sub_id}", token=token)
+if ps_id:
+    call("DELETE", f"/pan-subscribes/{ps_id}", token=token)
 
 failed = [item for item in results if not item[0]]
 print("\n" + "=" * 70)

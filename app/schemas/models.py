@@ -283,6 +283,66 @@ class PanMkdirRequest(BaseModel):
     path: str = Field(min_length=1)
 
 
+# ---------------- STRM 同步 ----------------
+class StrmSyncRequest(BaseModel):
+    """手动触发一次 STRM 同步。site_id 为空表示全部网盘。"""
+
+    site_id: int | None = Field(default=None, description="网盘站点 ID，留空遍历全部启用网盘")
+    pan_path: str = Field(default="/", description="从网盘的哪个目录开始同步")
+    strm_subdir: str | None = Field(default=None, description="STRM 根目录下的子目录，便于多盘并存")
+    link_mode: str | None = Field(default=None, description="proxy（302 端点，永不过期）或 direct（写临时直链）")
+    clean: bool | None = Field(default=None, description="是否清理源文件已消失的失效 STRM")
+
+
+# ---------------- 网盘分享追更 ----------------
+class PanSubscribeCreate(BaseModel):
+    """新建一条分享追更任务：盯死一个会持续更新的分享链接。"""
+
+    name: str = Field(min_length=1, description="任务名称")
+    share_url: str = Field(min_length=1, description="网盘分享链接")
+    password: str | None = Field(default=None, description="提取码")
+    site_id: int | None = Field(default=None, description="转存到哪个网盘，留空自动挑同家网盘")
+    target_dir: str | None = Field(default=None, description="转存落地目录")
+    include_regex: str | None = Field(default=None, description="只转存匹配该正则的文件名")
+    exclude_regex: str | None = Field(default=None, description="排除匹配该正则的文件名")
+    rename_search: str | None = Field(default=None, description="转存后重命名的匹配正则")
+    rename_replace: str | None = Field(default=None, description="重命名替换模板，支持 \\1 反向引用")
+    weekdays: list[int] = Field(default_factory=list, description="仅在这些星期几执行（0=周一…6=周日），空=每天")
+
+
+class PanSubscribeUpdate(BaseModel):
+    """更新分享追更任务，只提交需要改的字段。"""
+
+    name: str | None = None
+    share_url: str | None = None
+    password: str | None = None
+    site_id: int | None = None
+    target_dir: str | None = None
+    include_regex: str | None = None
+    exclude_regex: str | None = None
+    rename_search: str | None = None
+    rename_replace: str | None = None
+    status: SubscribeStatus | None = None
+    weekdays: list[int] | None = None
+    reset_invalid: bool = Field(default=False, description="清除失效标记与失败计数，让任务重新开始")
+    reset_history: bool = Field(default=False, description="清空已转存记录，下次巡检会重新转存全部文件")
+
+
+# ---------------- 刮削与洗版 ----------------
+class ScrapeRequest(BaseModel):
+    """批量补刮 NFO 与图片。"""
+
+    path: str | None = Field(default=None, description="要刮削的目录，留空用媒体库根目录")
+    limit: int = Field(default=200, ge=1, le=5000, description="单次最多处理多少个文件")
+    overwrite: bool = Field(default=False, description="已有 NFO 是否覆盖重写")
+
+
+class UpgradeRequest(BaseModel):
+    """洗版试算/执行。"""
+
+    dry_run: bool = Field(default=True, description="仅试算不实际提交下载（默认只看结果，避免误下）")
+
+
 # ---------------- ChatOps 机器人 ----------------
 class ChatOpsConfigUpdate(BaseModel):
     """更新 ChatOps 配置。所有字段可选，只更新提交过的键。"""

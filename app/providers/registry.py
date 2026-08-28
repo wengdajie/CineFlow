@@ -76,6 +76,7 @@ def load_builtin_providers() -> None:
         "app.providers.panstorage.alist",
         "app.providers.panstorage.quark",
         "app.providers.panstorage.local_dir",
+        "app.providers.panstorage.webdav",
         "app.providers.downloader.qbittorrent",
         "app.providers.downloader.transmission",
         "app.providers.downloader.aria2",

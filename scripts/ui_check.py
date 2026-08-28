@@ -22,6 +22,8 @@ PAGES = [
     ("downloads", "下载任务"),
     ("library", "媒体库"),
     ("storage", "网盘管理"),
+    ("pansub", "分享追更"),
+    ("strm", "STRM 同步"),
     ("sites", "站点管理"),
     ("chatops", "机器人"),
     ("plugins", "插件"),
@@ -312,7 +314,8 @@ def main():
         page.wait_for_timeout(1500)
         body = page.inner_text("body")
         print(f"   定时任务页含「定时任务」：{'定时任务' in body}")
-        for name in ("订阅巡检", "追新雷达", "下载状态同步", "媒体库全量扫描", "网盘待转存"):
+        for name in ("订阅巡检", "追新雷达", "下载状态同步", "媒体库全量扫描", "网盘待转存",
+                     "网盘分享追更", "STRM 同步", "媒体库补刮", "洗版巡检"):
             print(f"   任务「{name}」显示：{name in body}")
         page.screenshot(path=str(SHOTS / "22-schedules.png"), full_page=True)
 
@@ -429,7 +432,7 @@ def main():
         page.wait_for_timeout(1500)
         body = page.inner_text("body")
         print(f"   设置页含「设置」：{'设置' in body}")
-        for name in ("网盘管理", "ChatOps 机器人", "调度"):
+        for name in ("网盘管理", "ChatOps 机器人", "调度", "刮削与分类", "STRM 同步", "分享追更与洗版"):
             print(f"   配置分组「{name}」显示：{name in body}")
         print(f"   含 CF_ 环境变量名：{'CF_PORT' in body}")
         print(f"   敏感项已脱敏：{'已设置' in body or 'SECRET_KEY' in body}")
@@ -444,6 +447,83 @@ def main():
             if close.count():
                 close.click()
                 page.wait_for_timeout(300)
+
+        print("\n" + "=" * 68)
+        print("6j) 交互测试：STRM 同步页（概览卡 / 链接模式 / 同步弹窗）")
+        print("=" * 68)
+        page.goto(f"{BASE}/#strm", wait_until="networkidle")
+        page.wait_for_timeout(1600)
+        body = page.inner_text("body")
+        print(f"   STRM 页含「STRM 同步」：{'STRM 同步' in body}")
+        print(f"   含链接模式说明：{'链接模式' in body}")
+        print(f"   含 302 播放端点说明：{'/api/v1/strm/play/' in body}")
+        print(f"   概览卡片 {page.locator('.card.stat').count()} 个")
+        page.screenshot(path=str(SHOTS / "31-strm.png"), full_page=True)
+
+        sync_btn = page.get_by_text("手动同步", exact=False).first
+        if sync_btn.count():
+            sync_btn.click()
+            page.wait_for_timeout(900)
+            modal = page.locator(".modal")
+            print(f"   同步弹窗渲染：{modal.count() > 0}")
+            if modal.count():
+                modal_text = page.inner_text(".modal")
+                print(f"   弹窗含链接模式选择：{'proxy' in modal_text and 'direct' in modal_text}")
+                print(f"   弹窗含失效清理开关：{'清理失效' in modal_text}")
+                page.screenshot(path=str(SHOTS / "32-strm-modal.png"))
+            close = page.get_by_text("取消", exact=True).first
+            if close.count():
+                close.click()
+                page.wait_for_timeout(400)
+        else:
+            errors.append("[strm] 未找到「手动同步」按钮")
+
+        print("\n" + "=" * 68)
+        print("6k) 交互测试：分享追更页（巡检节奏 / 新建弹窗）")
+        print("=" * 68)
+        page.goto(f"{BASE}/#pansub", wait_until="networkidle")
+        page.wait_for_timeout(1600)
+        body = page.inner_text("body")
+        print(f"   分享追更页含「分享追更」：{'分享追更' in body}")
+        print(f"   含巡检节奏卡：{'巡检节奏' in body}")
+        print(f"   含追更任务表：{'追更任务' in body}")
+        page.screenshot(path=str(SHOTS / "33-pansub.png"), full_page=True)
+
+        new_btn = page.get_by_text("新建任务", exact=False).first
+        if new_btn.count():
+            new_btn.click()
+            page.wait_for_timeout(900)
+            modal = page.locator(".modal")
+            fields = page.locator(".modal .field").count()
+            print(f"   新建弹窗渲染：{modal.count() > 0}（字段 {fields} 个）")
+            if modal.count():
+                modal_text = page.inner_text(".modal")
+                print(f"   弹窗含正则过滤字段：{'只要匹配' in modal_text and '排除匹配' in modal_text}")
+                print(f"   弹窗含重命名字段：{'重命名' in modal_text}")
+                print(f"   弹窗含执行日字段：{'星期几' in modal_text}")
+                page.screenshot(path=str(SHOTS / "34-pansub-modal.png"))
+            close = page.get_by_text("取消", exact=True).first
+            if close.count():
+                close.click()
+                page.wait_for_timeout(400)
+        else:
+            errors.append("[pansub] 未找到「新建任务」按钮")
+
+        print("\n" + "=" * 68)
+        print("6l) 交互测试：媒体库补刮 / 订阅洗版试算")
+        print("=" * 68)
+        page.goto(f"{BASE}/#library", wait_until="networkidle")
+        page.wait_for_timeout(1400)
+        body = page.inner_text("body")
+        print(f"   媒体库页含「补刮 NFO」按钮：{'补刮' in body}")
+        scrape = page.get_by_text("补刮 NFO", exact=False).first
+        if scrape.count():
+            scrape.click()
+            page.wait_for_timeout(3000)
+            print(f"   补刮后页面文本长度：{len(page.inner_text('body'))}")
+            page.screenshot(path=str(SHOTS / "35-library-scrape.png"), full_page=True)
+        else:
+            errors.append("[library] 未找到「补刮 NFO」按钮")
 
         print("\n" + "=" * 68)
         print("7) 响应式检查（移动端 430x900）")

@@ -135,3 +135,43 @@ def test_subtitle_follows_video(tmp_media, tmp_path):
     result = transfer_file(source, library_dir=library)
     assert result.success is True
     assert result.target.with_suffix(".srt").exists()
+
+
+# ------------------------------------------------------- 分类归档（v1.4.0）
+def test_category_archive_adds_second_level_dir(tmp_media, tmp_path, monkeypatch):
+    """开启分类后，剧集要落进「电视剧/」，动漫落进「动漫/」。"""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "CATEGORY_ENABLED", True)
+    library = tmp_path / "lib"
+
+    tv = tmp_media("分类剧.S01E01.1080p.WEB-DL.mkv")
+    result = transfer_file(tv, library_dir=library, mode="copy")
+    assert result.success, result.message
+    assert "电视剧" in str(result.target)
+
+    doc = tmp_media("航拍中国.S03E01.2160p.WEB-DL.mkv")
+    doc_result = transfer_file(doc, library_dir=library, mode="copy")
+    assert "纪录片" in str(doc_result.target)
+
+
+def test_category_uses_tmdb_genres(tmp_media, tmp_path, monkeypatch):
+    """有 TMDB 类型时以它为准（文件名看不出是纪录片）。"""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "CATEGORY_ENABLED", True)
+    source = tmp_media("Genre.Show.S01E01.1080p.WEB-DL.mkv")
+    result = transfer_file(
+        source, library_dir=tmp_path / "lib2", mode="copy", genres=["纪录"]
+    )
+    assert "纪录片" in str(result.target)
+
+
+def test_category_disabled_keeps_flat_layout(tmp_media, tmp_path, monkeypatch):
+    """默认不开分类，目录结构必须与老版本完全一致（不能悄悄改变已有库布局）。"""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "CATEGORY_ENABLED", False)
+    source = tmp_media("不分类剧.S01E01.1080p.WEB-DL.mkv")
+    result = transfer_file(source, library_dir=tmp_path / "lib3", mode="copy")
+    assert "电视剧" not in str(result.target)

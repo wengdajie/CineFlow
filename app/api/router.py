@@ -11,11 +11,13 @@ from app.api.routers import (
     library,
     media,
     pan,
+    pan_subscribes,
     plugins,
     radar,
     schedules,
     search,
     sites,
+    strm,
     subscribes,
     system,
     trending,
@@ -32,6 +34,8 @@ api_router.include_router(library.router)
 api_router.include_router(media.router)
 api_router.include_router(sites.router)
 api_router.include_router(pan.router)
+api_router.include_router(pan_subscribes.router)
+api_router.include_router(strm.router)
 api_router.include_router(chatops.router)
 api_router.include_router(plugins.router)
 api_router.include_router(schedules.router)

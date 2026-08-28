@@ -15,6 +15,7 @@ from app.schemas.models import (
     SubscribeCreate,
     SubscribeOut,
     SubscribeUpdate,
+    UpgradeRequest,
 )
 from app.services import subscribe as subscribe_service
 
@@ -107,6 +108,32 @@ def missing_episodes(
         "downloaded": record.downloaded_episodes,
         "missing": missing,
     }
+
+
+@router.post("/{subscribe_id}/upgrade", summary="洗版：寻找更优版本")
+async def upgrade_subscribe(
+    subscribe_id: int, payload: UpgradeRequest, user: CurrentUser
+) -> dict[str, Any]:
+    """为订阅已入库的剧集寻找评分更高的版本。
+
+    默认 ``dry_run=true`` 只试算不提交下载——洗版会替换已有文件，
+    先让用户看清「哪一集会被什么资源替换」再决定。
+    """
+    from app.services import upgrade as upgrade_service
+
+    result = await upgrade_service.check_subscribe(subscribe_id, dry_run=payload.dry_run)
+    if result.get("message") == "订阅不存在":
+        raise HTTPException(status_code=404, detail="订阅不存在")
+    return {"success": True, "dry_run": payload.dry_run, **result}
+
+
+@router.post("/upgrade-all", summary="洗版：巡检所有最优版本订阅")
+async def upgrade_all(payload: UpgradeRequest, user: CurrentUser) -> dict[str, Any]:
+    """批量巡检所有开启了「最优版本」的订阅。"""
+    from app.services import upgrade as upgrade_service
+
+    result = await upgrade_service.run(dry_run=payload.dry_run, notify=False)
+    return {"success": True, "dry_run": payload.dry_run, **result}
 
 
 @router.post("/run-all", summary="立即巡检所有订阅")

@@ -11,6 +11,7 @@ from app.providers.panstorage.alist import AListStorage
 from app.providers.panstorage.base import BasePanStorage, PanFile, PanQuota, SaveResult
 from app.providers.panstorage.local_dir import LocalDirStorage
 from app.providers.panstorage.quark import QuarkStorage
+from app.providers.panstorage.webdav import WebDavStorage
 from app.providers.registry import list_providers, load_builtin_providers
 from app.schemas.enums import ProviderKind
 from app.services import pan_storage as pan_service
@@ -27,12 +28,12 @@ def run(coro):
 def test_panstorage_providers_registered():
     """三个网盘存储都必须注册到 panstorage 分类下。"""
     names = {item["name"] for item in list_providers(ProviderKind.PANSTORAGE.value)}
-    assert {"alist", "quark", "local_dir"} <= names
+    assert {"alist", "quark", "local_dir", "webdav"} <= names
 
 
 def test_all_panstorage_are_subclass_of_base():
     """契约：panstorage 分类里的 Provider 必须实现 BasePanStorage。"""
-    for cls in (AListStorage, QuarkStorage, LocalDirStorage):
+    for cls in (AListStorage, QuarkStorage, LocalDirStorage, WebDavStorage):
         assert issubclass(cls, BasePanStorage)
         assert cls.kind == ProviderKind.PANSTORAGE.value
 
@@ -593,5 +594,104 @@ def test_pan_storage_sites_seeded(client):
     pan_sites = [
         item for item in DEFAULT_SITES if item["kind"] == ProviderKind.PANSTORAGE.value
     ]
-    assert {item["provider"] for item in pan_sites} == {"alist", "quark", "local_dir"}
+    assert {item["provider"] for item in pan_sites} == {"alist", "quark", "local_dir", "webdav"}
     assert all(item["enabled"] is False for item in pan_sites)
+
+
+# ------------------------------------------- 分享增量能力（v1.4.0 分享追更用）
+def test_base_list_share_and_save_share_files_defaults():
+    """基类默认行为：看不清分享内部就返回空清单，逐文件转存退回整体转存。
+
+    这两条默认值是「分享追更」在不支持增量的网盘上仍能工作的前提。
+    """
+
+    class Minimal(BasePanStorage):
+        name = "minimal_share"
+
+        async def list_dir(self, path: str = "/") -> list[PanFile]:
+            return []
+
+        async def save_share(self, share_url, *, password=None, target_dir=None):
+            return SaveResult(True, "整体转存", file_count=7)
+
+    storage = Minimal({})
+    assert run(storage.list_share("https://x/s/abc")) == []
+    outcome = run(storage.save_share_files("https://x/s/abc", [PanFile("a.mkv", "/a.mkv")]))
+    assert outcome.success is True
+    assert outcome.file_count == 7, "不支持逐文件时必须退回整体转存"
+
+
+def test_quark_list_share_carries_share_fid_token(monkeypatch):
+    """夸克列分享要把 share_fid_token 带进 extra——转存时必须回传它。"""
+    storage = QuarkStorage({"url": "https://drive-pc.quark.cn", "cookie": "x=1"})
+
+    async def fake_token(share_id, password):
+        return "stoken-1"
+
+    async def fake_items(share_id, stoken):
+        return [
+            {"fid": "f1", "file_name": "第01集.mkv", "size": 100, "share_fid_token": "t1"},
+            {"fid": "f2", "file_name": "子目录", "dir": True, "share_fid_token": "t2"},
+            {"file_name": "缺 fid 的条目"},
+        ]
+
+    monkeypatch.setattr(storage, "_share_token", fake_token)
+    monkeypatch.setattr(storage, "_share_items", fake_items)
+
+    files = run(storage.list_share("https://pan.quark.cn/s/abcdef"))
+    assert [item.name for item in files] == ["第01集.mkv", "子目录"]
+    assert files[0].extra["share_fid_token"] == "t1"
+    assert files[0].file_id == "f1"
+    assert files[1].is_dir is True
+
+
+def test_quark_list_share_without_cookie_returns_empty():
+    """没配 Cookie 时返回空而不是抛异常（界面会提示去填 Cookie）。"""
+    storage = QuarkStorage({"url": "https://drive-pc.quark.cn"})
+    assert run(storage.list_share("https://pan.quark.cn/s/abcdef")) == []
+
+
+def test_quark_save_share_files_submits_selected_fids(monkeypatch):
+    """逐文件转存只提交选中的 fid，这是「只转存新增集」的关键。"""
+    storage = QuarkStorage({"url": "https://drive-pc.quark.cn", "cookie": "x=1"})
+    captured = {}
+
+    async def fake_token(share_id, password):
+        return "stoken-1"
+
+    async def fake_submit(share_id, stoken, fid_list, token_list, target_dir):
+        captured.update(
+            {"fids": fid_list, "tokens": token_list, "target": target_dir}
+        )
+        return SaveResult(True, f"已转存 {len(fid_list)} 个文件", file_count=len(fid_list))
+
+    monkeypatch.setattr(storage, "_share_token", fake_token)
+    monkeypatch.setattr(storage, "_submit_save", fake_submit)
+
+    files = [
+        PanFile("第03集.mkv", "/第03集.mkv", file_id="f3", extra={"share_fid_token": "t3"}),
+        PanFile("第04集.mkv", "/第04集.mkv", file_id="f4", extra={"share_fid_token": "t4"}),
+    ]
+    outcome = run(storage.save_share_files("https://pan.quark.cn/s/abcdef", files, target_dir="/来自分享"))
+    assert outcome.success is True
+    assert captured["fids"] == ["f3", "f4"]
+    assert captured["tokens"] == ["t3", "t4"]
+    assert captured["target"] == "/来自分享"
+
+
+def test_quark_save_share_files_rejects_bad_input():
+    """空清单 / 非法链接 / 无 Cookie 都要给出明确原因。"""
+    storage = QuarkStorage({"url": "https://drive-pc.quark.cn", "cookie": "x=1"})
+    assert run(storage.save_share_files("https://pan.quark.cn/s/abc", [])).success is False
+    bad = run(
+        storage.save_share_files("https://not-quark.example/x", [PanFile("a", "/a", file_id="1")])
+    )
+    assert bad.success is False and "分享链接" in bad.message
+
+    no_cookie = QuarkStorage({"url": "https://drive-pc.quark.cn"})
+    result = run(
+        no_cookie.save_share_files(
+            "https://pan.quark.cn/s/abcdef", [PanFile("a", "/a", file_id="1")]
+        )
+    )
+    assert result.success is False and "Cookie" in result.message

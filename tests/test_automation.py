@@ -245,3 +245,41 @@ def test_movie_subscribe_completes(automation_env):
     )
     missing = asyncio.run(subscribe_service.process_subscribe(subscribe.id))
     assert missing["missing"] == [1]
+
+
+# ------------------------------------------------- 内置调度任务（v1.4.0 扩容）
+def test_all_builtin_jobs_are_registered_and_resolvable():
+    """9 个内置任务都要有可解析的执行目标，否则调度器起来就报错。"""
+    from app.services.scheduler import builtin_specs, scheduler_service
+
+    specs = builtin_specs()
+    keys = [spec.key for spec in specs]
+    assert keys == [
+        "subscribe",
+        "radar",
+        "download",
+        "pan_transfer",
+        "pan_subscribe",
+        "strm_sync",
+        "scrape",
+        "upgrade",
+        "library",
+    ]
+    for spec in specs:
+        func, kwargs = scheduler_service._job_target(spec.key)
+        assert callable(func), spec.key
+        assert isinstance(kwargs, dict)
+        assert spec.job_id.startswith("cineflow.")
+        assert spec.name and spec.description
+
+
+def test_new_jobs_are_off_by_default_when_feature_disabled():
+    """危险/重活任务默认不能自己跑起来：洗版默认关，刮削跟随开关。"""
+    from app.core.config import settings
+    from app.services.scheduler import builtin_specs
+
+    specs = {spec.key: spec for spec in builtin_specs()}
+    assert specs["upgrade"].enabled is bool(settings.UPGRADE_ENABLED)
+    assert specs["scrape"].enabled is bool(settings.SCRAPE_ENABLED and settings.SCRAPE_CRON)
+    # STRM 同步默认间隔为 0 = 关闭（多数用户没有网盘）
+    assert specs["strm_sync"].enabled is bool(settings.STRM_SYNC_INTERVAL_MINUTES > 0)

@@ -295,7 +295,18 @@ def test_trending_requires_auth(client):
 # ---------------- 定时任务设置 ----------------
 def test_builtin_specs_cover_all_jobs():
     keys = [spec.key for spec in builtin_specs()]
-    assert keys == ["subscribe", "radar", "download", "pan_transfer", "library"]
+    # v1.4.0 扩到 9 个：新增分享追更 / STRM 同步 / 补刮 / 洗版
+    assert keys == [
+        "subscribe",
+        "radar",
+        "download",
+        "pan_transfer",
+        "pan_subscribe",
+        "strm_sync",
+        "scrape",
+        "upgrade",
+        "library",
+    ]
 
 
 def test_normalize_schedule_validates():
@@ -348,9 +359,10 @@ def test_schedule_api(client, auth_headers):
         listing = client.get("/api/v1/schedules", headers=auth_headers)
         assert listing.status_code == 200
         items = listing.json()["items"]
-        assert len(items) == 5
+        assert len(items) == 9
         assert {item["key"] for item in items} == {
-            "subscribe", "radar", "download", "pan_transfer", "library"
+            "subscribe", "radar", "download", "pan_transfer", "pan_subscribe",
+            "strm_sync", "scrape", "upgrade", "library",
         }
 
         detail = client.get("/api/v1/schedules/radar", headers=auth_headers)

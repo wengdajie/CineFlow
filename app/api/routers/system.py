@@ -166,6 +166,38 @@ SETTING_GROUPS: list[dict[str, Any]] = [
         "keys": ["PAN_AUTO_SAVE", "PAN_TRANSFER_INTERVAL_MINUTES", "PAN_TRANSFER_BATCH"],
     },
     {
+        "title": "刮削与分类",
+        "keys": [
+            "SCRAPE_ENABLED",
+            "SCRAPE_IMAGES",
+            "SCRAPE_OVERWRITE",
+            "SCRAPE_CRON",
+            "SCRAPE_BATCH",
+            "CATEGORY_ENABLED",
+        ],
+    },
+    {
+        "title": "STRM 同步",
+        "keys": [
+            "STRM_ENABLED",
+            "STRM_LINK_MODE",
+            "STRM_BASE_URL",
+            "STRM_SYNC_INTERVAL_MINUTES",
+            "STRM_CLEAN_INVALID",
+            "STRM_SYNC_METADATA",
+        ],
+    },
+    {
+        "title": "分享追更与洗版",
+        "keys": [
+            "PAN_SUBSCRIBE_INTERVAL_MINUTES",
+            "PAN_SUBSCRIBE_MAX_FAILURES",
+            "UPGRADE_ENABLED",
+            "UPGRADE_SCORE_DELTA",
+            "UPGRADE_MAX_TIMES",
+        ],
+    },
+    {
         "title": "ChatOps 机器人",
         "keys": [
             "CHATOPS_ENABLED",
@@ -182,8 +214,6 @@ SETTING_GROUPS: list[dict[str, Any]] = [
             "TMDB_LANGUAGE",
             "METADATA_CACHE_TTL",
             "HTTP_PROXY",
-            "STRM_ENABLED",
-            "STRM_BASE_URL",
         ],
     },
     {

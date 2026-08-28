@@ -9,8 +9,8 @@
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)](#-docker-部署推荐)
-[![Tests](https://img.shields.io/badge/tests-270%20passed-brightgreen)](#-测试)
-[![Version](https://img.shields.io/badge/version-1.3.0-blue)](docs/08-变更日志.md)
+[![Tests](https://img.shields.io/badge/tests-370%20passed-brightgreen)](#-测试)
+[![Version](https://img.shields.io/badge/version-1.4.0-blue)](docs/08-变更日志.md)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 </div>
@@ -214,7 +214,7 @@ heat = min(做种数, 5000) ^ 0.5 × 3      # 做种数（开方避免头部通�
 
 ### ⏱ 定时任务可视化设置
 
-5 个内置任务的触发规则都能在界面上改，**不用改配置文件、不用重启**：
+**9 内置任务**的触发规则都能在界面上改，**不用改配置文件、不用重启**：
 
 | 任务 | 默认 | 作用 |
 |---|---|---|
@@ -222,6 +222,10 @@ heat = min(做种数, 5000) ^ 0.5 × 3      # 做种数（开方避免头部通�
 | 追新雷达 | 每 15 分钟 | 拉各站最新流再匹配订阅，延迟最低 |
 | 下载状态同步与自动整理 | 每 5 分钟 | 同步进度，完成即硬链入库并刷新媒体服务器 |
 | 网盘待转存队列 | 每 20 分钟 | 把命中但没转存成功的网盘资源批量重试转存 |
+| 网盘分享追更 | 每 60 分钟 | 巡检订阅的分享链接，只转存新增的集 |
+| 网盘 STRM 同步 | 关闭（`0`） | 把网盘目录映射成 `.strm`，媒体库直接能播 |
+| 媒体库补刮（NFO + 图片） | 每天 `30 4 * * *` | 给缺 NFO 的历史文件补刮元数据与海报 |
+| 洗版巡检（更优版本替换） | 关闭 | 发现明显更优版本时替换已入库文件 |
 | 媒体库全量扫描 | 每天 `0 4 * * *` | 重建入库索引，用于缺集计算与去重 |
 
 - 两种触发方式：**interval**（1 ~ 10080 分钟）与 **cron**（标准 5 段表达式）
@@ -240,12 +244,13 @@ heat = min(做种数, 5000) ^ 0.5 × 3      # 做种数（开方避免头部通�
 | 分类 | Provider | 干什么 |
 |---|---|---|
 | `pan`（搜索器） | `pansou` `pan_generic` | **找**分享链接 |
-| `panstorage`（存储器） | `alist` `quark` `local_dir` | **存**进你自己的盘、浏览、给直链 |
+| `panstorage`（存储器） | `alist` `quark` `webdav` `local_dir` | **存**进你自己的盘、浏览、给直链 |
 
 | 存储 Provider | 鉴权 | 转存方式 | 适合 |
 |---|---|---|---|
 | `alist` **推荐** | 账号密码或固定 `api_key` | `add_offline_download` 离线下载 | 一套接 20+ 网盘，已有 AList 的首选 |
 | `quark` | 浏览器 Cookie | 官方分享转存四步流程（换 stoken → 列文件 → 提交 → 轮询任务） | 国内影视分享最多的夸克 |
+| `webdav` ⭐ | Basic Auth（账号密码） | 不支持分享转存（协议无此语义），支持浏览/上传/删除/容量 | **一份实现覆盖 Nextcloud / 坚果云 / 群晖 / TeraCLOUD / AList DAV / Alist 兼容层** |
 | `local_dir` | 无 | 不支持转存（只读） | 把 rclone / CloudDrive 挂载目录当网盘浏览，**零配置试用** |
 
 - **自动转存**：订阅追新命中网盘资源时，`download` 服务会按分享域名**优先选同家网盘**
@@ -258,6 +263,86 @@ heat = min(做种数, 5000) ^ 0.5 × 3      # 做种数（开方避免头部通�
 - **目录浏览**：容量进度条 + 面包屑导航 + 建目录 / 删除 / 换取临时直链（可喂给 STRM 或 aria2）
 - **优雅降级**：不支持某个能力的网盘（如 `local_dir` 不能转存）会返回**明确提示**，
   不是 500 也不是假装成功
+
+### 🏷 NFO 刮削与分类归档
+
+入库之后 Emby / Jellyfin 还要**自己猜**这是什么片子——国产剧、冷门片、
+纪录片经常猜错。CineFlow 直接把元数据写成媒体服务器认的 **NFO**，让它不用猜：
+
+| 类型 | 产物 | 落地位置 |
+|---|---|---|
+| 电影 | `movie.nfo` + `poster.jpg` / `fanart.jpg` | 影片目录 |
+| 剧集 | `tvshow.nfo` + `poster.jpg` / `fanart.jpg` | 剧目录 |
+| 季 | `season.nfo` + `season{N}-poster.jpg` | `Season NN/` |
+| 单集 | `<同名>.nfo`（含剧情/播出日期/演职员） | 与视频同目录同名 |
+
+- **入库即刮**：`library.transfer` 成功后同步写 NFO（`CF_SCRAPE_ENABLED`）
+- **历史补刮**：`媒体库补刮` 定时任务（默认 `30 4 * * *`）扫出缺 NFO 的文件批量补，
+  媒体库页也有 **`补刮 NFO`** 按钮手动触发，单次上限 `CF_SCRAPE_BATCH=200` 条防打满 TMDB 限速
+- **没配 TMDB 也能刮**：降级写一份只含本地解析结果（标题/年份/季集）的最小 NFO，
+  标记 `degraded`，比让媒体服务器乱猜好
+- **默认不覆盖已有 NFO**（`CF_SCRAPE_OVERWRITE=false`）：你手工修过的不会被定时任务冲掉
+- **分类归档**（`CF_CATEGORY_ENABLED`，默认关闭）：按 TMDB genre 优先、
+  本地关键词兜底判成 电影 / 电视剧 / 动漫 / 纪录片 / 综艺 / 儿童 六类，
+  在媒体库下多一级目录。**判不出来就不归档**——宁可不分类，也不要归错以后手工搬
+
+### ☁️ WebDAV：一份实现接一堆网盘
+
+逐家网盘写私有 API 维护成本极高（Cookie 会过期、接口会改）。
+所以除了 AList 网关与夸克直连，另外提供标准 **WebDAV** 存储 Provider：
+
+- `PROPFIND` 列目录、`MKCOL` 建目录、`PUT`/`DELETE` 读写、`quota-available-bytes` 查容量
+- 一份配置即可接 **Nextcloud / 坚果云 / 群晖 Synology Drive / TeraCLOUD / AList 自带 DAV**
+- 路径做 percent 编码，中文与空格目录不会 404
+- 提供 `auth_header()`，可配合 STRM 302 播放直链
+- **明确声明 `supports_save = False`**：WebDAV 协议没有「转存别人分享」这个语义，
+  于是老实报「不支持」，而不是假装成功
+
+### 🎬 STRM 同步 + 302 直链播放
+
+网盘里的片子不想占 NAS 空间，又想在 Emby 里直接点开播——这就是 STRM：
+
+```
+网盘目录 (alist/quark/webdav/local_dir)
+      │  cineflow.strm_sync 巡检（CF_STRM_SYNC_INTERVAL_MINUTES）
+      ▼
+本地 .strm 文件（一行文本，内容是一个 URL）
+      │  Emby / Jellyfin 扫描到就当成一集
+      ▼
+播放器请求 → GET /api/v1/strm/play/{id} → 302 跳转到网盘真实直链
+```
+
+| 链接模式 | 写进 `.strm` 的内容 | 取舍 |
+|---|---|---|
+| `proxy`（默认） | `CF_STRM_BASE_URL` + `/api/v1/strm/play/{id}` | **链接永不过期**，每次播放都现取新直链；CineFlow 只回 302，**不代理流量** |
+| `direct` | 网盘当次给的临时直链 | NAS 完全零参与，但直链会过期、需要重同步 |
+
+- `play` 端点**匿名可访问**（播放器带不了 JWT，同 ADR-03），但它只做跳转、不回传文件内容
+- **失效清理**（`CF_STRM_CLEAN_INVALID`）：网盘上源文件消失时删掉对应 `.strm`，
+  避免媒体库里留着一堆点开就报错的"幽灵剧集"
+- **随行文件同步**（`CF_STRM_SYNC_METADATA`）：字幕 / NFO / 图片直接下载到本地，
+  这些文件很小但媒体服务器需要它们
+
+### 🔗 网盘分享追更（不靠 BT 也能追日更）
+
+很多国产剧只在网盘分享里更新。给一个**分享链接**，CineFlow 会定时去看有没有新集：
+
+- **增量转存**：记住已转存过的文件名，下次只转新增的，不会重复搬同一集
+- **文件过滤**：包含/排除关键词 + 正则；**用户写错正则不会搞崩巡检**（当没填处理）
+- **重命名规则**：可把 `第08集.mp4` 直接改成 `剧名 - S01E08.mp4` 再落盘，方便入库识别
+- **节奏可控**：限定星期几执行、设置到期时间，日更剧不必整天轮询
+- **死链自动停手**：连续失败到 `CF_PAN_SUBSCRIBE_MAX_FAILURES` 次标记 `invalid` 并停止重试
+- **不支持增量列举的网盘**（只能整体转存的）用哨兵记录防止反复整体转存
+
+### ⬆️ 洗版（更优版本替换）
+
+订阅勾选「洗版」后，已入库的 1080p 会在出现 4K REMUX 时被替换：
+
+- **评分阈值**：新版本得分要高出 `CF_UPGRADE_SCORE_DELTA=15` 才动手，防止在几个同档版本间反复横跳
+- **次数上限**：每个文件最多洗 `CF_UPGRADE_MAX_TIMES=2` 次
+- **先入库再删旧**：新文件确认入库成功后才删旧文件，中途失败也不会留下空洞
+- **默认关闭**（`CF_UPGRADE_ENABLED=false`）：它会**删除已入库文件**，必须你明确开启
+- 订阅页提供 **洗版试算**，只报告「哪几个文件会被什么替换、得分差多少」，不真的执行
 
 ### 🤖 ChatOps：在飞书 / 钉钉 / Telegram 里发指令
 
@@ -301,9 +386,10 @@ http://<你的地址>:6060/api/v1/chatops/webhook/telegram
 
 ### ⚙️ 设置页
 
-**设置页**把当前**真正生效**的配置按 9 组列出来（服务 / 目录 / 整理入库 / 搜索策略 /
-调度 / 网盘 / 机器人 / 元数据网络 / 安全），每项都标出对应的 `CF_XXX` 环境变量名，
-密钥类只显示「已设置」而不回显明文。
+**设置页**把当前**真正生效**的配置按 **12 组 62 项**列出来（服务 / 目录 / 整理入库 /
+搜索与订阅策略 / 调度 / 网盘管理 / **刮削与分类** / **STRM 同步** /
+**分享追更与洗版** / ChatOps 机器人 / 元数据与网络 / 安全），
+每项都标出对应的 `CF_XXX` 环境变量名，密钥类只显示「已设置」而不回显明文。
 
 > 这里刻意**只读**：静态配置改了必须重启才生效，做成可编辑就会出现
 > 「界面上改了、重启后丢了」的假功能。需要在线改的东西（定时任务周期、
@@ -336,7 +422,7 @@ NAS 离线内网直接可用，整个前端只有 `index.html` + `app.js` + `sty
 - **完整 token 化设计系统**：所有颜色走语义变量
   （`--surface-0..3` / `--text` / `--accent` / `--ok|warn|err` / `--ring` / `--shadow-1..3`），
   两套主题各自一份取值，组件代码零改动即可换肤
-- **14 个功能页**分五组导航（总览 / 发现 / 追剧 / 入库 / 系统），侧边栏按组折行
+- **16 个功能页**分五组导航（总览 / 发现 / 追剧 / 入库 / 系统），侧边栏按组折行
 - **约 35 个内联 SVG 线性图标**，无字体图标、无图片请求
 - **骨架屏加载**（不再是白屏转圈）、空态插画、热度条、排名徽标、
   分段控件（segment）、标签云（chips）等组件
@@ -373,7 +459,8 @@ NAS 离线内网直接可用，整个前端只有 `index.html` + `app.js` + `sty
 | [`docs/05-ChatOps-机器人.md`](docs/05-ChatOps-机器人.md) | 三平台配置步骤、验签算法、指令表 |
 | [`docs/06-网盘管理.md`](docs/06-网盘管理.md) | 盘搜 vs 网盘、三种存储配置、转存流程 |
 | [`docs/07-运维手册.md`](docs/07-运维手册.md) | 部署、备份、排障、验证脚本 |
-| [`docs/08-变更日志.md`](docs/08-变更日志.md) | v1.0.0 → v1.3.0 逐版本记录 |
+| [`docs/08-变更日志.md`](docs/08-变更日志.md) | v1.0.0 → v1.4.0 逐版本记录 |
+| [`docs/09-竞品对标与差距分析.md`](docs/09-竞品对标与差距分析.md) | 对标 MoviePilot / quark-auto-save / SmartStrm / MediaWarp / TgtoDrive，**差距与不做的事** |
 
 ---
 
@@ -383,11 +470,12 @@ NAS 离线内网直接可用，整个前端只有 `index.html` + `app.js` + `sty
 ┌──────────────────────────────────────────────────────────────┐
 │  web/  零依赖 Web 控制台（原生 JS，无 CDN）                     │
 └────────────────────────────┬─────────────────────────────────┘
-                             │ REST /api/v1（82 个端点）
+                             │ REST /api/v1（95 个端点）
 ┌────────────────────────────▼─────────────────────────────────┐
-│  app/api/      14 个 router：auth search trending subscribes  │
+│  app/api/      16 个 router：auth search trending subscribes  │
 │                 radar schedules downloads library media       │
-│                 sites pan chatops plugins system              │
+│                 sites pan pan-subscribes strm chatops         │
+│                 plugins system                                │
 ├──────────────────────────────────────────────────────────────┤
 │  app/services/  业务编排层                                     │
 │    search    多级关键词 · 并发聚合 · 去重                       │
@@ -400,8 +488,12 @@ NAS 离线内网直接可用，整个前端只有 `index.html` + `app.js` + `sty
 │    pan_storage 网盘容量/浏览/转存/待转存队列                     │
 │    chatops/  聊天平台适配（验签/解析/回复）+ 指令执行引擎          │
 │    library   整理入库 · 扫描 · 刷新媒体服务器                    │
+│    scraper   NFO 刮削 · 海报下载 · 媒体库批量补刮                │
+│    strm_sync 网盘目录 → .strm · 302 直链播放                    │
+│    pan_subscribe 网盘分享追更（增量转存新集）                    │
+│    upgrade   洗版：更优版本替换已入库文件                        │
 │    notify    事件总线 + 多渠道推送                              │
-│    scheduler APScheduler（5 内置任务 + 插件任务），可视化改期      │
+│    scheduler APScheduler（9 内置任务 + 插件任务），可视化改期      │
 │    settings_store 运行期设置持久化（settings 表）               │
 │    sites     DB 配置 → Provider 实例                           │
 ├──────────────────────────────────────────────────────────────┤
@@ -409,10 +501,10 @@ NAS 离线内网直接可用，整个前端只有 `index.html` + `app.js` + `sty
 │    meta 解析引擎 · filters 过滤打分 · organizer 命名转移         │
 │    config 三级配置 · security PBKDF2+JWT · logger 环形缓冲       │
 ├──────────────────────────────────────────────────────────────┤
-│  app/providers/ 21 个注册 Provider + TMDB 单例，装饰器自动发现   │
+│  app/providers/ 22 个注册 Provider + TMDB 单例，装饰器自动发现   │
 │    indexer  torznab rss nyaa api_generic html_generic mukaku  │
 │    pan      pansou pan_generic         ← 找分享链接（搜索器）    │
-│    panstorage alist quark local_dir    ← 存到自己的盘（存储器）  │
+│    panstorage alist quark webdav local_dir ← 存到自己的盘（存储器）  │
 │    downloader qbittorrent transmission aria2                  │
 │    mediaserver emby jellyfin plex                             │
 │    notify   telegram webhook bark wecom                       │
@@ -420,7 +512,7 @@ NAS 离线内网直接可用，整个前端只有 `index.html` + `app.js` + `sty
 ├──────────────────────────────────────────────────────────────┤
 │  app/plugins/   插件基类 + 管理器（发现/热启停/配置/动作）        │
 ├──────────────────────────────────────────────────────────────┤
-│  app/db/        SQLAlchemy 2.0 ORM · SQLite(WAL) · 14 张表     │
+│  app/db/        SQLAlchemy 2.0 ORM · SQLite(WAL) · 16 张表     │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -496,6 +588,21 @@ YAML 里的二级 key 会拍平成 `CF_<父>_<子>`，例如 `tmdb.api_key` → 
 | 雷达取量 | `CF_RADAR_LIMIT_PER_SITE` | `100` | 每站最多取多少条最新资源 |
 | 下载同步 | `CF_DOWNLOAD_CHECK_INTERVAL_MINUTES` | `5` | 分钟 |
 | 媒体库扫描 | `CF_LIBRARY_SCAN_CRON` | `0 4 * * *` | 5 段 cron |
+| NFO 刮削 | `CF_SCRAPE_ENABLED` | `true` | 入库后自动写 NFO，媒体服务器不用猜 |
+| 刮削图片 | `CF_SCRAPE_IMAGES` | `true` | 同时下载 poster / fanart |
+| 覆盖 NFO | `CF_SCRAPE_OVERWRITE` | `false` | 默认不冲掉你手工改过的 NFO |
+| 补刮周期 | `CF_SCRAPE_CRON` | `30 4 * * *` | 给历史文件补 NFO；留空关闭 |
+| 补刮批量 | `CF_SCRAPE_BATCH` | `200` | 单次最多刮几个文件，防打满 TMDB 限速 |
+| 分类归档 | `CF_CATEGORY_ENABLED` | `false` | 开启后按 电影/电视剧/动漫/纪录片/综艺/儿童 分二级目录 |
+| STRM 链接模式 | `CF_STRM_LINK_MODE` | `proxy` | `proxy`=写 302 端点（不过期）/ `direct`=写临时直链 |
+| STRM 同步周期 | `CF_STRM_SYNC_INTERVAL_MINUTES` | `0` | 分钟，`0`=关闭自动同步 |
+| STRM 失效清理 | `CF_STRM_CLEAN_INVALID` | `true` | 网盘源文件消失时删掉对应 `.strm` |
+| STRM 随行文件 | `CF_STRM_SYNC_METADATA` | `true` | 同步字幕 / NFO / 图片到本地 |
+| 分享追更周期 | `CF_PAN_SUBSCRIBE_INTERVAL_MINUTES` | `60` | 分钟，`0`=关闭 |
+| 分享失效阈值 | `CF_PAN_SUBSCRIBE_MAX_FAILURES` | `5` | 连续失败几次后标记失效并停手 |
+| 洗版开关 | `CF_UPGRADE_ENABLED` | `false` | ⚠️ 会**删除已入库文件**，默认关闭 |
+| 洗版评分差 | `CF_UPGRADE_SCORE_DELTA` | `15` | 至少高这么多分才替换，防横跳 |
+| 洗版次数上限 | `CF_UPGRADE_MAX_TIMES` | `2` | 每个文件最多洗几次 |
 | 画质偏好 | `CF_PREFER_RESOLUTIONS` | `2160p,1080p,720p` | 越靠前优先级越高 |
 | 关键词黑名单 | `CF_EXCLUDE_KEYWORDS` | `枪版,抢先版,CAM,…` | 支持正则 |
 | TMDB | `CF_TMDB_API_KEY` | 空 | **留空也能用**，只是没海报/总集数 |
@@ -515,7 +622,7 @@ YAML 里的二级 key 会拍平成 `CF_<父>_<子>`，例如 `tmdb.api_key` → 
 
 ## 🔌 接入你自己的站点
 
-首次启动会写入 11 条**默认全部禁用**的示例站点（避免启动就对外发请求）。
+首次启动会写入 12 条**默认全部禁用**的示例站点（避免启动就对外发请求）。
 版本升级时会**按名字补齐新增的示例站点**，已存在的同名站点不会被覆盖。
 在 **站点管理** 页填好地址后点「启用」即可。
 
@@ -862,7 +969,7 @@ curl -X POST -H "X-API-Token: your-token" \
      http://127.0.0.1:6060/api/v1/subscribes/run-all
 ```
 
-主要端点分组（共 82 个）：
+主要端点分组（共 95 个）：
 
 | 前缀 | 用途 |
 |---|---|
@@ -876,6 +983,8 @@ curl -X POST -H "X-API-Token: your-token" \
 | `/api/v1/sites` | 站点 CRUD、连通性测试、Provider 清单、预设模板、导航站发现 |
 | `/api/v1/radar` | 追新雷达：手动追新、预览匹配、最新流预览、任务状态 |
 | `/api/v1/pan` | 网盘管理：总览、目录浏览、转存、批量转存、建目录、删除、直链、记录 |
+| `/api/v1/pan-subscribes` | 网盘分享追更：订阅 CRUD、单个/全部巡检 |
+| `/api/v1/strm` | STRM 同步：概览、记录、手动同步、`play/{id}` 匿名 302 跳转 |
 | `/api/v1/chatops` | 机器人：入站 Webhook、平台清单、配置、指令试跑、解析、审计 |
 | `/api/v1/schedules` | 定时任务：查看、改期（interval/cron）、重置、立即执行 |
 | `/api/v1/plugins` | 列表、启停、配置、执行动作 |
@@ -887,7 +996,7 @@ curl -X POST -H "X-API-Token: your-token" \
 
 ```bash
 pip install -r requirements-dev.txt
-pytest -q                 # 270 passed
+pytest -q                 # 370 passed
 ruff check app tests      # 静态检查
 ```
 
@@ -905,21 +1014,29 @@ ruff check app tests      # 静态检查
 | `test_trending.py` | **热度排行 + 定时任务**：热度打分与排序、窗口过滤、热词、站点榜、**发布版本/集号归并去碎片化**、cron/interval 校验、改期持久化 |
 | `test_panstorage.py` | **网盘管理**：三个存储 Provider、路径规范化与**越界防护**、夸克四步转存、AList 离线下载、选盘策略、**盘搜命中自动转存端到端** |
 | `test_chatops.py` | **ChatOps**：40+ 别名解析、中文季号、三平台**验签正反用例**（含钉钉真实 HMAC、防重放）、飞书加解密与挑战、幂等去重、白名单、**搜索→下载 N 会话上下文**、Webhook 全链路 |
+| `test_nfo.py` | **NFO 渲染**：四种根节点、演职员、图片命名惯例、TMDB id 回读、无 IO 纯函数 |
+| `test_scraper.py` | **刮削服务**：入库即刮、TMDB 不可用降级、不覆盖已有 NFO、批量补刮上限 |
+| `test_categories.py` | **分类归档**：TMDB genre 优先、关键词兜底、判不出返回 `None` 不猜 |
+| `test_webdav.py` | **WebDAV**：PROPFIND 解析、MKCOL、容量、percent 编码、明确不支持分享转存 |
+| `test_strm_sync.py` | **STRM 同步**：`proxy`/`direct` 两种链接、302 播放解析、失效清理、随行文件 |
+| `test_pan_subscribe.py` | **分享追更**：增量文件名去重、包含/排除/正则过滤、错误正则不崩、重命名规则、星期与到期限制、失败达阈值标记失效 |
+| `test_upgrade.py` | **洗版**：评分阈值防横跳、次数上限、仅 `best_version` 生效、先入库后删旧 |
 
 全部测试使用内存假 Provider，**全程不触网**。
 
 ### 额外验证脚本
 
-`scripts/` 下另有五个开发期验证工具（详见 [`scripts/README.md`](scripts/README.md)）：
+`scripts/` 下另有六个开发期验证工具（详见 [`scripts/README.md`](scripts/README.md)）：
 
 ```bash
 python -m app.main &                  # 先起服务
 
-python scripts/smoke_test.py          # 117 项真实 HTTP 接口用例
-python scripts/ui_check.py            # Playwright 真浏览器逐页点检 14 个页面 + 主题切换，捕获 JS 报错
+python scripts/smoke_test.py          # 141 项真实 HTTP 接口用例
+python scripts/ui_check.py            # Playwright 真浏览器逐页点检 16 个页面 + 主题切换，捕获 JS 报错
 python scripts/demo_pipeline.py       # 真实文件演示解析→硬链入库→缺集收敛（无需服务）
 python scripts/live_check.py          # 真实站点端到端：启用 mukaku→搜索→订阅→雷达匹配（联网）
 python scripts/verify_docs.py         # 校验 README 事实声明与代码一致
+python scripts/research_refs.py       # 抓取同类开源项目特性清单，产出对标差距表（联网）
 ```
 
 ---
@@ -929,23 +1046,25 @@ python scripts/verify_docs.py         # 校验 README 事实声明与代码一�
 ```
 cineflow/
 ├── app/
-│   ├── core/          config logger security exceptions meta filters organizer version
+│   ├── core/          config logger security exceptions meta filters organizer
+│   │                  nfo categories version
 │   ├── db/            session base models init_db
 │   ├── providers/     base registry + indexer/ pan/ panstorage/ downloader/
 │   │                  mediaserver/ notify/ metadata/
 │   ├── services/      sites search notify download library subscribe scheduler
 │   │                  radar trending discovery presets settings_store
-│   │                  pan_storage chatops/
+│   │                  pan_storage scraper strm_sync pan_subscribe upgrade
+│   │                  chatops/
 │   ├── plugins/       base manager
-│   ├── api/           deps router + routers/(14)
+│   ├── api/           deps router + routers/(16)
 │   ├── schemas/       enums models
 │   ├── utils/         http strings
 │   └── main.py        应用入口（lifespan / CORS / 静态资源）
 ├── web/               index.html + assets/(app.js style.css)  ← 零依赖前端
 ├── plugins/           auto_cleanup pan_transfer daily_digest  ← 示例插件
-├── tests/             12 个测试文件
+├── tests/             19 个测试文件
 ├── scripts/           smoke_test / ui_check / demo_pipeline 验证脚本
-├── docs/              9 篇维护文档（现状/架构/路线图/决策/运维/变更日志…）
+├── docs/              10 篇维护文档（现状/架构/路线图/决策/运维/变更日志/竞品对标…）
 ├── config/            config.yaml.example
 ├── docker/            entrypoint.sh
 ├── Dockerfile         多阶段构建

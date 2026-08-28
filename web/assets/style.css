@@ -694,6 +694,9 @@ tbody tr:last-child td { border-bottom: 0; }
 .mono { font-family: var(--font-mono); font-size: var(--fs-sm); }
 .truncate { max-width: 440px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tiny { font-size: var(--fs-xs); }
+/* 竖排小字块：分享追更的「过滤/重命名」列要把多条规则叠起来展示 */
+.stack { display: flex; flex-direction: column; gap: 3px; }
+.row.wrap { flex-wrap: wrap; row-gap: var(--sp-2); }
 .cell-sub { color: var(--text-3); font-size: var(--fs-xs); margin-top: 2px; }
 .divider { height: 1px; background: var(--border-soft); margin: var(--sp-4) 0; }
 

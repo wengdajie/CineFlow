@@ -137,9 +137,49 @@ class Settings(BaseSettings):
         "(KHTML, like Gecko) Chrome/124.0 Safari/537.36 CineFlow/1.0"
     )
 
+    # ---------- 刮削（NFO + 图片） ----------
+    #: 入库后是否自动生成 NFO（媒体服务器识别率的决定性因素）
+    SCRAPE_ENABLED: bool = True
+    #: 是否连同海报/背景图一起下载到本地
+    SCRAPE_IMAGES: bool = True
+    #: 已有 NFO 时是否覆盖（默认不覆盖，尊重用户手工修正）
+    SCRAPE_OVERWRITE: bool = False
+    #: 媒体库补刮巡检的 cron（补齐历史文件缺失的 NFO），空表示关闭
+    SCRAPE_CRON: str = "30 4 * * *"
+    #: 单次补刮最多处理多少个文件，避免一次打满 TMDB 限速
+    SCRAPE_BATCH: int = 200
+
+    # ---------- 媒体分类归档 ----------
+    #: 是否按「电影/剧集/动漫/纪录片/综艺」二级归档
+    CATEGORY_ENABLED: bool = False
+
     # ---------- STRM ----------
     STRM_ENABLED: bool = False
     STRM_BASE_URL: str = "http://127.0.0.1:6060"
+    #: 网盘 STRM 同步：写入 STRM 的链接形式
+    #:   direct = 网盘临时直链（可能过期）
+    #:   proxy  = 指向 CineFlow 的 302 端点（推荐，链接永不过期）
+    STRM_LINK_MODE: str = "proxy"
+    #: STRM 同步巡检间隔（分钟），0 表示关闭
+    STRM_SYNC_INTERVAL_MINUTES: int = 0
+    #: 同步时是否清理源文件已消失的失效 STRM 与空目录
+    STRM_CLEAN_INVALID: bool = True
+    #: 是否连同字幕/NFO 等元数据一起下载到 STRM 目录
+    STRM_SYNC_METADATA: bool = True
+
+    # ---------- 网盘分享追更订阅 ----------
+    #: 分享追更巡检间隔（分钟），0 表示关闭
+    PAN_SUBSCRIBE_INTERVAL_MINUTES: int = 60
+    #: 连续多少次转存失败后自动标记分享失效并停止重试
+    PAN_SUBSCRIBE_MAX_FAILURES: int = 5
+
+    # ---------- 洗版 ----------
+    #: 是否启用洗版（发现明显更优的版本时替换已入库文件）
+    UPGRADE_ENABLED: bool = False
+    #: 新资源评分需超过已入库版本多少分才触发替换（防止反复横跳）
+    UPGRADE_SCORE_DELTA: float = 15.0
+    #: 每个剧集/电影最多洗版几次，用尽后不再替换
+    UPGRADE_MAX_TIMES: int = 2
 
     # ---------- 网盘管理 ----------
     #: 盘搜命中网盘资源时是否自动转存进已配置的网盘存储

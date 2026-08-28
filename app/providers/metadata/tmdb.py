@@ -129,11 +129,36 @@ class TmdbClient:
             if media_type == MediaType.MOVIE.value
             else f"/tv/{tmdb_id}"
         )
-        payload = await self._get(path)
+        payload = await self._get(path, append_to_response="credits")
         if not payload:
             return None
         data = self._normalize(payload, media_type)
         data["imdb_id"] = payload.get("imdb_id")
+        # NFO 刮削需要制作公司与演职员，顺手带出来（append_to_response 省一次请求）
+        data["studios"] = [
+            company["name"]
+            for company in payload.get("production_companies", [])
+            if isinstance(company, dict) and company.get("name")
+        ]
+        data["status"] = payload.get("status")
+        data["number_of_episodes"] = payload.get("number_of_episodes")
+        credits = payload.get("credits") or {}
+        data["actors"] = [
+            {
+                "name": person.get("name"),
+                "role": person.get("character"),
+                "thumb": self._image(person.get("profile_path"), "w185"),
+            }
+            for person in (credits.get("cast") or [])[:15]
+            if isinstance(person, dict) and person.get("name")
+        ]
+        data["directors"] = [
+            person["name"]
+            for person in (credits.get("crew") or [])
+            if isinstance(person, dict)
+            and person.get("job") in ("Director", "Series Director")
+            and person.get("name")
+        ]
         if media_type != MediaType.MOVIE.value:
             data["total_seasons"] = payload.get("number_of_seasons")
             data["seasons"] = [
