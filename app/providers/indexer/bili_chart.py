@@ -147,16 +147,25 @@ def _normalize_pgc(item: dict[str, Any], category: str) -> dict[str, Any] | None
     }
 
 
-async def chart(category: str, *, limit: int = 20) -> list[dict[str, Any]]:
-    """拉一个分类的 B 站榜单。失败返回空列表。"""
+async def chart(
+    category: str, *, limit: int = 20, offset: int = 0
+) -> list[dict[str, Any]]:
+    """拉一个分类的 B 站榜单。失败返回空列表。
+
+    **B 站排行榜接口没有分页参数**（实测 PGC 番剧榜一次固定返回 99 条），
+    所以 ``offset`` 是在服务端对整份榜单做切片，而不是透传给 B 站。
+    好处是下拉加载更多不会产生额外请求——整份榜单已在缓存里。
+    """
     meta = CATEGORIES.get(category)
     if not meta:
         return []
     limit = max(1, min(int(limit or 20), 100))
-    cache_key = f"{category}:{limit}"
+    offset = max(0, int(offset or 0))
+    # 缓存整份榜单（与 offset 无关），切片在返回前做，避免每页都打一次 B 站
+    cache_key = f"{category}:all"
     cached = _CACHE.get(cache_key)
     if cached and cached[0] > time.time():
-        return cached[1]
+        return cached[1][offset : offset + limit]
     if is_rate_limited():
         return []
 
@@ -199,13 +208,14 @@ async def chart(category: str, *, limit: int = 20) -> list[dict[str, Any]]:
 
     normalize = _normalize_pgc if meta["kind"] == "pgc" else _normalize_ugc
     items: list[dict[str, Any]] = []
-    for raw in raw_list[:limit]:
+    # 先全量归一化并入缓存，再切片返回——后续翻页直接命中缓存
+    for raw in raw_list:
         if isinstance(raw, dict):
             row = normalize(raw, category)
             if row:
                 items.append(row)
     _CACHE[cache_key] = (time.time() + _CACHE_TTL, items)
-    return items
+    return items[offset : offset + limit]
 
 
 async def health_check() -> tuple[bool, str]:

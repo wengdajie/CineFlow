@@ -90,8 +90,15 @@ def _annotate_local(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return items
 
 
-async def chart(category: str, *, limit: int = 24) -> dict[str, Any]:
-    """取一个分类榜。任何来源失败都返回空 items + 可读 message，不抛异常。"""
+async def chart(
+    category: str, *, limit: int = 24, offset: int = 0
+) -> dict[str, Any]:
+    """取一个分类榜。任何来源失败都返回空 items + 可读 message，不抛异常。
+
+    ``offset`` 供前端下拉加载更多。返回体带 ``has_more``，让前端知道
+    还能不能继续翻——两个来源的可翻上限不同（豆瓣约 300 条，B 站一次给全量），
+    统一用「这一页是否被取满」来判断，避免把上限写死在前端。
+    """
     meta = CATEGORIES.get(category)
     if not meta:
         return {
@@ -99,22 +106,28 @@ async def chart(category: str, *, limit: int = 24) -> dict[str, Any]:
             "label": category,
             "source": "",
             "items": [],
+            "count": 0,
+            "offset": 0,
+            "has_more": False,
             "message": f"未知分类：{category}",
         }
 
+    offset = max(0, int(offset or 0))
     items: list[dict[str, Any]] = []
     message = ""
     if meta["source"] == "douban":
-        items = await douban_chart.chart(str(meta["douban"]), limit=limit)
-        if not items:
+        items = await douban_chart.chart(
+            str(meta["douban"]), limit=limit, offset=offset
+        )
+        if not items and offset == 0:
             message = (
                 "豆瓣限流中，已自动退避，请稍后重试"
                 if douban_chart.is_rate_limited()
                 else "豆瓣榜单暂无数据（可能是网络不通）"
             )
     else:
-        items = await bili_chart.chart(str(meta["bili"]), limit=limit)
-        if not items:
+        items = await bili_chart.chart(str(meta["bili"]), limit=limit, offset=offset)
+        if not items and offset == 0:
             message = (
                 "B 站风控中，已自动退避，请稍后重试"
                 if bili_chart.is_rate_limited()
@@ -122,7 +135,8 @@ async def chart(category: str, *, limit: int = 24) -> dict[str, Any]:
             )
 
     items = _annotate_local(list(items))
-    for index, item in enumerate(items, start=1):
+    # 名次要接着上一页continue，不能每页都从 1 开始
+    for index, item in enumerate(items, start=offset + 1):
         item["rank"] = index
     return {
         "category": category,
@@ -130,6 +144,9 @@ async def chart(category: str, *, limit: int = 24) -> dict[str, Any]:
         "source": str(meta["source"]),
         "items": items,
         "count": len(items),
+        "offset": offset,
+        # 取满这一页就认为还有下一页；取不满说明已到底
+        "has_more": len(items) >= limit,
         "message": message,
     }
 
@@ -167,13 +184,23 @@ def categories() -> list[dict[str, str]]:
     ]
 
 
-async def bili_categories_chart(category: str, *, limit: int = 24) -> dict[str, Any]:
+async def bili_categories_chart(
+    category: str, *, limit: int = 24, offset: int = 0
+) -> dict[str, Any]:
     """B 站细分分区榜（番剧/国创/电影…），供 Bilibili 页签内二级切换。"""
     if category not in bili_chart.CATEGORIES:
-        return {"category": category, "items": [], "count": 0, "message": "未知分区"}
-    items = await bili_chart.chart(category, limit=limit)
+        return {
+            "category": category,
+            "items": [],
+            "count": 0,
+            "offset": 0,
+            "has_more": False,
+            "message": "未知分区",
+        }
+    offset = max(0, int(offset or 0))
+    items = await bili_chart.chart(category, limit=limit, offset=offset)
     items = _annotate_local(list(items))
-    for index, item in enumerate(items, start=1):
+    for index, item in enumerate(items, start=offset + 1):
         item["rank"] = index
     return {
         "category": category,
@@ -181,7 +208,11 @@ async def bili_categories_chart(category: str, *, limit: int = 24) -> dict[str, 
         "source": "bilibili",
         "items": items,
         "count": len(items),
-        "message": "" if items else "该分区暂无数据或正在风控退避",
+        "offset": offset,
+        "has_more": len(items) >= limit,
+        "message": ""
+        if items or offset
+        else "该分区暂无数据或正在风控退避",
     }
 
 

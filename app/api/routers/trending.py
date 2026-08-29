@@ -130,24 +130,31 @@ def discover_categories(user: CurrentUser) -> dict[str, Any]:
 async def discover_chart(
     category: str,
     user: CurrentUser,
-    limit: int = Query(24, ge=1, le=100),
+    limit: int = Query(30, ge=1, le=100, description="每页条数，默认 30"),
+    offset: int = Query(0, ge=0, le=500, description="偏移量，供下拉加载更多"),
 ) -> dict[str, Any]:
     """切页签时只拉一个分类，比 overview 快。
 
     未知分类返回 success=True + 空 items + 可读 message，
     而不是 404 —— 榜单页拿不到数据时应当显示"暂无"而非整页报错。
     """
-    return {"success": True, "data": await discover_service.chart(category, limit=limit)}
+    return {
+        "success": True,
+        "data": await discover_service.chart(category, limit=limit, offset=offset),
+    }
 
 
 @router.get("/bilibili/{partition}", summary="B 站分区榜（番剧/国创/电影/电视剧…）")
 async def bili_partition_chart(
     partition: str,
     user: CurrentUser,
-    limit: int = Query(24, ge=1, le=100),
+    limit: int = Query(30, ge=1, le=100, description="每页条数，默认 30"),
+    offset: int = Query(0, ge=0, le=500, description="偏移量，供下拉加载更多"),
 ) -> dict[str, Any]:
     """Bilibili 页签内的二级分区切换。"""
     return {
         "success": True,
-        "data": await discover_service.bili_categories_chart(partition, limit=limit),
+        "data": await discover_service.bili_categories_chart(
+            partition, limit=limit, offset=offset
+        ),
     }

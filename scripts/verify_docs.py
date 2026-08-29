@@ -12,7 +12,23 @@ sys.stdout.reconfigure(encoding="utf-8")
 #: 服务地址，可用 CF_BASE_URL / CF_PORT 覆盖
 BASE = os.environ.get("CF_BASE_URL") or f"http://127.0.0.1:{os.environ.get('CF_PORT', '6060')}"
 
-README = pathlib.Path("README.md").read_text(encoding="utf-8")
+#: v1.9.0 起 README 只保留「声明 / 项目介绍 / 安装方案」三块，
+#: 原先的特性、配置、API、插件、测试、FAQ 等长章节被拆到 docs/12~15。
+#: 事实性校验关心的是「文档里有没有写」，而不是「写在哪个文件」，
+#: 所以这里把 README 与拆分出去的四个文档拼成一份语料统一断言，
+#: 另外保留 README_ONLY 用于校验必须留在首页的内容（声明与安装）。
+README_ONLY = pathlib.Path("README.md").read_text(encoding="utf-8")
+_SPLIT_DOCS = (
+    "docs/12-功能特性详解.md",
+    "docs/13-配置与API参考.md",
+    "docs/14-开发指南.md",
+    "docs/15-常见问题.md",
+    # 「接入你自己的站点」整章并入了站点接入指南（含下载器/媒体服务器/通知/yt-dlp/导航站）
+    "docs/10-站点接入指南.md",
+)
+README = README_ONLY + "\n".join(
+    pathlib.Path(p).read_text(encoding="utf-8") for p in _SPLIT_DOCS
+)
 SCRIPTS_README = pathlib.Path("scripts/README.md").read_text(encoding="utf-8")
 checks = []
 
@@ -216,10 +232,10 @@ for script in ("smoke_test.py", "ui_check.py", "demo_pipeline.py", "live_check.p
     check(f"脚本存在 {script}", pathlib.Path("scripts", script).exists())
     check(f"scripts/README 提及 {script}", script in SCRIPTS_README)
 check("README 声明六个验证脚本", "六个开发期验证工具" in README)
-check("README 测试徽章 773", "tests-773%20passed" in README)
-check("README 版本号 1.8.0", "1.8.0" in README)
+check("README 测试徽章 778", "tests-778%20passed" in README_ONLY)
+check("README 版本号 1.9.0", "1.9.0" in README_ONLY)
 version_src = pathlib.Path("app/core/version.py").read_text(encoding="utf-8")
-check("代码版本号为 1.8.0", 'APP_VERSION = "1.8.0"' in version_src)
+check("代码版本号为 1.9.0", 'APP_VERSION = "1.9.0"' in version_src)
 check("README 声明 255 项接口用例", "255 项真实 HTTP 接口用例" in README)
 check("scripts/README 声明 255 项", "255 项接口用例" in SCRIPTS_README)
 
@@ -268,7 +284,7 @@ if roadmap.exists():
                       "M17", "M18", "M19", "M20"):
         check(f"路线图含里程碑 {milestone}", milestone in roadmap_text)
     # 路线图必须往前看：候选章节要指向下一个版本，不能还停在已发布的版本上
-    check("路线图候选指向 v1.8.0", "v1.8.0 候选" in roadmap_text)
+    check("路线图候选指向 v2.0.0", "v2.0.0 候选" in roadmap_text)
 
 # 变更日志必须记录到当前版本
 changelog = (docs_dir / "08-变更日志.md")
@@ -648,7 +664,7 @@ check("站点元数据映射表", "DEFAULT_MEDIA_MAP" in generic_src)
 check("站点元数据可自定义映射", "media_map" in generic_src)
 for field in ("poster", "rating", "year", "genres", "total_episodes"):
     check(f"元数据字段 {field}", f'"{field}"' in generic_src)
-check("前端有画板渲染", "rankingBoard" in app_js)
+check("前端有画板渲染", "discoverBoard" in app_js and "board-card" in app_js)
 check("前端封面有占位降级", "posterBox" in app_js and "poster-ph" in app_js)
 check("封面裂图退占位", 'addEventListener("error"' in app_js)
 check("封面防盗链", 'referrerpolicy: "no-referrer"' in app_js)
@@ -880,6 +896,87 @@ if fnos_guide.exists():
     check("飞牛指南含 fnOS 影视 App 联动", "影视" in fnos_text)
     check("飞牛指南含公网暴露前改密提醒", "改密" in fnos_text or "改密码" in fnos_text)
     check("飞牛指南含自检清单", "自检清单" in fnos_text)
+
+
+# ---- v1.9.0：榜单分页 / 榜单与搜索合体 / README 瘦身 ----
+# 这一段专门钉住「文档搬家不能把事实弄丢」以及分页的真实行为。
+readme_lines = README_ONLY.count("\n") + 1
+# README 精简的目标是「只留声明/介绍/安装」，行数是最直观的回归指标
+check("README 已精简到 400 行内", readme_lines <= 400, f"实际 {readme_lines} 行")
+check("README 保留学习交流声明", "仅用于学习交流使用" in README_ONLY
+      and "请勿在任何国内平台宣传" in README_ONLY)
+check("README 保留项目介绍", "这是什么" in README_ONLY)
+check("README 保留安装方案", "docker compose up -d" in README_ONLY
+      and "python -m app.main" in README_ONLY)
+# 长章节必须真的搬走，而不是复制一份留在首页（两份会各自漂移）
+check("README 不再内联核心特性长章节", "## ✨ 核心特性" not in README_ONLY)
+check("README 不再内联插件开发章节", "## 🧩 插件开发" not in README_ONLY)
+check("README 不再内联 API 章节", "## 📡 API" not in README_ONLY)
+for split_doc in ("docs/12-功能特性详解.md", "docs/13-配置与API参考.md",
+                  "docs/14-开发指南.md", "docs/15-常见问题.md"):
+    p = pathlib.Path(split_doc)
+    check(f"{split_doc} 存在", p.exists())
+    check(f"README 指向 {split_doc}", split_doc in README_ONLY)
+    check(f"docs/README 索引 {split_doc}", p.name in docs_index)
+
+# 分页：三层都得认 offset，且 has_more 由服务端给出
+import inspect  # noqa: E402
+
+from app.services import discover as _discover  # noqa: E402
+
+for fn_name in ("chart", "bili_categories_chart"):
+    sig = inspect.signature(getattr(_discover, fn_name))
+    check(f"discover.{fn_name} 支持 offset", "offset" in sig.parameters)
+from app.providers.indexer import bili_chart as _blc  # noqa: E402
+from app.providers.metadata import douban_chart as _dbc  # noqa: E402
+
+check("豆瓣 Provider 支持 offset",
+      "offset" in inspect.signature(_dbc.chart).parameters)
+check("B 站 Provider 支持 offset",
+      "offset" in inspect.signature(_blc.chart).parameters)
+# 豆瓣缓存键必须带 offset，否则第二页会命中第一页缓存（v1.9.0 真实踩过）
+check("豆瓣缓存键含 offset", "{offset}" in inspect.getsource(_dbc.chart))
+# B 站接口无分页参数，只能服务端切片
+check("B 站用服务端切片", "offset:" in inspect.getsource(_blc.chart)
+      or "offset + limit" in inspect.getsource(_blc.chart))
+
+trending_router = pathlib.Path("app/api/routers/trending.py").read_text(encoding="utf-8")
+check("榜单端点暴露 offset 参数", "offset: int = Query(0" in trending_router)
+check("榜单端点默认 30 条", "Query(30" in trending_router)
+
+app_js = pathlib.Path("web/assets/app.js").read_text(encoding="utf-8")
+check("前端分页大小为 30", "TRENDING_PAGE_SIZE = 30" in app_js)
+check("前端有加载更多区域", "board-more" in app_js)
+check("榜单页含右侧搜索面板", "trendingSearchPanel" in app_js
+      and "trending-split" in app_js)
+check("榜单卡片支持就地搜索", "searchFor" in app_js)
+# 四个下线的页签与随之删掉的死代码都不该再出现
+for gone in ("rankingBoard", "rankingView", "rankingTable", "trendingDetail"):
+    check(f"死代码 {gone} 已删除", gone not in app_js)
+style_css = pathlib.Path("web/assets/style.css").read_text(encoding="utf-8")
+for sel in (".trending-split", ".side-panel", ".side-results",
+            ".side-item", ".board-more"):
+    check(f"样式含 {sel}", sel in style_css)
+# 侧栏窄屏必须塌成单列，否则 380px 固定列会挤爆手机
+check("侧栏有窄屏断点", "1180px" in style_css)
+
+# 后端接口一律不删：榜单订阅还在消费资源热榜口径（ADR-43）
+for kept in ("/resources", "/keywords", "/sites", "/live"):
+    check(f"资源榜端点 {kept} 仍保留", f'"{kept}"' in trending_router
+          or f"'{kept}'" in trending_router)
+
+adr_text = (docs_dir / "04-决策记录.md").read_text(encoding="utf-8")
+for adr in ("ADR-42", "ADR-43", "ADR-44"):
+    check(f"决策记录含 {adr}", adr in adr_text)
+check("ADR 说明豆瓣真分页与 B 站切片差异",
+      "page_start" in adr_text and "切片" in adr_text)
+check("ADR 说明为什么保留后端榜单接口", "榜单自动订阅" in adr_text)
+changelog_text = (docs_dir / "08-变更日志.md").read_text(encoding="utf-8")
+check("变更日志含 v1.9.0", "## v1.9.0" in changelog_text)
+check("变更日志记录破坏性变更", "破坏性变更" in changelog_text)
+roadmap_all = (docs_dir / "03-升级路线图.md").read_text(encoding="utf-8")
+for milestone in ("M30", "M31", "M32", "M33"):
+    check(f"路线图含里程碑 {milestone}", f"里程碑 {milestone}" in roadmap_all)
 
 
 print()

@@ -1225,15 +1225,24 @@
   }
 
   // ---------------- 热度排行 ----------------
+  // 热度排行只保留「发现榜」一种口径（原资源热榜/实时热榜/搜索热词/站点贡献已下线，
+  // 它们的数据在「资源搜索」页与「站点管理」页各自有更合适的入口）。
   const trendingState = {
-    tab: "discover",
-    days: 14,
-    mediaType: "",
     view: "board",
     // 发现榜当前分类（电影/电视剧/动漫/综艺/Bilibili）与 B 站二级分区
     discoverCat: "movie",
     biliPartition: "all",
+    // 下拉加载：已加载的条目、下一页偏移、是否还有更多、是否正在加载
+    items: [],
+    offset: 0,
+    hasMore: false,
+    loading: false,
+    label: "",
+    source: "",
+    message: "",
   };
+  //: 每页条数。默认首屏 30 条，下拉再追加 30 条。
+  const TRENDING_PAGE_SIZE = 30;
 
   function subscribeFromTrending(row) {
     modal(
@@ -1267,54 +1276,6 @@
       },
       "创建订阅",
       { lead: "热榜里看到想追的，直接建订阅交给自动化。" }
-    );
-  }
-
-  function trendingDetail(row) {
-    const info = (label, value) =>
-      el("div", { class: "kv-item" }, [
-        el("div", { class: "kv-label", text: label }),
-        el("div", { text: value }),
-      ]);
-
-    panelModal(
-      row.title,
-      "热度构成：做种数 + 站点覆盖 + 资源条目 + 新鲜度 + 画质加成",
-      el("div", {}, [
-        el("div", { class: "kv" }, [
-          info("类型", typeLabel(row.media_type)),
-          info("季", row.season === null || row.season === undefined ? "-" : "第 " + row.season + " 季"),
-          info("热度分", String(row.heat)),
-          info("收录站点", String(row.site_count)),
-          info("资源条目", String(row.resource_count)),
-          info("累计做种", String(row.seeders)),
-          info("覆盖集数", row.episode_count ? row.episode_count + " 集（至 " + row.latest_episode + "）" : "-"),
-          info("最大体积", fmtSize(row.size)),
-        ]),
-        el("div", { class: "divider" }),
-        el("div", { class: "chips" }, [
-          ...(row.resolutions || []).map((item) => el("span", { class: "tag brand", text: item })),
-          ...(row.kinds || []).map((item) => el("span", { class: "tag", text: kindLabel(item) })),
-          ...(row.sites || []).map((item) => el("span", { class: "tag", text: item })),
-        ]),
-        el("div", { class: "divider" }),
-        el("div", { class: "dim tiny", style: "margin-bottom:8px", text: "样例资源" }),
-        table(
-          [
-            {
-              title: "标题",
-              render: (item) => el("div", { class: "truncate", title: item.title, text: item.title }),
-            },
-            { title: "站点", render: (item) => el("span", { class: "tag", text: item.site || "-" }) },
-            { title: "大小", class: "num", render: (item) => fmtSize(item.size) },
-            { title: "做种", class: "num", render: (item) => item.seeders || "-" },
-            { title: "操作", render: (item) => downloadButton(item) },
-          ],
-          row.samples || [],
-          "无样例"
-        ),
-      ]),
-      true
     );
   }
 
@@ -1384,83 +1345,13 @@
     return API + "/images/proxy?url=" + encodeURIComponent(normalized);
   }
 
-  /** 画板模式：封面卡片网格。 */
-  function rankingBoard(items, opts) {
-    if (!items || !items.length) {
-      return el("div", { class: "pad" }, [
-        emptyBox((opts && opts.empty) || "暂无数据", "flame"),
-      ]);
-    }
-    return el(
-      "div",
-      { class: "board" },
-      items.map((row) => {
-        const badges = el("div", { class: "board-badges" }, [
-          el("span", { class: "board-rank" + (row.rank <= 3 ? " top" : ""), text: "#" + row.rank }),
-          row.rating
-            ? el("span", { class: "board-score", text: String(row.rating) })
-            : null,
-        ]);
-
-        const card = el("div", { class: "board-card", tabindex: "0", role: "button" }, [
-          el("div", { class: "board-cover" }, [
-            posterBox(row),
-            badges,
-            el("div", { class: "board-heat" }, [
-              el("i", { style: "width:" + Math.max(2, Math.min(100, row.heat_percent || 0)) + "%" }),
-            ]),
-          ]),
-          el("div", { class: "board-body" }, [
-            el("div", { class: "board-title", title: row.title, text: row.title }),
-            el("div", { class: "board-sub", text:
-              [
-                typeLabel(row.media_type),
-                row.year || null,
-                row.season ? "第 " + row.season + " 季" : null,
-                row.latest_episode ? "更新至 " + row.latest_episode + " 集" : null,
-              ].filter(Boolean).join(" · ") }),
-            el("div", { class: "chips tiny-chips" }, [
-              ...(row.genres || []).slice(0, 2).map((g) => el("span", { class: "tag tiny", text: g })),
-              ...(row.resolutions || []).slice(0, 1).map((r) => el("span", { class: "tag brand tiny", text: r })),
-            ]),
-            el("div", { class: "board-foot" }, [
-              el("span", { class: "tiny dim", text: row.site_count + " 站 · " + row.resource_count + " 条" }),
-              el("span", { class: "tiny dim", text: fmtRelative(row.latest_at) }),
-            ]),
-          ]),
-          el("div", { class: "board-actions" }, [
-            iconButton("订阅", "star", (event) => {
-              event.stopPropagation();
-              subscribeFromTrending(row);
-            }, "sm primary"),
-            iconButton("搜索", "search", (event) => {
-              event.stopPropagation();
-              searchState.keyword = row.title;
-              searchState.items = [];
-              go("search");
-            }, "sm ghost"),
-          ]),
-        ]);
-        // 整卡可点开详情，但按钮区已 stopPropagation，避免误触
-        card.addEventListener("click", () => trendingDetail(row));
-        card.addEventListener("keydown", (event) => {
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
-            trendingDetail(row);
-          }
-        });
-        return card;
-      })
-    );
-  }
-
   /** 发现榜画板：来源是豆瓣/B 站，字段与本地资源榜不同，单独渲染。
 
-      与 rankingBoard 的区别：这里没有"做种数/站点数"，而是有评分、
+      与本地资源榜的区别：这里没有"做种数/站点数"，而是有评分、
       更新进度、以及**本地是否已有片源**（local_count）——后者是本项目
       相对纯榜单站的价值：榜单上直接看出哪几部你的站点已经能下了。
   */
-  function discoverBoard(data) {
+  function discoverBoard(data, onSearch) {
     const items = data.items || [];
     if (!items.length) {
       return el("div", { class: "pad" }, [
@@ -1519,13 +1410,18 @@
             }, "sm primary"),
             iconButton("搜资源", "search", (event) => {
               event.stopPropagation();
+              // 榜单页内有右侧搜索面板时就地搜索；否则退回资源搜索页
+              if (onSearch) {
+                onSearch(row.title);
+                return;
+              }
               searchState.keyword = row.title;
               searchState.items = [];
               go("search");
             }, "sm ghost"),
           ]),
         ]);
-        const open = () => discoverDetail(row, data);
+        const open = () => discoverDetail(row, data, onSearch);
         card.addEventListener("click", open);
         card.addEventListener("keydown", (event) => {
           if (event.key === "Enter" || event.key === " ") {
@@ -1539,7 +1435,7 @@
   }
 
   /** 发现榜列表视图。 */
-  function discoverTable(data) {
+  function discoverTable(data, onSearch) {
     const isBili = data.source === "bilibili";
     return table(
       [
@@ -1574,6 +1470,10 @@
                 season: 1,
               }), "sm"),
               iconButton("搜资源", "search", () => {
+                if (onSearch) {
+                  onSearch(row.title);
+                  return;
+                }
                 searchState.keyword = row.title;
                 searchState.items = [];
                 go("search");
@@ -1586,7 +1486,7 @@
     );
   }
 
-  function discoverDetail(row, data) {
+  function discoverDetail(row, data, onSearch) {
     const isBili = data.source === "bilibili";
     const info = (label, value) =>
       el("div", { class: "kv-item" }, [
@@ -1611,9 +1511,14 @@
         el("div", { class: "divider" }),
         el("div", { class: "row tight" }, [
           iconButton("搜索资源", "search", () => {
+            close();
+            // 榜单页有右侧面板就地搜，避免用户被弹到另一个页面丢失榜单位置
+            if (onSearch) {
+              onSearch(row.title);
+              return;
+            }
             searchState.keyword = row.title;
             searchState.items = [];
-            close();
             go("search");
           }, "sm primary"),
           iconButton("创建订阅", "star", () => {
@@ -1638,69 +1543,128 @@
     );
   }
 
-  /** 按当前视图模式渲染榜单（画板 / 列表）。 */
-  function rankingView(items, opts) {
-    return trendingState.view === "board"
-      ? rankingBoard(items, opts)
-      : rankingTable(items, opts);
-  }
+  /** 榜单右侧的资源搜索面板：选中榜单条目即可原地搜，不用跳到搜索页。 */
+  function trendingSearchPanel() {
+    const keyword = el("input", {
+      class: "input",
+      placeholder: "片名，或点左侧榜单卡片",
+    });
+    const results = el("div", { class: "side-results" }, [
+      emptyBox("点击左侧榜单里的「搜资源」，或直接输入片名", "search"),
+    ]);
+    const kindBar = el("div", {});
 
-  function rankingTable(items, opts) {
-    return table(
-      [
-        { title: "#", render: (row) => rankCell(row.rank) },
-        {
-          title: "作品",
-          render: (row) =>
-            el("div", {}, [
-              el("div", { class: "row tight center" }, [
-                icon(typeIcon(row.media_type), "sm"),
-                el("span", { class: "truncate", title: row.title, text: row.title }),
-              ]),
-              el("div", { class: "cell-sub", text:
-                typeLabel(row.media_type) +
-                (row.season ? " · 第 " + row.season + " 季" : "") +
-                (row.latest_episode ? " · 更新至第 " + row.latest_episode + " 集" : "") }),
+    let items = [];
+    let kind = "";
+
+    const render = () => {
+      const filtered = kind
+        ? items.filter((row) =>
+            kind === "pan"
+              ? row.kind === "pan" || row.kind === "direct"
+              : row.kind === "torrent" || row.kind === "magnet"
+          )
+        : items.slice();
+      // 侧栏窄，固定按综合分排序即可；细粒度排序去资源搜索页
+      filtered.sort(SORTERS.score);
+
+      const counts = { pan: 0, bt: 0 };
+      items.forEach((row) => {
+        if (row.kind === "pan" || row.kind === "direct") counts.pan += 1;
+        else counts.bt += 1;
+      });
+
+      kindBar.replaceChildren(
+        items.length
+          ? segment(
+              [
+                { value: "", label: "全部 " + items.length },
+                { value: "bt", label: "BT " + counts.bt },
+                { value: "pan", label: "网盘 " + counts.pan },
+              ],
+              kind,
+              (value) => {
+                kind = value;
+                render();
+              }
+            )
+          : el("span", {})
+      );
+
+      if (!filtered.length) {
+        results.replaceChildren(emptyBox("没有匹配的资源，换个关键词或启用更多站点", "alert"));
+        return;
+      }
+      // 侧栏用紧凑卡片而不是表格——表格在窄栏里必然横向溢出
+      results.replaceChildren(
+        ...filtered.map((row) =>
+          el("div", { class: "side-item" }, [
+            el("div", { class: "side-item-title", title: row.title, text: row.title }),
+            el("div", { class: "side-item-meta" }, [
+              el("span", { class: "tag tiny" + (row.kind === "pan" ? " brand" : ""), text: kindLabel(row.kind) }),
+              el("span", { class: "tiny dim", text: row.site || "-" }),
+              (row.meta && row.meta.resolution)
+                ? el("span", { class: "tiny dim", text: row.meta.resolution })
+                : null,
+              el("span", { class: "tiny dim", text: fmtSize(row.size) }),
+              row.seeders ? el("span", { class: "tiny dim", text: row.seeders + " 种" }) : null,
+              el("span", { class: "tag brand tiny", text: String(Math.round(row.score || 0)) }),
             ]),
-        },
-        {
-          title: "热度",
-          render: (row) => heatCell(row.heat_percent, Math.round(row.heat)),
-        },
-        { title: "站点", class: "num", render: (row) => row.site_count },
-        { title: "资源", class: "num", render: (row) => row.resource_count },
-        { title: "做种", class: "num", render: (row) => row.seeders || "-" },
-        {
-          title: "画质",
-          render: (row) =>
-            el("div", { class: "chips" },
-              (row.resolutions || []).slice(0, 2).map((item) => el("span", { class: "tag", text: item }))),
-        },
-        {
-          title: "更新",
-          render: (row) => el("span", { class: "tiny dim", text: fmtRelative(row.latest_at) }),
-        },
-        {
-          title: "操作",
-          render: (row) =>
-            el("div", { class: "row tight" }, [
-              iconButton("详情", "info", () => trendingDetail(row), "sm ghost"),
-              iconButton("订阅", "star", () => subscribeFromTrending(row), "sm"),
-              iconButton("搜索", "search", () => {
-                searchState.keyword = row.title;
-                searchState.items = [];
-                go("search");
-              }, "sm ghost"),
-            ]),
-        },
-      ],
-      items,
-      opts && opts.empty
-    );
+            el("div", { class: "side-item-actions" }, [resourceActions(row)]),
+          ])
+        )
+      );
+    };
+
+    const doSearch = async (value) => {
+      const text = (value || keyword.value || "").trim();
+      if (!text) {
+        toast("请输入关键词", "err");
+        return;
+      }
+      keyword.value = text;
+      results.replaceChildren(loading());
+      kindBar.replaceChildren();
+      try {
+        const data = await api("/search", { method: "POST", body: { keyword: text } });
+        items = data.items || [];
+        kind = "";
+        render();
+        toast("找到 " + data.total + " 条资源", data.total ? "ok" : "");
+      } catch (error) {
+        items = [];
+        results.replaceChildren(emptyBox(error.message, "alert"));
+      }
+    };
+
+    keyword.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") doSearch();
+    });
+
+    const btn = el("button", { class: "btn primary", style: "flex:0 0 auto" }, [
+      icon("search", "sm"),
+      el("span", { text: "搜索" }),
+    ]);
+    btn.addEventListener("click", () => doSearch());
+
+    const panel = el("div", { class: "card flush side-panel" }, [
+      el("div", { class: "card-head" }, [
+        el("h3", {}, [icon("search", "sm"), el("span", { text: "资源搜索" })]),
+        el("span", { class: "tag", text: "BT + 网盘" }),
+      ]),
+      el("div", { class: "pad-sm" }, [
+        el("div", { class: "row tight" }, [keyword, btn]),
+        kindBar,
+      ]),
+      results,
+    ]);
+    // 暴露给榜单卡片调用：点「搜资源」直接填进侧栏并搜索
+    panel.searchFor = doSearch;
+    return panel;
   }
 
   async function pageTrending() {
-    shell(loading(), "热度排行", "发现榜（豆瓣/B 站）+ 本地资源热度");
+    shell(loading(), "热度排行", "发现榜（豆瓣 / Bilibili）+ 资源搜索");
 
     // 分类与 B 站分区由后端下发，前端不写死；只在首次进页面时拉一次。
     // 拉失败不阻塞页面——用一份兜底分类，至少还能看电影榜。
@@ -1721,204 +1685,116 @@
       }
     }
 
-    const body = el("div", {});
+    const listBox = el("div", {});
+    const moreBox = el("div", { class: "board-more" });
     const meta = el("div", { class: "dim tiny" });
+    const searchPanel = trendingSearchPanel();
 
-    const load = async () => {
-      body.replaceChildren(loading());
-      try {
-        if (trendingState.tab === "discover") {
-          const cat = trendingState.discoverCat;
-          const isBili = cat === "bilibili";
-          // Bilibili 页签支持二级分区（番剧/国创/电影…），走专门的分区端点
-          const path = isBili
-            ? "/trending/bilibili/" + trendingState.biliPartition + "?limit=30"
-            : "/trending/discover/" + cat + "?limit=30";
-          const response = await api(path);
-          const data = response.data;
-          const hit = (data.items || []).filter((r) => (r.local_count || 0) > 0).length;
-          meta.textContent =
-            (isBili ? "Bilibili · " : "豆瓣 · ") + data.label + " " + data.count + " 条" +
-            (hit ? "，其中 " + hit + " 部你的站点已有片源" : "") +
-            (data.message ? " · " + data.message : "");
-          body.replaceChildren(
-            el("div", { class: "card flush" }, [
-              el("div", { class: "card-head" }, [
-                el("h3", {}, [
-                  icon(isBili ? "video" : "flame", "sm"),
-                  el("span", { text: data.label + "榜" }),
-                ]),
-                el("span", { class: "tag brand", text: isBili ? "Bilibili" : "豆瓣" }),
-              ]),
-              isBili
-                ? el("div", { class: "pad-sm" }, [
-                    segment(
-                      (store.biliPartitions || [{ value: "all", label: "全站" }]).map((p) => ({
-                        value: p.key || p.value,
-                        label: p.label,
-                      })),
-                      trendingState.biliPartition,
-                      (value) => {
-                        trendingState.biliPartition = value;
-                        load();
-                      }
-                    ),
-                  ])
-                : null,
-              trendingState.view === "board" ? discoverBoard(data) : discoverTable(data),
-            ])
-          );
-          return;
-        }
+    // 榜单卡片里的「搜资源」改为在右侧面板原地搜索，不再跳转页面
+    const searchHere = (title) => searchPanel.searchFor(title);
 
-        if (trendingState.tab === "live") {
-          const response = await api(
-            "/trending/live?limit=25&limit_per_site=40" +
-              (trendingState.mediaType ? "&media_type=" + trendingState.mediaType : "")
-          );
-          const data = response.data;
-          meta.textContent = "实时拉取站点最新流 " + data.feed_total + " 条，聚合出 " + data.total + " 部作品";
-          body.replaceChildren(
-            el("div", { class: "card flush" }, [
-              el("div", { class: "card-head" }, [
-                el("h3", {}, [icon("radar", "sm"), el("span", { text: "实时热榜（站点最新流）" })]),
-                el("span", { class: "tag brand", text: "联网实时" }),
-              ]),
-              rankingView(data.items, {
-                empty: "没有启用的索引站点，或站点未返回最新流；请到站点管理启用站点",
-              }),
-            ])
-          );
-          return;
-        }
+    const renderList = () => {
+      const data = {
+        items: trendingState.items,
+        label: trendingState.label,
+        source: trendingState.source,
+        message: trendingState.message,
+        count: trendingState.items.length,
+      };
+      listBox.replaceChildren(
+        trendingState.view === "board"
+          ? discoverBoard(data, searchHere)
+          : discoverTable(data, searchHere)
+      );
 
-        if (trendingState.tab === "sites") {
-          const response = await api("/trending/sites?limit=25&days=" + trendingState.days);
-          const data = response.data;
-          meta.textContent = "近 " + data.window_days + " 天共 " + data.total + " 个站点有贡献";
-          body.replaceChildren(
-            el("div", { class: "card flush" }, [
-              el("div", { class: "card-head" }, [
-                el("h3", {}, [icon("server", "sm"), el("span", { text: "站点贡献榜" })]),
-              ]),
-              table(
-                [
-                  { title: "#", render: (row) => rankCell(row.rank) },
-                  { title: "站点", render: (row) => row.site },
-                  { title: "占比", render: (row) => heatCell(row.heat_percent, row.resources) },
-                  { title: "资源数", class: "num", render: (row) => row.resources },
-                  { title: "累计做种", class: "num", render: (row) => row.seeders },
-                  { title: "平均评分", class: "num", render: (row) => row.avg_score },
-                  { title: "最近入榜", render: (row) => el("span", { class: "tiny dim", text: fmtRelative(row.last_at) }) },
-                ],
-                data.items,
-                "还没有站点数据，搜索一次后即可统计"
-              ),
-            ])
-          );
-          return;
-        }
-
-        if (trendingState.tab === "keywords") {
-          const response = await api("/trending/keywords?limit=30&days=" + trendingState.days);
-          const data = response.data;
-          meta.textContent = "近 " + data.window_days + " 天共 " + data.total + " 个热词";
-          body.replaceChildren(
-            el("div", { class: "card flush" }, [
-              el("div", { class: "card-head" }, [
-                el("h3", {}, [icon("search", "sm"), el("span", { text: "搜索热词榜" })]),
-              ]),
-              table(
-                [
-                  { title: "#", render: (row) => rankCell(row.rank) },
-                  { title: "关键词", render: (row) => row.keyword },
-                  { title: "热度", render: (row) => heatCell(row.heat_percent, row.times) },
-                  { title: "搜索次数", class: "num", render: (row) => row.times },
-                  { title: "累计命中", class: "num", render: (row) => row.results },
-                  { title: "最近搜索", render: (row) => el("span", { class: "tiny dim", text: fmtRelative(row.last_at) }) },
-                  {
-                    title: "操作",
-                    render: (row) =>
-                      iconButton("再搜一次", "search", () => {
-                        searchState.keyword = row.keyword;
-                        searchState.items = [];
-                        go("search");
-                      }, "sm ghost"),
-                  },
-                ],
-                data.items,
-                "还没有搜索历史"
-              ),
-            ])
-          );
-          return;
-        }
-
-        const response = await api(
-          "/trending/resources?limit=30&days=" + trendingState.days +
-            (trendingState.mediaType ? "&media_type=" + trendingState.mediaType : "")
+      // 加载更多：有更多才显示按钮，到底了给一句明确的「已到底」
+      moreBox.replaceChildren();
+      if (trendingState.loading) {
+        moreBox.appendChild(el("div", { class: "dim tiny", text: "加载中…" }));
+      } else if (trendingState.hasMore) {
+        const btn = el("button", { class: "btn ghost" }, [
+          icon("chevron-down", "sm"),
+          el("span", { text: "加载更多（已显示 " + trendingState.items.length + " 条）" }),
+        ]);
+        btn.addEventListener("click", () => loadMore());
+        moreBox.appendChild(btn);
+      } else if (trendingState.items.length) {
+        moreBox.appendChild(
+          el("div", { class: "dim tiny", text: "已显示全部 " + trendingState.items.length + " 条" })
         );
-        const data = response.data;
-        meta.textContent =
-          "近 " + data.window_days + " 天扫描 " + data.scanned + " 条缓存资源，聚合出 " + data.total + " 部作品";
-        body.replaceChildren(
-          el("div", { class: "card flush" }, [
-            el("div", { class: "card-head" }, [
-              el("h3", {}, [icon("flame", "sm"), el("span", { text: "资源热度榜" })]),
-              el("span", { class: "tag", text: "本地缓存聚合" }),
-            ]),
-            rankingView(data.items, {
-              empty: "暂无数据：热度榜来自搜索缓存，先在资源搜索里搜几次即可生成",
-            }),
-          ])
-        );
-      } catch (error) {
-        body.replaceChildren(el("div", { class: "card" }, [emptyBox(error.message, "alert")]));
       }
     };
 
-    const tabs = segment(
-      [
-        { value: "discover", label: "发现榜" },
-        { value: "resources", label: "资源热榜" },
-        { value: "live", label: "实时热榜" },
-        { value: "keywords", label: "搜索热词" },
-        { value: "sites", label: "站点贡献" },
-      ],
-      trendingState.tab,
-      (value) => {
-        trendingState.tab = value;
-        pageTrending();
-      }
-    );
+    const fetchPage = async (offset) => {
+      const cat = trendingState.discoverCat;
+      const isBili = cat === "bilibili";
+      const base = isBili
+        ? "/trending/bilibili/" + trendingState.biliPartition
+        : "/trending/discover/" + cat;
+      const response = await api(
+        base + "?limit=" + TRENDING_PAGE_SIZE + "&offset=" + offset
+      );
+      return response.data;
+    };
 
-    const windows = segment(
-      [
-        { value: 7, label: "7 天" },
-        { value: 14, label: "14 天" },
-        { value: 30, label: "30 天" },
-        { value: 90, label: "90 天" },
-      ],
-      trendingState.days,
-      (value) => {
-        trendingState.days = value;
-        pageTrending();
-      }
-    );
+    const updateMeta = () => {
+      const isBili = trendingState.source === "bilibili";
+      const hit = trendingState.items.filter((r) => (r.local_count || 0) > 0).length;
+      meta.textContent =
+        (isBili ? "Bilibili · " : "豆瓣 · ") +
+        trendingState.label +
+        " 已加载 " + trendingState.items.length + " 条" +
+        (hit ? "，其中 " + hit + " 部你的站点已有片源" : "") +
+        (trendingState.message ? " · " + trendingState.message : "");
+    };
 
-    const types = segment(
-      [
-        { value: "", label: "全部" },
-        { value: "tv", label: "剧集" },
-        { value: "movie", label: "电影" },
-        { value: "anime", label: "动漫" },
-      ],
-      trendingState.mediaType,
-      (value) => {
-        trendingState.mediaType = value;
-        pageTrending();
+    const loadMore = async () => {
+      if (trendingState.loading || !trendingState.hasMore) return;
+      trendingState.loading = true;
+      renderList();
+      try {
+        const data = await fetchPage(trendingState.offset);
+        // 去重兜底：万一后端分页有重叠，不让同一条重复出现在画板里
+        const seen = new Set(trendingState.items.map((r) => r.title + "|" + (r.douban_id || r.bvid || "")));
+        const fresh = (data.items || []).filter(
+          (r) => !seen.has(r.title + "|" + (r.douban_id || r.bvid || ""))
+        );
+        trendingState.items = trendingState.items.concat(fresh);
+        trendingState.offset += TRENDING_PAGE_SIZE;
+        trendingState.hasMore = Boolean(data.has_more);
+        trendingState.message = data.message || "";
+      } catch (error) {
+        toast(error.message, "err");
+        trendingState.hasMore = false;
+      } finally {
+        trendingState.loading = false;
+        updateMeta();
+        renderList();
       }
-    );
+    };
+
+    // 首屏：重置游标后拉第一页
+    const load = async () => {
+      trendingState.items = [];
+      trendingState.offset = 0;
+      trendingState.hasMore = false;
+      trendingState.loading = false;
+      listBox.replaceChildren(loading());
+      moreBox.replaceChildren();
+      try {
+        const data = await fetchPage(0);
+        trendingState.items = data.items || [];
+        trendingState.offset = TRENDING_PAGE_SIZE;
+        trendingState.hasMore = Boolean(data.has_more);
+        trendingState.label = data.label || "";
+        trendingState.source = data.source || "";
+        trendingState.message = data.message || "";
+        updateMeta();
+        renderList();
+      } catch (error) {
+        listBox.replaceChildren(el("div", { class: "pad" }, [emptyBox(error.message, "alert")]));
+      }
+    };
 
     const views = segment(
       [
@@ -1928,67 +1804,70 @@
       trendingState.view,
       (value) => {
         trendingState.view = value;
-        pageTrending();
+        renderList();
       }
     );
 
-    // 热词榜/站点榜是「关键词」和「站点」维度，没有封面可画，切了也没意义
-    const worksTab =
-      trendingState.tab === "resources" ||
-      trendingState.tab === "live" ||
-      trendingState.tab === "discover";
-    // 发现榜数据来自豆瓣/B 站的实时榜，不存在"统计窗口"与本地类型过滤
-    const localTab = trendingState.tab !== "discover";
+    const isBili = trendingState.discoverCat === "bilibili";
 
     const filterBar = el("div", { class: "card" }, [
       el("div", { class: "row center" }, [
         el("div", { style: "flex:0 0 auto" }, [
-          el("div", { class: "dim tiny", style: "margin-bottom:6px", text: "榜单" }),
-          tabs,
+          el("div", { class: "dim tiny", style: "margin-bottom:6px", text: "分类" }),
+          segment(
+            (store.discoverCategories || []).map((c) => ({ value: c.key, label: c.label })),
+            trendingState.discoverCat,
+            (value) => {
+              trendingState.discoverCat = value;
+              pageTrending();
+            }
+          ),
         ]),
-        worksTab
+        isBili
           ? el("div", { style: "flex:0 0 auto" }, [
-              el("div", { class: "dim tiny", style: "margin-bottom:6px", text: "视图" }),
-              views,
-            ])
-          : null,
-        trendingState.tab === "discover"
-          ? el("div", { style: "flex:0 0 auto" }, [
-              el("div", { class: "dim tiny", style: "margin-bottom:6px", text: "分类" }),
+              el("div", { class: "dim tiny", style: "margin-bottom:6px", text: "分区" }),
               segment(
-                (store.discoverCategories || []).map((c) => ({
-                  value: c.key,
-                  label: c.label,
+                (store.biliPartitions || [{ key: "all", label: "全站" }]).map((p) => ({
+                  value: p.key || p.value,
+                  label: p.label,
                 })),
-                trendingState.discoverCat,
+                trendingState.biliPartition,
                 (value) => {
-                  trendingState.discoverCat = value;
+                  trendingState.biliPartition = value;
                   pageTrending();
                 }
               ),
             ])
           : null,
-        localTab
-          ? el("div", { style: "flex:0 0 auto" }, [
-              el("div", { class: "dim tiny", style: "margin-bottom:6px", text: "统计窗口" }),
-              windows,
-            ])
-          : null,
-        localTab
-          ? el("div", { style: "flex:0 0 auto" }, [
-              el("div", { class: "dim tiny", style: "margin-bottom:6px", text: "类型" }),
-              types,
-            ])
-          : null,
+        el("div", { style: "flex:0 0 auto" }, [
+          el("div", { class: "dim tiny", style: "margin-bottom:6px", text: "视图" }),
+          views,
+        ]),
       ]),
       el("div", { class: "divider" }),
       meta,
     ]);
 
+    const board = el("div", { class: "card flush" }, [
+      el("div", { class: "card-head" }, [
+        el("h3", {}, [
+          icon(isBili ? "video" : "flame", "sm"),
+          el("span", { text: "发现榜" }),
+        ]),
+        el("span", { class: "tag brand", text: isBili ? "Bilibili" : "豆瓣" }),
+      ]),
+      listBox,
+      moreBox,
+    ]);
+
     shell(
-      el("div", { class: "grid" }, [filterBar, body]),
+      el("div", { class: "grid" }, [
+        filterBar,
+        // 左榜单 + 右搜索：窄屏时 CSS 自动堆叠成上下
+        el("div", { class: "trending-split" }, [board, searchPanel]),
+      ]),
       "热度排行",
-      "热度 = 做种数 + 站点覆盖 + 资源条目 + 新鲜度 + 画质加成",
+      "榜单来自豆瓣与 Bilibili 官方榜，右侧可直接搜索资源",
       [iconButton("刷新", "refresh", () => load())]
     );
     load();

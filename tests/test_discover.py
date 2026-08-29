@@ -247,7 +247,7 @@ def test_discover_categories_are_five():
 def test_discover_chart_annotates_local(monkeypatch):
     """榜单条目要标注本地有没有片源——这是相对纯榜单站的价值。"""
 
-    async def fake_chart(category, *, limit=20):
+    async def fake_chart(category, *, limit=20, offset=0):
         return [{"title": "凡人修仙传", "poster": None, "rating": 9.0}]
 
     monkeypatch.setattr(douban_chart, "chart", fake_chart)
@@ -264,7 +264,7 @@ def test_discover_chart_annotates_local(monkeypatch):
 
 
 def test_discover_chart_no_local_match(monkeypatch):
-    async def fake_chart(category, *, limit=20):
+    async def fake_chart(category, *, limit=20, offset=0):
         return [{"title": "某冷门片", "poster": None}]
 
     monkeypatch.setattr(douban_chart, "chart", fake_chart)
@@ -284,7 +284,7 @@ def test_discover_unknown_category_is_not_error():
 def test_discover_empty_gives_actionable_message(monkeypatch):
     """拿不到数据时要说明原因（限流 vs 网络），而不是干巴巴的"暂无"。"""
 
-    async def fake_chart(category, *, limit=20):
+    async def fake_chart(category, *, limit=20, offset=0):
         return []
 
     monkeypatch.setattr(douban_chart, "chart", fake_chart)
@@ -298,7 +298,7 @@ def test_discover_bilibili_routes_to_bili(monkeypatch):
     """Bilibili 页签必须走 B 站源而不是豆瓣。"""
     called = {"bili": False}
 
-    async def fake_bili(category, *, limit=20):
+    async def fake_bili(category, *, limit=20, offset=0):
         called["bili"] = True
         return [{"title": "视频", "heat": 100}]
 
@@ -310,10 +310,10 @@ def test_discover_bilibili_routes_to_bili(monkeypatch):
 
 
 def test_discover_overview_returns_all_charts(monkeypatch):
-    async def fake_douban(category, *, limit=20):
+    async def fake_douban(category, *, limit=20, offset=0):
         return [{"title": "片 " + category}]
 
-    async def fake_bili(category, *, limit=20):
+    async def fake_bili(category, *, limit=20, offset=0):
         return [{"title": "视频"}]
 
     monkeypatch.setattr(douban_chart, "chart", fake_douban)
@@ -330,7 +330,7 @@ def test_discover_overview_survives_one_source_failing(monkeypatch):
     async def boom(category, *, limit=20):
         raise RuntimeError("豆瓣挂了")
 
-    async def fake_bili(category, *, limit=20):
+    async def fake_bili(category, *, limit=20, offset=0):
         return [{"title": "视频"}]
 
     monkeypatch.setattr(douban_chart, "chart", boom)
@@ -343,7 +343,7 @@ def test_discover_overview_survives_one_source_failing(monkeypatch):
 
 
 def test_discover_bili_partition_chart(monkeypatch):
-    async def fake_bili(category, *, limit=20):
+    async def fake_bili(category, *, limit=20, offset=0):
         return [{"title": "番剧条目"}]
 
     monkeypatch.setattr(bili_chart, "chart", fake_bili)
@@ -366,3 +366,72 @@ def test_local_titles_reads_real_columns():
     """
     index = discover._local_titles()
     assert isinstance(index, dict)
+
+
+# --- 下拉加载更多（offset 分页）的回归用例 ---------------------------------
+# 背景：热度排行改为「首屏 30 条 + 下拉追加」，两个来源的分页机制完全不同：
+#   豆瓣 page_start 是真分页；B 站排行榜没有分页参数，只能服务端切片。
+# 这几条用例钉住「名次跨页连续」与「has_more 到底为 False」两个前端依赖的契约。
+
+
+def test_discover_chart_offset_continues_rank(monkeypatch):
+    """第二页的名次必须接着第一页，不能每页都从 1 重新开始。"""
+
+    async def fake_chart(category, *, limit=20, offset=0):
+        # 模拟真分页：按 offset 返回不同批次
+        return [{"title": f"片{offset + i}"} for i in range(limit)]
+
+    monkeypatch.setattr(discover.douban_chart, "chart", fake_chart)
+    data = asyncio.run(discover.chart("movie", limit=30, offset=30))
+    assert data["offset"] == 30
+    assert [r["rank"] for r in data["items"]][:3] == [31, 32, 33]
+    assert data["items"][-1]["rank"] == 60
+
+
+def test_discover_chart_has_more_false_on_short_page(monkeypatch):
+    """取不满一页说明到底了，has_more 必须为 False，否则前端会无限点。"""
+
+    async def fake_chart(category, *, limit=20, offset=0):
+        return [{"title": "只剩三条"}] * 3
+
+    monkeypatch.setattr(discover.douban_chart, "chart", fake_chart)
+    data = asyncio.run(discover.chart("movie", limit=30))
+    assert data["has_more"] is False
+    assert data["count"] == 3
+
+
+def test_discover_chart_has_more_true_on_full_page(monkeypatch):
+    """取满一页就认为还有下一页。"""
+
+    async def fake_chart(category, *, limit=20, offset=0):
+        return [{"title": f"片{i}"} for i in range(limit)]
+
+    monkeypatch.setattr(discover.douban_chart, "chart", fake_chart)
+    data = asyncio.run(discover.chart("movie", limit=30))
+    assert data["has_more"] is True
+
+
+def test_discover_chart_offset_does_not_mask_empty_message(monkeypatch):
+    """翻页翻到空不该再报「限流」——那条提示只在第一页有意义。"""
+
+    async def fake_chart(category, *, limit=20, offset=0):
+        return []
+
+    monkeypatch.setattr(discover.douban_chart, "chart", fake_chart)
+    first = asyncio.run(discover.chart("movie", limit=30, offset=0))
+    later = asyncio.run(discover.chart("movie", limit=30, offset=60))
+    assert first["message"], "第一页为空要给可读原因"
+    assert not later["message"], "翻页到底不该再弹限流提示"
+
+
+def test_discover_bili_partition_offset(monkeypatch):
+    """B 站分区榜同样支持 offset，且名次连续。"""
+
+    async def fake_bili(category, *, limit=20, offset=0):
+        return [{"title": f"番{offset + i}"} for i in range(limit)]
+
+    monkeypatch.setattr(discover.bili_chart, "chart", fake_bili)
+    data = asyncio.run(discover.bili_categories_chart("bangumi", limit=30, offset=30))
+    assert data["offset"] == 30
+    assert data["items"][0]["rank"] == 31
+    assert data["has_more"] is True

@@ -118,13 +118,21 @@ def _normalize(item: dict[str, Any], category: str) -> dict[str, Any] | None:
     }
 
 
-async def chart(category: str, *, limit: int = 20) -> list[dict[str, Any]]:
-    """拉一个分类的豆瓣榜单。失败返回空列表。"""
+async def chart(
+    category: str, *, limit: int = 20, offset: int = 0
+) -> list[dict[str, Any]]:
+    """拉一个分类的豆瓣榜单。失败返回空列表。
+
+    ``offset`` 支持下拉加载更多：豆瓣的 ``page_start`` 是真分页
+    （实测 start=0 与 start=30 两页标题零重叠，单个 tag 最多可翻约 300 条）。
+    """
     meta = CATEGORIES.get(category)
     if not meta:
         return []
     limit = max(1, min(int(limit or 20), 50))
-    cache_key = f"{category}:{limit}"
+    offset = max(0, int(offset or 0))
+    # 缓存键必须含 offset，否则第二页会命中第一页的缓存
+    cache_key = f"{category}:{limit}:{offset}"
     cached = _CACHE.get(cache_key)
     if cached and cached[0] > time.time():
         return cached[1]
@@ -133,7 +141,7 @@ async def chart(category: str, *, limit: int = 20) -> list[dict[str, Any]]:
 
     url = (
         f"{SUBJECTS_URL}?type={meta['type']}&tag={quote(meta['tag'])}"
-        f"&page_limit={limit}&page_start=0"
+        f"&page_limit={limit}&page_start={offset}"
     )
     payload = await fetch_json(url, headers=_headers(), timeout=15)
     if not isinstance(payload, dict):

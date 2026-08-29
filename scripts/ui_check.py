@@ -346,31 +346,46 @@ def main():
             print("   未找到主题切换控件")
 
         print("\n" + "=" * 68)
-        print("6e) 交互测试：热度排行榜单切换")
+        print("6e) 交互测试：热度排行（发现榜分类切换 + 右侧搜索面板）")
         print("=" * 68)
         page.goto(f"{BASE}/#trending", wait_until="networkidle")
-        page.wait_for_timeout(1500)
+        # 发现榜要打真实外部接口（豆瓣/B站），首屏比其他页慢
+        page.wait_for_timeout(3500)
         body = page.inner_text("body")
         print(f"   热度页含「热度排行」：{'热度排行' in body}")
+        # v1.9.0：只保留发现榜，四个旧页签必须彻底消失（ADR-43）
+        for gone in ("资源热榜", "实时热榜", "搜索热词", "站点贡献"):
+            if gone in body:
+                errors.append(f"[trending] 已下线的页签「{gone}」仍出现在页面上")
+            print(f"   已移除「{gone}」：{gone not in body}")
+        # v1.9.0：搜索并入榜单页，且必须在榜单右侧（窄屏才允许堆叠）
+        split = page.locator(".trending-split")
+        side = page.locator(".side-panel")
+        print(f"   双栏容器 {split.count()} 个 / 右侧搜索面板 {side.count()} 个")
+        if not split.count() or not side.count():
+            errors.append("[trending] 榜单页缺少双栏布局或右侧搜索面板")
+        else:
+            bb = page.locator(".board-card").first.bounding_box() or {}
+            sb = side.first.bounding_box() or {}
+            if bb and sb and sb.get("x", 0) <= bb.get("x", 0):
+                errors.append("[trending] 搜索面板未位于榜单右侧")
+            print(f"   面板 x={sb.get('x')} / 榜单卡片 x={bb.get('x')}")
         segs = page.locator(".segment button")
-        print(f"   榜单切换按钮 {segs.count()} 个")
+        print(f"   分类切换按钮 {segs.count()} 个")
         for i in range(min(segs.count(), 4)):
             label = segs.nth(i).inner_text()
             segs.nth(i).click()
-            page.wait_for_timeout(1800)
+            page.wait_for_timeout(2500)
             text = page.inner_text("body")
             print(f"     切到「{label}」-> 文本长度 {len(text)}")
         page.screenshot(path=str(SHOTS / "21-trending.png"), full_page=True)
-        heat_bars = page.locator(".heat-bar")
-        rank_cells = page.locator(".rank")
-        print(f"   热度条 {heat_bars.count()} 个 / 排名徽标 {rank_cells.count()} 个")
 
         print("\n" + "=" * 68)
-        print("6e-2) 交互测试：热榜画板模式与封面降级")
+        print("6e-2) 交互测试：发现榜画板模式与封面降级")
         print("=" * 68)
-        # 回到资源榜（上一步循环可能停在没有封面概念的热词/站点榜）
+        # 回到第一个分类（上一步循环可能停在被限流而空的分类上）
         segs.nth(0).click()
-        page.wait_for_timeout(1800)
+        page.wait_for_timeout(3000)
         board_btn = page.get_by_role("button", name="画板", exact=True)
         list_btn = page.get_by_role("button", name="列表", exact=True)
         print(f"   视图切换按钮：画板 {board_btn.count()} 个 / 列表 {list_btn.count()} 个")
@@ -397,11 +412,34 @@ def main():
             target = page.get_by_role("button", name=label)
             if target.count():
                 target.first.click()
-                page.wait_for_timeout(1500)
+                page.wait_for_timeout(2000)
                 count = page.locator(".board-card").count() if label == "画板" else page.locator("tbody tr").count()
                 print(f"     切到「{label}」-> {count} 项")
                 if count == 0:
                     errors.append(f"[trending] 切到「{label}」后无内容")
+
+        print("\n" + "=" * 68)
+        print("6e-3) 交互测试：榜单首屏 30 条 + 下拉加载更多")
+        print("=" * 68)
+        first_page = page.locator(".board-card").count()
+        print(f"   首屏卡片 {first_page} 张（期望 30；被限流的分类可能更少）")
+        more_box = page.locator(".board-more")
+        print(f"   加载更多区域 {more_box.count()} 个")
+        if not more_box.count():
+            errors.append("[trending] 榜单缺少「加载更多」区域")
+        more_btn = page.locator(".board-more button")
+        if more_btn.count() and first_page:
+            more_btn.first.click()
+            # 加载更多要打一次外部接口，给足时间
+            page.wait_for_timeout(4000)
+            second_page = page.locator(".board-card").count()
+            print(f"   点击加载更多后 {first_page} -> {second_page} 张")
+            # 只要没变少就算过：某些分类第二页可能因限流为空并显示「已到底」
+            if second_page < first_page:
+                errors.append(
+                    f"[trending] 加载更多后卡片反而变少（{first_page} -> {second_page}）")
+        else:
+            print("   已到底或无更多数据，跳过加载更多点击")
 
         print("\n" + "=" * 68)
         print("6f) 交互测试：定时任务设置改期弹窗")
