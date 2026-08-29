@@ -903,8 +903,10 @@ if fnos_guide.exists():
 readme_lines = README_ONLY.count("\n") + 1
 # README 精简的目标是「只留声明/介绍/安装」，行数是最直观的回归指标
 check("README 已精简到 400 行内", readme_lines <= 400, f"实际 {readme_lines} 行")
-check("README 保留学习交流声明", "仅用于学习交流使用" in README_ONLY
-      and "请勿在任何国内平台宣传" in README_ONLY)
+check("README 保留学习交流声明",
+      ("学习交流" in README_ONLY or "学习与交流" in README_ONLY)
+      and "请勿在任何国内平台宣传" in README_ONLY
+      and "严禁用于任何商业用途" in README_ONLY)
 check("README 保留项目介绍", "这是什么" in README_ONLY)
 check("README 保留安装方案", "docker compose up -d" in README_ONLY
       and "python -m app.main" in README_ONLY)
