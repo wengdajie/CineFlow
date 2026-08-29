@@ -1,0 +1,113 @@
+# ============================================================
+# CineFlow —— 飞牛 fnOS 专用 docker compose
+#
+# 与通用版（docker-compose.yml）的区别：
+#   1. 存储路径用 /vol1/...，而非群晖的 /volume1/...（抄群晖会挂载到空目录）
+#   2. 默认拉取预构建镜像，不在 NAS 上编译（飞牛多为低功耗机型，本地 build 很慢）
+#   3. 注释里标注了飞牛特有的坑（端口 5666 被管理界面占用等）
+#
+# 用法（SSH 登录飞牛后执行）：
+#   sudo mkdir -p /vol1/docker/cineflow && cd /vol1/docker/cineflow
+#   curl -O https://raw.githubusercontent.com/wengdajie/CineFlow/main/docker-compose.fnos.yml
+#   nano docker-compose.fnos.yml          # 改掉所有标注 ← 的地方
+#   docker compose -f docker-compose.fnos.yml up -d
+#
+# 完整图文教程：docs/11-飞牛NAS部署指南.md
+# ------------------------------------------------------------
+# 部署前务必先在 SSH 里跑这三条命令，把结果填进下面：
+#   id -u                      → PUID
+#   id -g                      → PGID
+#   openssl rand -hex 32       → CF_SECRET_KEY
+#
+# 再跑这两条确认 downloads 与 media 在同一存储空间（输出必须相同）：
+#   stat -c %d /vol1/downloads
+#   stat -c %d /vol1/media
+#   相同 → CF_TRANSFER_MODE 用 link（推荐，秒完成且不占额外空间）
+#   不同 → 必须改成 copy，否则报 Invalid cross-device link
+# ============================================================
+services:
+  cineflow:
+    # 预构建多架构镜像，飞牛无需本地编译
+    image: ghcr.io/wengdajie/cineflow:latest
+    container_name: cineflow
+    restart: unless-stopped
+    ports:
+      # 左边是飞牛主机端口，右边是容器端口。
+      # 端口冲突只改左边（右边改了健康检查会失败，它固定探 6060）。
+      # 注意：不要用 5666，那是 fnOS 管理界面自己的端口。
+      - "6060:6060"
+    environment:
+      PUID: 1000                                # ← 改成 id -u 的结果
+      PGID: 1000                                # ← 改成 id -g 的结果
+      TZ: Asia/Shanghai
+      CF_SUPERUSER: admin
+      CF_SUPERUSER_PASSWORD: cineflow           # ← 登录后立刻在界面里改密
+      CF_SECRET_KEY: CHANGE_ME_RANDOM_STRING    # ← 必改！openssl rand -hex 32
+      CF_TMDB_API_KEY: ""                       # 可选，填了刮削更准
+      CF_TRANSFER_MODE: link                    # ← 跨存储空间必须改 copy
+      CF_SUBSCRIBE_INTERVAL_MINUTES: 30
+    volumes:
+      # 相对路径基于本文件所在目录（建议 /vol1/docker/cineflow）
+      - ./data:/app/data                        # 数据库+日志，务必持久化
+      - ./config:/app/config                    # config.yaml
+      - ./plugins:/app/plugins                  # 自定义插件
+      - ./strm:/strm
+      # ↓↓↓ 飞牛的共享文件夹在 /vol1 下，用 ls /vol1 确认实际名字 ↓↓↓
+      - /vol1/downloads:/downloads              # ← 必须与下载器容器内路径完全一致
+      - /vol1/media:/library                    # ← fnOS「影视」App 扫描这个目录
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:6060/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  # ---------------------------------------------------------
+  # 可选：BT 下载器。CineFlow 只决定「下什么」，实际下载交给它。
+  # 取消注释后，在 CineFlow「设置 → 下载器」里地址填 http://qbittorrent:8080
+  # 🔴 千万不要填 127.0.0.1 —— 容器里的 127.0.0.1 指容器自己，不是飞牛主机
+  # ---------------------------------------------------------
+  # qbittorrent:
+  #   image: lscr.io/linuxserver/qbittorrent:latest
+  #   container_name: qbittorrent
+  #   restart: unless-stopped
+  #   ports:
+  #     - "8080:8080"
+  #     - "6881:6881"
+  #     - "6881:6881/udp"
+  #   environment:
+  #     PUID: 1000                    # ← 与 cineflow 保持一致
+  #     PGID: 1000
+  #     TZ: Asia/Shanghai
+  #     WEBUI_PORT: 8080
+  #   volumes:
+  #     - ./qbittorrent:/config
+  #     - /vol1/downloads:/downloads  # ← 必须与 cineflow 的 downloads 一字不差
+
+  # ---------------------------------------------------------
+  # 可选：BT 索引聚合器，把各站统一成 Torznab 接口
+  # 启用后在 CineFlow「站点管理」新增 torznab 站点，地址填
+  # http://jackett:9117/api/v2.0/indexers/<indexer>/results/torznab
+  # ---------------------------------------------------------
+  # jackett:
+  #   image: lscr.io/linuxserver/jackett:latest
+  #   container_name: jackett
+  #   restart: unless-stopped
+  #   ports:
+  #     - "9117:9117"
+  #   environment:
+  #     PUID: 1000
+  #     PGID: 1000
+  #     TZ: Asia/Shanghai
+  #   volumes:
+  #     - ./jackett:/config
+
+  # ---------------------------------------------------------
+  # 可选：网盘资源搜索（盘搜），CineFlow 内置 pansou provider 直接对接
+  # ---------------------------------------------------------
+  # pansou:
+  #   image: ghcr.io/fish2018/pansou:latest
+  #   container_name: pansou
+  #   restart: unless-stopped
+  #   ports:
+  #     - "8888:8888"

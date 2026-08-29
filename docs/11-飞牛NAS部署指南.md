@@ -100,7 +100,23 @@ sudo mkdir -p /vol1/downloads /vol1/media
 sudo chown -R $(id -u):$(id -g) /vol1/downloads /vol1/media
 ```
 
-### ⑤ 把代码放到 NAS 上
+### ⑤ 拉取镜像（推荐）或上传源码
+
+> ✅ **推荐：直接用预构建镜像，跳过本步的源码上传**
+>
+> 项目已通过 GitHub Actions 自动构建多架构镜像（amd64/arm64）并推送到 GHCR，
+> 飞牛无需编译（低功耗机型本地 build 要 5~10 分钟，还常因网络失败）：
+>
+> ```bash
+> sudo mkdir -p /vol1/docker/cineflow && sudo chown $(id -u):$(id -g) /vol1/docker/cineflow
+> cd /vol1/docker/cineflow
+> curl -O https://raw.githubusercontent.com/wengdajie/CineFlow/main/docker-compose.fnos.yml
+> ```
+>
+> 拿到 compose 文件后**直接跳到步骤 ⑦**（该文件已是飞牛专用配置，只需改标注 ← 的值）。
+> 下面的源码方式只在你想改代码或自行编译时才需要。
+
+#### 源码方式（想自己改代码时才用）
 
 CineFlow 目前是**源码构建**（compose 里 `build: .`），所以 NAS 上需要有代码。
 
@@ -109,7 +125,7 @@ CineFlow 目前是**源码构建**（compose 里 `build: .`），所以 NAS 上�
 ```bash
 sudo mkdir -p /vol1/docker && sudo chown $(id -u):$(id -g) /vol1/docker
 cd /vol1/docker
-git clone <你的仓库地址> cineflow
+git clone https://github.com/wengdajie/CineFlow.git cineflow
 cd cineflow
 ```
 
@@ -141,8 +157,11 @@ tar -xzf ../cineflow.tar.gz && rm ../cineflow.tar.gz
 
 ### ⑥ 写 fnOS 专用的 compose 配置
 
-仓库自带的 `docker-compose.yml` 是**群晖示例**（`/volume1/...`），飞牛要改。
-建议**不改原文件**，另存一份覆盖文件，升级时不冲突：
+若你走的是步骤 ⑤ 的推荐路径，`docker-compose.fnos.yml` 已经下载好了，
+直接 `nano docker-compose.fnos.yml` 改掉标注 ← 的值即可，**本步的 YAML 不用手抄**。
+
+若你走源码路径：仓库自带的 `docker-compose.yml` 是**通用/群晖示例**，飞牛请用
+`docker-compose.fnos.yml`（仓库已内置）。想自己写一份也可以照抄下面这段：
 
 ```bash
 cd /vol1/docker/cineflow
@@ -197,10 +216,11 @@ openssl rand -hex 32
 
 ```bash
 cd /vol1/docker/cineflow
-docker compose -f docker-compose.fnos.yml up -d --build
+docker compose -f docker-compose.fnos.yml up -d
 ```
 
-首次要构建镜像，**约 3~8 分钟**（拉 Python 基础镜像 + 装依赖）。
+用预构建镜像时首次启动约 **1~3 分钟**（取决于下载速度），无需编译。
+若你改了源码想自行编译，加 `--build`（约 3~8 分钟）。
 若卡在 `pip install` 不动，是网络问题，见 [§4.1](#41-构建阶段卡住或拉不到依赖)。
 
 ### ⑧ 验证

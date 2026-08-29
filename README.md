@@ -1,5 +1,24 @@
 <div align="center">
 
+# ⚠️ 仅用于学习交流使用 ⚠️
+# ⚠️ 请勿在任何国内平台宣传该项目！ ⚠️
+
+</div>
+
+> ### 🚨 重要声明
+>
+> # **本项目仅用于技术学习与交流，严禁用于任何商业用途。**
+> # **请勿在任何国内平台（微信/微博/知乎/B站/贴吧/小红书/QQ群等）宣传、转载或推广本项目！**
+>
+> - 本项目**不提供、不存储、不分发**任何影视资源，所有内容均来自用户自行配置的第三方站点。
+> - 使用者需自行确保其行为符合所在地法律法规，**因使用本项目产生的一切后果由使用者自行承担**。
+> - 请在下载后 24 小时内删除，支持正版，为喜欢的作品付费。
+> - 本项目与任何资源站点、网盘服务商无隶属关系。
+
+---
+
+<div align="center">
+
 # 🎬 CineFlow
 
 **面向 NAS 的自动化观影追剧平台**
@@ -804,15 +823,37 @@ NAS 离线内网直接可用，整个前端只有 `index.html` + `app.js` + `sty
 
 ### 🐳 Docker 部署（推荐）
 
+**无需下载源码**，直接拉取 GitHub Actions 自动构建的多架构镜像（amd64 / arm64）：
+
 ```bash
-git clone <your-repo-url> cineflow && cd cineflow
+# 通用版（群晖 / 威联通 / Linux / Windows）
+curl -O https://raw.githubusercontent.com/wengdajie/CineFlow/main/docker-compose.yml
 
-# 修改 docker-compose.yml 里的两个挂载路径与 PUID/PGID
+# 改掉挂载路径与 PUID/PGID（PUID 用 id -u 查，别猜）
 docker compose up -d
-
-# 查看日志
 docker compose logs -f cineflow
 ```
+
+**飞牛 fnOS 用户用专用版**（路径是 `/vol1` 而非群晖的 `/volume1`）：
+
+```bash
+sudo mkdir -p /vol1/docker/cineflow && cd /vol1/docker/cineflow
+curl -O https://raw.githubusercontent.com/wengdajie/CineFlow/main/docker-compose.fnos.yml
+docker compose -f docker-compose.fnos.yml up -d
+```
+
+> 📖 飞牛完整图文教程见 **[docs/11-飞牛NAS部署指南.md](docs/11-飞牛NAS部署指南.md)**
+
+<details>
+<summary>想从源码自己编译镜像？</summary>
+
+```bash
+git clone https://github.com/wengdajie/CineFlow.git cineflow && cd cineflow
+# 编辑 docker-compose.yml：注释 image 行，取消 build: . 的注释
+docker compose up -d --build
+```
+
+</details>
 
 打开 `http://<NAS_IP>:6060`，使用 **`admin` / `cineflow`** 登录（**请立即改密**）。
 
@@ -825,7 +866,7 @@ docker compose logs -f cineflow
 ### 🐍 源码运行
 
 ```bash
-git clone <your-repo-url> cineflow && cd cineflow
+git clone https://github.com/wengdajie/CineFlow.git cineflow && cd cineflow
 
 python -m venv .venv
 # Linux / macOS

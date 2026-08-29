@@ -1,7 +1,13 @@
 # ============================================================
-# CineFlow —— docker compose 部署示例
+# CineFlow —— 通用 docker compose 部署（群晖 / 威联通 / Linux / Windows）
+#
+#   飞牛 fnOS 用户请改用 docker-compose.fnos.yml（路径是 /vol1 不是 /volume1）
+#
+# 用法（无需下载源码，直接拉现成镜像）：
+#   curl -O https://raw.githubusercontent.com/wengdajie/CineFlow/main/docker-compose.yml
+#   # 改下面标注 ← 的几处，然后：
 #   docker compose up -d
-#   浏览器打开 http://<NAS_IP>:6060  默认账号 admin / cineflow
+#   浏览器打开 http://<NAS_IP>:6060  默认账号 admin / cineflow（登录后立刻改密）
 # ------------------------------------------------------------
 # 重要：downloads 目录必须与下载器（qBittorrent 等）容器中的路径一致，
 #       否则 CineFlow 找不到下载完成的文件，也无法使用硬链接。
@@ -9,8 +15,11 @@
 # ============================================================
 services:
   cineflow:
-    image: cineflow:latest
-    build: .
+    # 官方预构建镜像（GitHub Actions 自动构建，支持 amd64 / arm64）
+    image: ghcr.io/wengdajie/cineflow:latest
+    # 想自己从源码编译就注释掉上面的 image、取消下面两行注释：
+    # image: cineflow:latest
+    # build: .
     container_name: cineflow
     restart: unless-stopped
     ports:
