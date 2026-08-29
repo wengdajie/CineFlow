@@ -26,6 +26,7 @@ class ResourceKind(StrEnum):
     MAGNET = "magnet"
     PAN = "pan"           # 网盘分享链接（盘搜）
     DIRECT = "direct"     # 直链
+    WEBVIDEO = "webvideo" # 视频网页（由 yt-dlp 解析，如 B 站/YouTube 公开视频）
 
 
 class SubscribeStatus(StrEnum):

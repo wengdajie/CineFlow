@@ -59,6 +59,25 @@ DEFAULT_ITEM_MAP = {
     "detail_id": "id",
 }
 
+#: 「作品级」元数据字段映射：封面、评分、年份这些描述**作品**而非单个种子的信息。
+#: 很多影视站的搜索接口本来就返回这些字段，采下来榜单就能画封面墙，
+#: 不必依赖 TMDB（未配 API Key 时仍可有图有评分）。
+DEFAULT_MEDIA_MAP = {
+    "poster": "image",
+    "rating": "doub_score",
+    "rating_people": "doub_score_peo_num",
+    "year": "years",
+    "genres": "class",
+    "area": "production_area",
+    "total_episodes": "episodes",
+    "overview": "abstract",
+    "actors": "performer",
+    "director": "director",
+    "alias": "alias",
+    "status_text": "ejs",
+    "definition": "definition",
+}
+
 _RELATIVE_TIME = re.compile(r"^\s*\d+\s*(分钟|小时|天|秒|周|月)前\s*$")
 
 
@@ -251,6 +270,59 @@ class GenericApiIndexer(SearchProvider):
             extra={"provider": self.name, **(extra or {})},
         )
 
+    def _media_meta(self, item: dict[str, Any]) -> dict[str, Any]:
+        """从搜索列表项里抽取「作品级」元数据（封面/评分/年份等）。
+
+        这些字段描述的是**作品**，而不是某个具体种子，因此挂在 Resource.extra 上
+        由榜单聚合时提取。站点没有对应字段就自然缺省，不影响资源本身可用。
+        """
+        field_map = {**DEFAULT_MEDIA_MAP, **(self.option("media_map", {}) or {})}
+        meta: dict[str, Any] = {}
+
+        poster = clean_text(dig(item, field_map.get("poster", "")))
+        if poster:
+            if poster.startswith("/"):
+                poster = urljoin(self._site_root(), poster.lstrip("/"))
+            # 只收 http(s) 图，避免把 data: 或垃圾值塞进前端 img src
+            if poster.startswith(("http://", "https://")):
+                meta["poster"] = poster
+
+        rating = clean_text(dig(item, field_map.get("rating", "")))
+        try:
+            # 站点常用 "0" / "" / "暂无" 表示没有评分，这些都不该显示成 0.0 分
+            value = float(rating)
+            if value > 0:
+                meta["rating"] = round(value, 1)
+        except (TypeError, ValueError):
+            pass
+
+        people = _as_int(dig(item, field_map.get("rating_people", "")))
+        if people:
+            meta["rating_people"] = people
+
+        for key in ("year", "area", "status_text", "definition", "director"):
+            text = clean_text(dig(item, field_map.get(key, "")))
+            if text:
+                meta[key] = text[:80]
+
+        overview = clean_text(dig(item, field_map.get("overview", "")))
+        if overview:
+            meta["overview"] = overview[:400]
+
+        for key in ("genres", "actors", "alias"):
+            text = clean_text(dig(item, field_map.get(key, "")))
+            if text:
+                # 站点用逗号/斜杠/顿号分隔，统一切成列表供前端画标签
+                parts = [p.strip() for p in re.split(r"[,，/、|]+", text) if p.strip()]
+                if parts:
+                    meta[key] = parts[:12]
+
+        episodes = _as_int(dig(item, field_map.get("total_episodes", "")))
+        if episodes:
+            meta["total_episodes"] = episodes
+
+        return meta
+
     def _site_root(self) -> str:
         """站点站点根地址（用于补全相对页面链接）。"""
         root = str(self.option("site_url", "") or self.config.get("url") or "").strip()
@@ -373,6 +445,9 @@ class GenericApiIndexer(SearchProvider):
         fallback_title = clean_text(dig(item, item_map.get("title", "title")))
         page_url = clean_text(dig(item, item_map.get("page_url", "page_url")))
         collected: list[Resource] = []
+        # 封面/评分等作品级信息只在搜索列表项里，详情返回的是种子列表，
+        # 因此在这里一次性算好，挂到该作品的每条资源上
+        media_meta = self._media_meta(item)
 
         rules = self.option("detail_extract", []) or []
         if not rules:
@@ -390,7 +465,11 @@ class GenericApiIndexer(SearchProvider):
                     kind=rule.get("kind"),
                     fallback_title=fallback_title,
                     site_suffix=str(rule.get("label", "") or ""),
-                    extra={"detail_id": detail_id, "page_url_hint": page_url},
+                    extra={
+                        "detail_id": detail_id,
+                        "page_url_hint": page_url,
+                        **media_meta,
+                    },
                 )
                 if resource is not None:
                     collected.append(resource)

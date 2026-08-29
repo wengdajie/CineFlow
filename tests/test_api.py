@@ -53,10 +53,17 @@ def test_system_info(client, auth_headers):
 
 
 def test_default_sites_seeded(client, auth_headers):
-    """首次启动写入示例站点且默认禁用。"""
+    """首次启动写入示例站点。
+
+    凡是需要用户填地址/账号的站点一律默认禁用（示例值直接跑必然报错）；
+    yt-dlp 是本地库调用、装了依赖就能用，属于例外，默认启用。
+    """
     sites = client.get("/api/v1/sites", headers=auth_headers).json()
     assert len(sites) >= 5
-    assert all(item["enabled"] is False for item in sites)
+    remote = [item for item in sites if item["provider"] != "ytdlp"]
+    assert all(item["enabled"] is False for item in remote)
+    local = [item for item in sites if item["provider"] == "ytdlp"]
+    assert local and all(item["enabled"] is True for item in local)
 
 
 def test_providers_listed(client, auth_headers):

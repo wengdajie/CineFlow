@@ -89,6 +89,7 @@
     cloud: '<path d="M7 18a4 4 0 0 1-.4-8A5.5 5.5 0 0 1 17 10.5a3.8 3.8 0 0 1 .3 7.5z"/>',
     link: '<path d="M9.5 14.5 14.5 9.5"/><path d="M11 6.5 13 4.5a4 4 0 0 1 5.7 5.7l-2 2"/><path d="M13 17.5 11 19.5a4 4 0 0 1-5.7-5.7l2-2"/>',
     film: '<rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M7.5 4.5v15M16.5 4.5v15M3 12h18"/>',
+    video: '<rect x="2.5" y="6" width="13" height="12" rx="2"/><path d="M15.5 10.5l6-3v9l-6-3z"/>',
     tv: '<rect x="3" y="6" width="18" height="12" rx="2"/><path d="M8.5 21h7M12 6V3"/>',
     server: '<rect x="3.5" y="4" width="17" height="6" rx="2"/><rect x="3.5" y="14" width="17" height="6" rx="2"/><path d="M7 7h.4M7 17h.4"/>',
     chart: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
@@ -146,6 +147,17 @@
 
   const fmtSpeed = (value) => (Number(value) ? fmtSize(value) + "/s" : "-");
 
+  /** 秒 → 时长文本。视频动辄几十分钟到几小时，纯秒数不可读。 */
+  const fmtDuration = (seconds) => {
+    const total = Math.round(Number(seconds) || 0);
+    if (!total) return "-";
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = total % 60;
+    return h
+      ? h + ":" + String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0")
+      : m + ":" + String(s).padStart(2, "0");
+  };
   /** 取路径最后一段（Windows/Unix 分隔符都吃）。 */
   const baseName = (value) => {
     const text = String(value || "");
@@ -543,7 +555,20 @@
   /** 当前角色可见的页面（admin 专属页对访客/操作员直接不出现在导航里）。 */
   const visiblePages = () => PAGES.filter((page) => !page.role || canDo(page.role));
 
+  //: 页面标题 → 页面 key。shell() 用它判断"这一屏是谁画的"。
+  const PAGE_BY_TITLE = {};
+  PAGES.forEach((page) => {
+    PAGE_BY_TITLE[page.label] = page.key;
+  });
+
   function shell(content, title, subtitle, actions) {
+    // 丢弃过期渲染。页面函数都是「先画 loading，await 拉数据，再画真内容」，
+    // 慢请求（如站点健康巡检要真去各站点探测，可达十几秒）返回时用户可能已经切走。
+    // 不拦住就会出现"地址栏 #settings、内容却是站点健康页"的幽灵页面，
+    // 之后所有点击都作用在错误的页面上。
+    // 判据用标题而非计数器：异步回调无法知道自己属于哪一次导航，但它清楚自己在画哪个页面。
+    const owner = PAGE_BY_TITLE[title];
+    if (owner && owner !== store.page) return;
     const nav = [];
     let lastGroup = null;
     visiblePages().forEach((page) => {
@@ -1091,7 +1116,7 @@
   }
 
   // ---------------- 热度排行 ----------------
-  const trendingState = { tab: "resources", days: 14, mediaType: "" };
+  const trendingState = { tab: "resources", days: 14, mediaType: "", view: "board" };
 
   function subscribeFromTrending(row) {
     modal(
@@ -1176,6 +1201,122 @@
     );
   }
 
+  /** 封面图（带占位降级）。
+
+      站点不一定给封面（盘搜就没有），未配 TMDB 时也没有兜底图源，
+      因此必须有占位态：用作品名首字 + 类型图标画一个渐变色块，
+      而不是显示裂图。加载失败（外链挂了/防盗链）时同样退回占位。
+  */
+  function posterBox(row) {
+    const holder = el("div", { class: "poster" });
+    const placeholder = () => {
+      const initial = (row.title || "?").trim().slice(0, 1);
+      // 用标题算一个稳定色相：同一部作品每次进页面颜色一致，不会闪
+      let hash = 0;
+      for (let i = 0; i < (row.title || "").length; i += 1) {
+        hash = (hash * 31 + (row.title || "").charCodeAt(i)) % 360;
+      }
+      return el("div", { class: "poster-ph", style: "--ph-hue:" + hash }, [
+        el("span", { class: "poster-ph-text", text: initial }),
+        icon(typeIcon(row.media_type), "sm"),
+      ]);
+    };
+
+    if (!row.poster) {
+      holder.appendChild(placeholder());
+      return holder;
+    }
+    const image = el("img", {
+      src: row.poster,
+      alt: row.title,
+      loading: "lazy",
+      // 部分站点图床有防盗链，带 referrer 会 403
+      referrerpolicy: "no-referrer",
+    });
+    image.addEventListener("error", () => {
+      holder.replaceChildren(placeholder());
+    });
+    holder.appendChild(image);
+    return holder;
+  }
+
+  /** 画板模式：封面卡片网格。 */
+  function rankingBoard(items, opts) {
+    if (!items || !items.length) {
+      return el("div", { class: "pad" }, [
+        emptyBox((opts && opts.empty) || "暂无数据", "flame"),
+      ]);
+    }
+    return el(
+      "div",
+      { class: "board" },
+      items.map((row) => {
+        const badges = el("div", { class: "board-badges" }, [
+          el("span", { class: "board-rank" + (row.rank <= 3 ? " top" : ""), text: "#" + row.rank }),
+          row.rating
+            ? el("span", { class: "board-score", text: String(row.rating) })
+            : null,
+        ]);
+
+        const card = el("div", { class: "board-card", tabindex: "0", role: "button" }, [
+          el("div", { class: "board-cover" }, [
+            posterBox(row),
+            badges,
+            el("div", { class: "board-heat" }, [
+              el("i", { style: "width:" + Math.max(2, Math.min(100, row.heat_percent || 0)) + "%" }),
+            ]),
+          ]),
+          el("div", { class: "board-body" }, [
+            el("div", { class: "board-title", title: row.title, text: row.title }),
+            el("div", { class: "board-sub", text:
+              [
+                typeLabel(row.media_type),
+                row.year || null,
+                row.season ? "第 " + row.season + " 季" : null,
+                row.latest_episode ? "更新至 " + row.latest_episode + " 集" : null,
+              ].filter(Boolean).join(" · ") }),
+            el("div", { class: "chips tiny-chips" }, [
+              ...(row.genres || []).slice(0, 2).map((g) => el("span", { class: "tag tiny", text: g })),
+              ...(row.resolutions || []).slice(0, 1).map((r) => el("span", { class: "tag brand tiny", text: r })),
+            ]),
+            el("div", { class: "board-foot" }, [
+              el("span", { class: "tiny dim", text: row.site_count + " 站 · " + row.resource_count + " 条" }),
+              el("span", { class: "tiny dim", text: fmtRelative(row.latest_at) }),
+            ]),
+          ]),
+          el("div", { class: "board-actions" }, [
+            iconButton("订阅", "star", (event) => {
+              event.stopPropagation();
+              subscribeFromTrending(row);
+            }, "sm primary"),
+            iconButton("搜索", "search", (event) => {
+              event.stopPropagation();
+              searchState.keyword = row.title;
+              searchState.items = [];
+              go("search");
+            }, "sm ghost"),
+          ]),
+        ]);
+        // 整卡可点开详情，但按钮区已 stopPropagation，避免误触
+        card.addEventListener("click", () => trendingDetail(row));
+        card.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            trendingDetail(row);
+          }
+        });
+        return card;
+      })
+    );
+  }
+
+  /** 按当前视图模式渲染榜单（画板 / 列表）。 */
+  function rankingView(items, opts) {
+    return trendingState.view === "board"
+      ? rankingBoard(items, opts)
+      : rankingTable(items, opts);
+  }
+
   function rankingTable(items, opts) {
     return table(
       [
@@ -1252,7 +1393,7 @@
                 el("h3", {}, [icon("radar", "sm"), el("span", { text: "实时热榜（站点最新流）" })]),
                 el("span", { class: "tag brand", text: "联网实时" }),
               ]),
-              rankingTable(data.items, {
+              rankingView(data.items, {
                 empty: "没有启用的索引站点，或站点未返回最新流；请到站点管理启用站点",
               }),
             ])
@@ -1335,7 +1476,7 @@
               el("h3", {}, [icon("flame", "sm"), el("span", { text: "资源热度榜" })]),
               el("span", { class: "tag", text: "本地缓存聚合" }),
             ]),
-            rankingTable(data.items, {
+            rankingView(data.items, {
               empty: "暂无数据：热度榜来自搜索缓存，先在资源搜索里搜几次即可生成",
             }),
           ])
@@ -1387,12 +1528,33 @@
       }
     );
 
+    const views = segment(
+      [
+        { value: "board", label: "画板" },
+        { value: "list", label: "列表" },
+      ],
+      trendingState.view,
+      (value) => {
+        trendingState.view = value;
+        pageTrending();
+      }
+    );
+
+    // 热词榜/站点榜是「关键词」和「站点」维度，没有封面可画，切了也没意义
+    const worksTab = trendingState.tab === "resources" || trendingState.tab === "live";
+
     const filterBar = el("div", { class: "card" }, [
       el("div", { class: "row center" }, [
         el("div", { style: "flex:0 0 auto" }, [
           el("div", { class: "dim tiny", style: "margin-bottom:6px", text: "榜单" }),
           tabs,
         ]),
+        worksTab
+          ? el("div", { style: "flex:0 0 auto" }, [
+              el("div", { class: "dim tiny", style: "margin-bottom:6px", text: "视图" }),
+              views,
+            ])
+          : null,
         el("div", { style: "flex:0 0 auto" }, [
           el("div", { class: "dim tiny", style: "margin-bottom:6px", text: "统计窗口" }),
           windows,
@@ -1947,6 +2109,105 @@
   }
 
   // ---------------- 下载任务 ----------------
+  /** 视频网页下载：先解析确认，再入队。
+
+      刻意做成"两步"而不是贴上地址直接下：解析一次很快（1~3 秒），
+      但能让用户在下载前看清标题/作者/时长/画质，避免下错内容或
+      下到一个几小时的直播回放。
+  */
+  function webVideoDialog() {
+    const urlInput = el("input", {
+      type: "text",
+      placeholder: "粘贴视频页面地址，如 https://www.bilibili.com/video/BV...",
+    });
+    const info = el("div", { class: "dim tiny", text: "支持 B 站 / YouTube / 抖音 / TikTok 等 1700+ 站点的公开视频" });
+    const preview = el("div", {});
+    let parsed = null;
+
+    const probe = async () => {
+      const url = urlInput.value.trim();
+      if (!url) {
+        toast("请先填写地址");
+        return;
+      }
+      preview.replaceChildren(loading());
+      parsed = null;
+      try {
+        const response = await api("/downloads/webvideo/probe?url=" + encodeURIComponent(url), {
+          method: "POST",
+        });
+        parsed = response.data;
+        preview.replaceChildren(
+          el("div", { class: "kv" }, [
+            el("div", { class: "kv-item" }, [
+              el("div", { class: "kv-label", text: "标题" }),
+              el("div", { text: parsed.title || "-" }),
+            ]),
+            el("div", { class: "kv-item" }, [
+              el("div", { class: "kv-label", text: "作者" }),
+              el("div", { text: parsed.uploader || "-" }),
+            ]),
+            el("div", { class: "kv-item" }, [
+              el("div", { class: "kv-label", text: "时长" }),
+              el("div", { text: parsed.duration ? fmtDuration(parsed.duration) : "-" }),
+            ]),
+            el("div", { class: "kv-item" }, [
+              el("div", { class: "kv-label", text: "站点" }),
+              el("div", { text: parsed.site || "-" }),
+            ]),
+            el("div", { class: "kv-item" }, [
+              el("div", { class: "kv-label", text: "可用画质" }),
+              el("div", { text: (parsed.heights || []).map((h) => h + "p").join(" / ") || "-" }),
+            ]),
+          ])
+        );
+      } catch (error) {
+        parsed = null;
+        preview.replaceChildren(emptyBox(error.message, "alert"));
+      }
+    };
+
+    const closePanel = panelModal(
+      "下载网络视频",
+      "只支持公开可访问的内容；会员/付费正片不在支持范围",
+      el("div", {}, [
+        el("div", { class: "field" }, [
+          el("label", { text: "视频地址" }),
+          urlInput,
+          info,
+        ]),
+        el("div", { class: "row tight", style: "margin:12px 0" }, [
+          iconButton("解析", "search", () => probe(), "sm primary"),
+          iconButton("开始下载", "download", async () => {
+            const url = urlInput.value.trim();
+            if (!url) {
+              toast("请先填写地址");
+              return;
+            }
+            if (!parsed) {
+              toast("请先点「解析」确认内容");
+              return;
+            }
+            try {
+              await api(
+                "/downloads/webvideo?url=" + encodeURIComponent(url) +
+                  (parsed.title ? "&title=" + encodeURIComponent(parsed.title) : ""),
+                { method: "POST" }
+              );
+              toast("已加入下载队列", "ok");
+              closePanel();
+              pageDownloads();
+            } catch (error) {
+              toast(error.message, "err");
+            }
+          }, "sm"),
+        ]),
+        preview,
+      ]),
+      true
+    );
+  }
+
   async function pageDownloads() {
     shell(loading(), "下载任务", "任务状态与自动整理");
     const items = await api("/downloads?limit=300");
@@ -2078,7 +2339,11 @@
       }
     });
 
-    shell(content, "下载任务", "共 " + items.length + " 个任务", [sync]);
+    const actions = [sync];
+    if (canDo("operator")) {
+      actions.unshift(iconButton("下载网络视频", "video", () => webVideoDialog(), "ghost"));
+    }
+    shell(content, "下载任务", "共 " + items.length + " 个任务", actions);
   }
 
   // ---------------- 媒体库 ----------------
@@ -5193,6 +5458,11 @@
     settings: pageSettings,
   };
 
+  //: 导航代次。每次切页 +1。
+  //: 页面内容的过期判定由 shell() 按标题做；这里专门管「出错了」那一屏——
+  //: 它没有对应的页面标题，只能靠代次判断该不该显示。
+  let navEpoch = 0;
+
   function go(page) {
     store.page = page;
     location.hash = page;
@@ -5205,10 +5475,12 @@
       return;
     }
     const handler = ROUTES[store.page] || pageDashboard;
+    const epoch = ++navEpoch; // 记下本次导航的代次，供下面的错误分支比对
     try {
       await handler();
     } catch (error) {
-      if (store.token) {
+      // 已经切走的页面报错就别再糊到界面上了，否则用户会看到上一页的错误
+      if (store.token && epoch === navEpoch) {
         shell(
           el("div", { class: "card" }, [emptyBox(error.message, "alert")]),
           "出错了",

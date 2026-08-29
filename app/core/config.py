@@ -112,6 +112,8 @@ class Settings(BaseSettings):
     # ---------- 搜索/订阅策略 ----------
     SEARCH_TIMEOUT: int = 25
     SEARCH_MAX_RESULTS: int = 200
+    #: 单站安全阀：防某站返回上万条拖死后续处理（0=不限）。公平性由轮转交错保证，不靠砍量
+    SEARCH_MAX_PER_SITE: int = 300
     SEARCH_CONCURRENCY: int = 8
     AUTO_DOWNLOAD_BEST: bool = True
     PREFER_RESOLUTIONS: list[str] = Field(

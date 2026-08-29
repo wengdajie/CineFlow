@@ -222,6 +222,32 @@ print("5) 搜索（无启用站点时应优雅返回空）")
 print("=" * 70)
 search = call("GET", "/search?keyword=" + urllib.parse.quote("庆余年") + "&media_type=tv", token=token)
 print(f"       结果 {len(items_of(search))} 条（未配站点时为 0 属正常）")
+# 每站诊断：v1.6.0 起搜索响应带 sites[]，用于回答"为什么这个站没结果"
+site_outcomes = (search.get("data") or search).get("sites") or search.get("sites") or []
+print(f"       站点诊断 {len(site_outcomes)} 条（未启用站点时为 0 属正常）")
+for outcome in site_outcomes[:6]:
+    print(
+        f"         {str(outcome.get('site'))[:16]:16} {outcome.get('status'):8} "
+        f"raw={outcome.get('raw')} kept={outcome.get('kept')} "
+        f"{outcome.get('elapsed_ms')}ms {str(outcome.get('message') or '')[:40]}"
+    )
+
+print("\n" + "=" * 70)
+print("5b) 网络视频下载（yt-dlp）：付费墙必须被拒")
+print("=" * 70)
+# 只验证合规边界与端点连通，不真去外网抓取（冒烟测试不该依赖公网）
+for blocked_url in (
+    "https://v.qq.com/x/cover/mzc00200abc/n0045xyz.html",
+    "https://www.iqiyi.com/v_19rr7f0m0k.html",
+    "https://www.netflix.com/watch/80100172",
+):
+    call(
+        "POST",
+        "/downloads/webvideo/probe?url=" + urllib.parse.quote(blocked_url, safe=""),
+        token=token,
+        expect=(400,),
+    )
+print("       长视频平台正片页在入口即被拒绝（不绕过付费墙）")
 
 print("\n" + "=" * 70)
 print("6) 元数据识别（未配 TMDB 时应降级不报错）")

@@ -36,7 +36,7 @@ def _build_rule(payload: SearchRequest) -> FilterRule:
 
 @router.post("", summary="聚合搜索（BT 站点 + 网盘）")
 async def do_search(payload: SearchRequest, user: OperatorUser) -> dict[str, Any]:
-    results = await search_service.search(
+    results, outcomes = await search_service.search_detailed(
         payload.keyword,
         media_type=payload.media_type.value if payload.media_type else None,
         season=payload.season,
@@ -48,6 +48,9 @@ async def do_search(payload: SearchRequest, user: OperatorUser) -> dict[str, Any
         "keyword": payload.keyword,
         "total": len(results),
         "items": results,
+        # 带上每个站点的成败原因：只给结果的话，用户无法知道
+        # "启用了 4 个站点却只看到 2 个站点的资源" 到底是谁出了问题
+        "sites": [outcome.to_dict() for outcome in outcomes],
     }
 
 
@@ -59,7 +62,12 @@ async def quick_search(
     season: int | None = None,
     episode: int | None = None,
 ) -> dict[str, Any]:
-    results = await search_service.search(
+    results, outcomes = await search_service.search_detailed(
         keyword, media_type=media_type, season=season, episode=episode
     )
-    return {"success": True, "total": len(results), "items": results}
+    return {
+        "success": True,
+        "total": len(results),
+        "items": results,
+        "sites": [outcome.to_dict() for outcome in outcomes],
+    }

@@ -147,6 +147,7 @@ class _Bucket:
         "episodes",
         "kinds",
         "latest",
+        "media",
         "media_type",
         "resolutions",
         "samples",
@@ -170,6 +171,21 @@ class _Bucket:
         self.resolutions: set[str] = set()
         self.latest: Any = None
         self.samples: list[dict[str, Any]] = []
+        #: 作品级元数据（封面/评分/年份…），来自站点搜索接口
+        self.media: dict[str, Any] = {}
+
+    def absorb_media(self, meta: dict[str, Any] | None) -> None:
+        """合并作品级元数据：先到先得，不覆盖已有值。
+
+        同一部作品会有几十条资源，每条都带一份站点元数据。先到先得即可，
+        但要逐字段合并——有的站点给了封面没给评分，另一个站点相反，
+        逐字段补齐才能拿到最完整的展示信息。
+        """
+        for key, value in (meta or {}).items():
+            if value in (None, "", [], {}):
+                continue
+            if key not in self.media:
+                self.media[key] = value
 
     def heat(self) -> float:
         """可解释的热度分。"""
@@ -201,6 +217,7 @@ class _Bucket:
             if len(self.samples) >= 3:
                 break
             self.samples.append(sample)
+        self.absorb_media(other.media)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -220,6 +237,18 @@ class _Bucket:
             "latest_at": self.latest.isoformat() if self.latest else None,
             "heat": self.heat(),
             "samples": self.samples[:3],
+            # 画板模式需要的展示信息；站点没提供时为空，前端做占位降级
+            "poster": self.media.get("poster"),
+            "rating": self.media.get("rating"),
+            "rating_people": self.media.get("rating_people"),
+            "year": self.media.get("year"),
+            "genres": self.media.get("genres") or [],
+            "actors": self.media.get("actors") or [],
+            "area": self.media.get("area"),
+            "overview": self.media.get("overview"),
+            "director": self.media.get("director"),
+            "status_text": self.media.get("status_text"),
+            "total_episodes": self.media.get("total_episodes"),
         }
 
 
@@ -294,6 +323,7 @@ def resource_ranking(
             if row.resolution:
                 bucket.resolutions.add(row.resolution)
             bucket.episodes.update(row.episodes or [])
+            bucket.absorb_media(row.meta or {})
             moment = row.publish_at or row.created_at
             if moment and (bucket.latest is None or moment > bucket.latest):
                 bucket.latest = moment
@@ -348,6 +378,7 @@ async def live_ranking(
         if info.resolution:
             bucket.resolutions.add(info.resolution)
         bucket.episodes.update(info.episodes or [])
+        bucket.absorb_media(resource.extra or {})
         moment = resource.publish_at
         if moment and (bucket.latest is None or moment > bucket.latest):
             bucket.latest = moment

@@ -61,6 +61,8 @@ def _spec_list() -> list[FieldSpec]:
         # ---- 搜索与订阅策略 ----
         FieldSpec("SEARCH_TIMEOUT", "int", "搜索超时(秒)", minimum=3, maximum=300),
         FieldSpec("SEARCH_MAX_RESULTS", "int", "结果上限", minimum=10, maximum=5000),
+        FieldSpec("SEARCH_MAX_PER_SITE", "int", "单站安全阀", minimum=0, maximum=5000,
+                  hint="单站最多贡献多少条，0=不限；仅防异常站点返回上万条，日常不必调"),
         FieldSpec("SEARCH_CONCURRENCY", "int", "并发数", minimum=1, maximum=64),
         FieldSpec("AUTO_DOWNLOAD_BEST", "bool", "自动下载最优"),
         FieldSpec("PREFER_RESOLUTIONS", "list", "画质偏好顺序",

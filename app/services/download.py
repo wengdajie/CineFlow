@@ -110,6 +110,21 @@ async def add_download(
                 downloader = candidates[0]
                 status = TaskStatus.FAILED.value
                 error = ("下载器投递失败 → " + "；".join(attempts))[:500]
+    elif kind == ResourceKind.WEBVIDEO.value:
+        # 视频网页（B 站/YouTube 等公开视频）：必须交给 yt-dlp，
+        # 其他下载器拿到网页地址只会下到一个 HTML 文件
+        downloader = site_service.default_downloader(downloader_name or "ytdlp")
+        if downloader and downloader.name == "ytdlp":
+            external_id = await downloader.add(link, save_path=target_path)
+            if external_id:
+                status = TaskStatus.DOWNLOADING.value
+            else:
+                status = TaskStatus.FAILED.value
+                # add() 返回 None 的两种原因都要让用户看到，否则无从下手
+                error = "解析失败或该地址属于付费内容（详见运行日志）"
+        else:
+            error = "视频网页需要 yt-dlp 下载器，请到站点管理启用"
+            status = TaskStatus.FAILED.value
     elif kind == ResourceKind.DIRECT.value:
         downloader = site_service.default_downloader(downloader_name or "aria2")
         if downloader and downloader.name == "aria2":

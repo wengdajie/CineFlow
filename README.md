@@ -9,8 +9,8 @@
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)](#-docker-部署推荐)
-[![Tests](https://img.shields.io/badge/tests-537%20passed-brightgreen)](#-测试)
-[![Version](https://img.shields.io/badge/version-1.5.0-blue)](docs/08-变更日志.md)
+[![Tests](https://img.shields.io/badge/tests-618%20passed-brightgreen)](#-测试)
+[![Version](https://img.shields.io/badge/version-1.6.0-blue)](docs/08-变更日志.md)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 </div>
@@ -97,6 +97,21 @@ CineFlow 是一个**从零实现**的 NAS 影视自动化项目，设计上参�
 - **多级关键词降级**：`片名 S02E05` 命中不到就退到 `片名 S02`，再退到 `片名`
 - **并发搜索**：Semaphore 控制并发度，跨站结果按 magnet infohash 去重
 - **相关性校验**：自动剔除标题不匹配的"搭车"资源
+
+#### 每个站点的成败都看得见（v1.6.0）
+
+搜索结果里会附带**每站诊断**，直接回答"为什么这个站没出货"：
+
+| 状态 | 含义 |
+|---|---|
+| `ok` | 正常返回，附原始条数与保留条数 |
+| `empty` | 连通但没有匹配（例如 Nyaa 只收日番，中文剧名搜不到） |
+| `timeout` | 超时（可调 `SEARCH_TIMEOUT`） |
+| `error` | 报错并附原因（例如 Jackett 未部署会显示 502） |
+
+**单站不再被大站挤掉**。聚合时按站点**轮转交错**合并（A1,B1,A2,B2…），
+公平性靠交错次序保证，而不是砍掉返回多的站点。
+`SEARCH_MAX_PER_SITE`（默认 300）只是防单站刷爆内存的**安全阀**，不是公平性旋钮。
 
 ### 🎯 择优：打分而非死规则
 
@@ -211,6 +226,30 @@ heat = min(做种数, 5000) ^ 0.5 × 3      # 做种数（开方避免头部通�
 再按「作品名 + 季号」聚合；季号缺失的剧集按第 1 季归并（站点常省略单季剧的季号）。
 不同季仍然分开成榜。该归并**只作用于榜单展示**，不影响资源名解析、
 下载命名与缺集计算。
+
+#### 画板模式与封面（v1.6.0）
+
+资源热榜与实时热榜默认以**画板**（卡片墙）展示，可一键切回列表：
+
+```
+┌──────────┐  ┌──────────┐  ┌──────────┐
+│ ①  ★7.3  │  │ ②        │  │ ③  ★8.1  │   ← 排名角标 + 评分角标
+│  封面    │  │  封面    │  │  封面    │      封面比例固定 2:3
+│▓▓▓▓▓░░░░░│  │▓▓▓░░░░░░░│  │▓▓▓▓▓▓░░░░│   ← 底部热度条
+│ 师兄太稳健│  │ 凡人修仙传│  │ 庆余年   │      标题两行截断
+│ 古装 2160p│  │ 动漫 1080p│  │ 剧情 4K  │      类型 + 分辨率
+│ 2 站 · 8条│  │ 3 站 · 12条│  │ 2 站 · 5条│
+│ [订阅][搜]│  │ [订阅][搜]│  │ [订阅][搜]│      整卡可点，键盘可达
+└──────────┘  └──────────┘  └──────────┘
+```
+
+封面与评分**不依赖 TMDB**（没配 API Key 也有图）：直接取站点搜索接口自带的
+元数据（封面、豆瓣评分、年份、类型、地区、演员、总集数、简介）。
+取不到时降级为**占位色块**——按标题哈希算出稳定色相 + 首字 + 类型图标，
+而不是留白或裂图（`onerror` 也会退到占位）。
+纯盘搜类站点（如 PanSou）本身不返回元数据，所以那些条目显示占位是正常的。
+
+评分为 0 / 空 / "暂无" 时**不显示评分角标**，避免把"没数据"渲染成"0 分差评"。
 
 ### ⏱ 定时任务可视化设置
 
@@ -553,7 +592,7 @@ NAS 离线内网直接可用，整个前端只有 `index.html` + `app.js` + `sty
 | [`docs/05-ChatOps-机器人.md`](docs/05-ChatOps-机器人.md) | 三平台配置步骤、验签算法、指令表 |
 | [`docs/06-网盘管理.md`](docs/06-网盘管理.md) | 盘搜 vs 网盘、三种存储配置、转存流程 |
 | [`docs/07-运维手册.md`](docs/07-运维手册.md) | 部署、备份、排障、验证脚本 |
-| [`docs/08-变更日志.md`](docs/08-变更日志.md) | v1.0.0 → v1.5.0 逐版本记录 |
+| [`docs/08-变更日志.md`](docs/08-变更日志.md) | v1.0.0 → v1.6.0 逐版本记录 |
 | [`docs/09-竞品对标与差距分析.md`](docs/09-竞品对标与差距分析.md) | 对标 MoviePilot / quark-auto-save / SmartStrm / MediaWarp / TgtoDrive，**差距与不做的事** |
 
 ---
@@ -564,7 +603,7 @@ NAS 离线内网直接可用，整个前端只有 `index.html` + `app.js` + `sty
 ┌──────────────────────────────────────────────────────────────┐
 │  web/  零依赖 Web 控制台（原生 JS，无 CDN）                     │
 └────────────────────────────┬─────────────────────────────────┘
-                             │ REST /api/v1（118 个端点）
+                             │ REST /api/v1（120 个端点）
 ┌────────────────────────────▼─────────────────────────────────┐
 │  app/api/      20 个 router：auth search trending subscribes  │
 │                 radar ranking rule-groups schedules downloads │
@@ -601,7 +640,7 @@ NAS 离线内网直接可用，整个前端只有 `index.html` + `app.js` + `sty
 │    rules 规则组分层匹配（有序偏好，层内再按分排序）              │
 │    config 三级配置 · security PBKDF2+JWT · logger 环形缓冲       │
 ├──────────────────────────────────────────────────────────────┤
-│  app/providers/ 22 个注册 Provider + TMDB 单例，装饰器自动发现   │
+│  app/providers/ 23 个注册 Provider + TMDB 单例，装饰器自动发现   │
 │    indexer  torznab rss nyaa api_generic html_generic mukaku  │
 │    pan      pansou pan_generic         ← 找分享链接（搜索器）    │
 │    panstorage alist quark webdav local_dir ← 存到自己的盘（存储器）  │
@@ -733,7 +772,7 @@ YAML 里的二级 key 会拍平成 `CF_<父>_<子>`，例如 `tmdb.api_key` → 
 
 ## 🔌 接入你自己的站点
 
-首次启动会写入 12 条**默认全部禁用**的示例站点（避免启动就对外发请求）。
+首次启动会写入 13 条示例站点。需要填地址/账号的一律**默认禁用**（避免启动就对外发请求，示例值也跑不通）；yt-dlp 是本地库调用、装了依赖就能用，故默认启用。
 版本升级时会**按名字补齐新增的示例站点**，已存在的同名站点不会被覆盖。
 在 **站点管理** 页填好地址后点「启用」即可。
 
@@ -939,6 +978,41 @@ BT 磁力与网盘分享链接**，并支持「最新流」用于追新雷达。
 
 `options` 可设 `{"category": "CineFlow", "tags": "CineFlow"}` 便于在下载器里归类。
 
+### 网络视频下载（yt-dlp）
+
+除了 BT / 网盘，还能把**公开的网页视频**收进媒体库（B 站 / YouTube / 抖音 /
+TikTok / AcFun / 小红书等，抽取器覆盖 1700+ 站点，由 [yt-dlp](https://github.com/yt-dlp/yt-dlp) 提供）。
+
+下载页点「下载网络视频」，走**两步式**：先解析看清标题 / 作者 / 时长 / 可用画质，
+确认无误再入队，避免下错东西浪费带宽。
+
+```bash
+# 解析（不下载）
+curl -X POST "http://localhost:6060/api/v1/downloads/webvideo/probe?url=<视频页地址>" \
+     -H "Authorization: Bearer <token>"
+
+# 入队下载
+curl -X POST "http://localhost:6060/api/v1/downloads/webvideo?url=<视频页地址>&max_height=1080" \
+     -H "Authorization: Bearer <token>"
+```
+
+可配项（站点 `options`）：`max_height`（默认 1080）、`format`、`rate_limit`（KB/s）、
+`write_subtitles` / `subtitle_langs`、`write_thumbnail`、`cookie_file`、`proxy`、`probe_retries`。
+没装 ffmpeg 时自动退回单文件流（宁可画质低一档，也不要下到一半失败）。
+
+**明确的边界**（详见 [ADR-24](docs/04-决策记录.md)）：
+
+- ✅ 只下**公开可访问**的内容：UP 主投稿、公开课、纪录片、自己发布的视频
+- ❌ **不做** VIP / 付费内容解析。腾讯视频、爱奇艺、优酷、芒果 TV 的**正片播放页**
+  以及 Netflix / Disney+ / Hulu / HBO / Prime Video 在**入口即被拒绝**，
+  并提示改用平台官方客户端的离线缓存 —— 抓取这类内容等于绕过付费墙
+- 需要登录才能看的内容，只支持你提供**自己账号**的 cookie 下载**你有权访问**的部分
+- 默认带限速与并发上限，降低对站点的压力
+
+站点会对连续解析做风控（B 站实测会回 `HTTP 412`）。因此解析结果**缓存 5 分钟**
+（反复点「解析」瞬间返回），并对 412/429 做退避重试；
+"视频不存在/已私有"这类确定性失败**不重试**，直接报原因。
+
 ### 媒体服务器
 
 | Provider | 地址示例 | 凭据 |
@@ -1080,7 +1154,7 @@ curl -X POST -H "X-API-Token: your-token" \
      http://127.0.0.1:6060/api/v1/subscribes/run-all
 ```
 
-主要端点分组（共 118 个）：
+主要端点分组（共 120 个）：
 
 | 前缀 | 用途 |
 |---|---|
@@ -1152,7 +1226,7 @@ ruff check app tests      # 静态检查
 ```bash
 python -m app.main &                  # 先起服务
 
-python scripts/smoke_test.py          # 207 项真实 HTTP 接口用例
+python scripts/smoke_test.py          # 210 项真实 HTTP 接口用例
 python scripts/ui_check.py            # Playwright 真浏览器逐页点检 20 个页面 + 主题切换，捕获 JS 报错
 python scripts/demo_pipeline.py       # 真实文件演示解析→硬链入库→缺集收敛（无需服务）
 python scripts/live_check.py          # 真实站点端到端：启用 mukaku→搜索→订阅→雷达匹配（联网）
@@ -1184,7 +1258,7 @@ cineflow/
 │   └── main.py        应用入口（lifespan / CORS / 静态资源）
 ├── web/               index.html + assets/(app.js style.css)  ← 零依赖前端
 ├── plugins/           auto_cleanup pan_transfer daily_digest  ← 示例插件
-├── tests/             25 个测试文件
+├── tests/             28 个测试文件
 ├── scripts/           smoke_test / ui_check / demo_pipeline 验证脚本
 ├── docs/              10 篇维护文档（现状/架构/路线图/决策/运维/变更日志/竞品对标…）
 ├── config/            config.yaml.example

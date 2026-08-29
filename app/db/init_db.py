@@ -94,6 +94,23 @@ DEFAULT_SITES = [
         "priority": 10,
         "options": {"category": "CineFlow", "tags": "CineFlow"},
     },
+    {
+        # yt-dlp 是本地库调用，不需要地址与账号，装了依赖就能用，故默认启用
+        "name": "yt-dlp 视频下载",
+        "kind": ProviderKind.DOWNLOADER.value,
+        "provider": "ytdlp",
+        "url": "",
+        "enabled": True,
+        "priority": 60,
+        "options": {
+            "note": "抓取公开视频页面（B 站/YouTube/抖音/TikTok 等 1700+ 站点）；"
+                    "仅支持公开内容，不解析会员/付费正片",
+            "max_height": 1080,
+            "write_subtitles": True,
+            "write_thumbnail": True,
+            "rate_limit": 0,
+        },
+    },
     # ---- 网盘存储（转存/浏览，区别于上面的「盘搜」搜索器）----
     {
         "name": "AList 网盘（推荐）",

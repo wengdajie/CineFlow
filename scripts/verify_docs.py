@@ -28,8 +28,8 @@ from app.providers.registry import list_providers, load_builtin_providers  # noq
 load_builtin_providers()
 providers = list_providers()
 names = {p["name"] for p in providers}
-check("Provider 总数 22", len(providers) == 22, f"实际 {len(providers)}")
-check("README 声明 22 个 Provider", "22 个注册 Provider" in README)
+check("Provider 总数 23", len(providers) == 23, f"实际 {len(providers)}")
+check("README 声明 23 个 Provider", "23 个注册 Provider" in README)
 for expected in ("api_generic", "html_generic", "mukaku", "pan_generic",
                  "torznab", "rss", "nyaa", "pansou"):
     check(f"Provider {expected} 已注册", expected in names)
@@ -47,10 +47,23 @@ for table in ("audit_logs", "pan_saves", "pan_subscribes", "strm_records",
 # ---- 默认站点 ----
 from app.db.init_db import DEFAULT_SITES  # noqa: E402
 
-check("默认示例站点 12 条", len(DEFAULT_SITES) == 12, f"实际 {len(DEFAULT_SITES)}")
-check("README 声明 12 条示例站点", "写入 12 条" in README)
+check("默认示例站点 13 条", len(DEFAULT_SITES) == 13, f"实际 {len(DEFAULT_SITES)}")
+check("README 声明 13 条示例站点", "写入 13 条" in README)
 check("默认站点含 webdav", any(s["provider"] == "webdav" for s in DEFAULT_SITES))
-check("示例站点全部默认禁用", all(not s.get("enabled", False) for s in DEFAULT_SITES))
+# 需要填地址/账号的站点必须默认禁用（示例值直接跑必然报错）；
+# yt-dlp 是本地库调用、装了依赖就能用，是唯一例外
+check(
+    "需配置的示例站点默认禁用",
+    all(
+        not s.get("enabled", False)
+        for s in DEFAULT_SITES
+        if s["provider"] != "ytdlp"
+    ),
+)
+check(
+    "yt-dlp 默认启用（本地库无需配置）",
+    any(s["provider"] == "ytdlp" and s.get("enabled") for s in DEFAULT_SITES),
+)
 check("默认站点含 mukaku", any(s["provider"] == "mukaku" for s in DEFAULT_SITES))
 check("默认站点含 api_generic", any(s["provider"] == "api_generic" for s in DEFAULT_SITES))
 check("默认站点含 html_generic", any(s["provider"] == "html_generic" for s in DEFAULT_SITES))
@@ -85,8 +98,8 @@ try:
         for m in methods
         if m.lower() in ("get", "post", "patch", "delete", "put")
     )
-    check("API 端点 118 个", total == 118, f"实际 {total}")
-    check("README 声明 118 个端点", "118 个端点" in README and "共 118 个" in README)
+    check("API 端点 120 个", total == 120, f"实际 {total}")
+    check("README 声明 120 个端点", "120 个端点" in README and "共 120 个" in README)
     paths = set(spec["paths"])
     for path in ("/api/v1/users", "/api/v1/users/{user_id}",
                  "/api/v1/system/settings", "/api/v1/system/settings/reset",
@@ -178,8 +191,8 @@ check("README 说明定时任务可改期", "定时任务" in README and "cron" 
 
 # ---- 测试文件 ----
 test_files = sorted(p.name for p in pathlib.Path("tests").glob("test_*.py"))
-check("测试文件 25 个", len(test_files) == 25, str(test_files))
-check("README 声明 25 个测试文件", "25 个测试文件" in README)
+check("测试文件 28 个", len(test_files) == 28, str(test_files))
+check("README 声明 28 个测试文件", "28 个测试文件" in README)
 for name in ("test_custom_sites.py", "test_radar.py", "test_trending.py",
              "test_panstorage.py", "test_chatops.py", "test_nfo.py",
              "test_scraper.py", "test_webdav.py", "test_strm_sync.py",
@@ -194,12 +207,12 @@ for script in ("smoke_test.py", "ui_check.py", "demo_pipeline.py", "live_check.p
     check(f"脚本存在 {script}", pathlib.Path("scripts", script).exists())
     check(f"scripts/README 提及 {script}", script in SCRIPTS_README)
 check("README 声明六个验证脚本", "六个开发期验证工具" in README)
-check("README 测试徽章 537", "tests-537%20passed" in README)
-check("README 版本号 1.5.0", "1.5.0" in README)
+check("README 测试徽章 618", "tests-618%20passed" in README)
+check("README 版本号 1.6.0", "1.6.0" in README)
 version_src = pathlib.Path("app/core/version.py").read_text(encoding="utf-8")
-check("代码版本号为 1.5.0", 'APP_VERSION = "1.5.0"' in version_src)
-check("README 声明 207 项接口用例", "207 项真实 HTTP 接口用例" in README)
-check("scripts/README 声明 207 项", "207 项接口用例" in SCRIPTS_README)
+check("代码版本号为 1.6.0", 'APP_VERSION = "1.6.0"' in version_src)
+check("README 声明 210 项接口用例", "210 项真实 HTTP 接口用例" in README)
+check("scripts/README 声明 210 项", "210 项接口用例" in SCRIPTS_README)
 
 # ---- 服务模块 ----
 for module in ("radar", "discovery", "presets", "trending", "settings_store",
@@ -242,15 +255,38 @@ if roadmap.exists():
     check("路线图无「待实测」占位", "待实测" not in roadmap_text)
     check("路线图无「未开始」残留（v1.5.0 已交付）", "未开始" not in roadmap_text)
     for milestone in ("M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8", "M9", "M10",
-                      "M11", "M12", "M13", "M14", "M15", "M16"):
+                      "M11", "M12", "M13", "M14", "M15", "M16",
+                      "M17", "M18", "M19", "M20"):
         check(f"路线图含里程碑 {milestone}", milestone in roadmap_text)
+    # 路线图必须往前看：候选章节要指向下一个版本，不能还停在已发布的版本上
+    check("路线图候选指向 v1.7.0", "v1.7.0 候选" in roadmap_text)
 
 # 变更日志必须记录到当前版本
 changelog = (docs_dir / "08-变更日志.md")
 if changelog.exists():
     changelog_text = changelog.read_text(encoding="utf-8")
-    for version in ("1.0.0", "1.1.0", "1.2.0", "1.3.0", "1.4.0", "1.5.0"):
+    for version in ("1.0.0", "1.1.0", "1.2.0", "1.3.0", "1.4.0", "1.5.0", "1.6.0"):
         check(f"变更日志含 v{version}", version in changelog_text)
+    # 变更日志要如实记录「没做什么」，否则下次接手的人会重复踩同一个坑
+    check("变更日志说明拒绝 VIP 解析", "付费墙" in changelog_text)
+
+# ADR 必须覆盖本轮的关键决策
+adr_text = (docs_dir / "04-决策记录.md").read_text(encoding="utf-8")
+for adr in ("ADR-24", "ADR-25", "ADR-26", "ADR-27"):
+    check(f"决策记录含 {adr}", adr in adr_text)
+check("ADR-24 记录 yt-dlp 合规边界", "只下**公开内容**" in adr_text)
+check("ADR-25 记录公平性靠交错", "轮转交错" in adr_text)
+check("ADR-26 记录不强依赖 TMDB", "不强依赖 TMDB" in adr_text)
+check("ADR-27 记录渲染归属校验", "这一屏属于谁" in adr_text)
+# 竞品分析里被推翻的旧判断必须写清原因，而不是悄悄删掉
+gap_text = (docs_dir / "09-竞品对标与差距分析.md").read_text(encoding="utf-8")
+check("竞品分析标注 v1.6.0 推翻了旧判断", "v1.6.0 部分推翻" in gap_text)
+check("竞品分析记录 VIP 解析不做", "明确不做" in gap_text)
+# 运维手册要能回答本轮用户问过的问题
+ops_text = (docs_dir / "07-运维手册.md").read_text(encoding="utf-8")
+check("运维手册有站点诊断排障", "站点诊断" in ops_text)
+check("运维手册解释封面色块属预期", "预期行为" in ops_text)
+check("运维手册有 yt-dlp 排障", "yt-dlp" in ops_text)
 
 # ---- 网盘管理（M2） ----
 check("网盘存储 Provider 目录存在", pathlib.Path("app/providers/panstorage").is_dir())
@@ -462,7 +498,7 @@ from app.services import config_store  # noqa: E402
 
 cfgstore_src = pathlib.Path("app/services/config_store.py").read_text(encoding="utf-8")
 check("可编辑配置白名单存在", "EDITABLE" in cfgstore_src)
-check("可编辑配置项 51 个", len(config_store.EDITABLE) == 51, f"实际 {len(config_store.EDITABLE)}")
+check("可编辑配置项 52 个", len(config_store.EDITABLE) == 52, f"实际 {len(config_store.EDITABLE)}")
 for func in ("coerce", "update", "reset", "apply_overrides", "describe"):
     check(f"配置仓库函数 {func}", f"def {func}" in cfgstore_src)
 # 不可热改的键绝不能进白名单：改了不生效比改不了更糟
@@ -582,6 +618,51 @@ check("内置模板均不设为默认（不悄悄改用户的排序）",
       all(not g.get("is_default") for g in DEFAULT_RULE_GROUPS))
 check("前端含过滤规则组页", '"rules"' in app_js and "pageRuleGroups" in app_js)
 check("前端可试算规则组", "previewRuleGroup" in app_js)
+
+# ---- v1.6.0：搜索每站诊断 + 单站安全阀 ----
+search_src = pathlib.Path("app/services/search.py").read_text(encoding="utf-8")
+check("搜索有 SiteOutcome 诊断结构", "class SiteOutcome" in search_src)
+check("搜索有 search_detailed", "def search_detailed" in search_src)
+check("搜索按轮转交错合并", "def apply_site_quota" in search_src)
+for status in ("ok", "empty", "timeout", "error"):
+    check(f"诊断状态 {status}", f'"{status}"' in search_src)
+check("SEARCH_MAX_PER_SITE 可在线改", "SEARCH_MAX_PER_SITE" in cfgstore_src)
+check("README 说明每站诊断", "每站诊断" in README)
+check("README 说明公平性靠交错而非砍量", "轮转交错" in README and "安全阀" in README)
+
+# ---- v1.6.0：热榜画板与封面降级 ----
+trending_src = pathlib.Path("app/services/trending.py").read_text(encoding="utf-8")
+check("榜单聚合作品级元数据", "absorb_media" in trending_src)
+generic_src = pathlib.Path("app/providers/indexer/generic_api.py").read_text(encoding="utf-8")
+check("站点元数据映射表", "DEFAULT_MEDIA_MAP" in generic_src)
+check("站点元数据可自定义映射", "media_map" in generic_src)
+for field in ("poster", "rating", "year", "genres", "total_episodes"):
+    check(f"元数据字段 {field}", f'"{field}"' in generic_src)
+check("前端有画板渲染", "rankingBoard" in app_js)
+check("前端封面有占位降级", "posterBox" in app_js and "poster-ph" in app_js)
+check("封面裂图退占位", 'addEventListener("error"' in app_js)
+check("封面防盗链", 'referrerpolicy: "no-referrer"' in app_js)
+check("画板样式存在", ".board-card" in pathlib.Path("web/assets/style.css").read_text(encoding="utf-8"))
+check("README 说明画板不依赖 TMDB", "不依赖 TMDB" in README)
+
+# ---- v1.6.0：yt-dlp 公开视频下载 ----
+ytdlp_src = pathlib.Path("app/providers/downloader/ytdlp.py").read_text(encoding="utf-8")
+check("yt-dlp Provider 已注册", "ytdlp" in names)
+check("yt-dlp 有付费墙拦截", "def is_blocked" in ytdlp_src)
+for domain in ("v\\.qq\\.com", "iqiyi\\.com", "youku\\.com", "mgtv\\.com", "netflix"):
+    check(f"付费墙规则含 {domain}", domain in ytdlp_src)
+check("yt-dlp 有探测缓存", "_PROBE_CACHE" in ytdlp_src)
+check("yt-dlp 识别限流", "def is_rate_limited" in ytdlp_src)
+check("yt-dlp 无 ffmpeg 时降级", "shutil.which" in ytdlp_src)
+check("WEBVIDEO 资源类型存在",
+      "WEBVIDEO" in pathlib.Path("app/schemas/enums.py").read_text(encoding="utf-8"))
+check("yt-dlp 在 requirements", "yt-dlp" in pathlib.Path("requirements.txt").read_text(encoding="utf-8"))
+check("前端有网络视频弹窗", "webVideoDialog" in app_js)
+check("README 说明只下公开内容", "只下**公开可访问**的内容" in README)
+check("README 说明拒绝 VIP 解析", "不做** VIP" in README)
+
+# ---- v1.6.0：慢请求不得覆盖已切走的页面 ----
+check("前端有过期渲染守卫", "PAGE_BY_TITLE" in app_js and "owner !== store.page" in app_js)
 
 # ---- 文档中的 JSON 示例必须合法 ----
 blocks = re.findall(r"```json\n(.*?)```", README, re.S)

@@ -9,7 +9,8 @@ from sqlalchemy import select
 
 from app.api.deps import CurrentUser, DbSession, OperatorUser
 from app.db.models import DownloadTask
-from app.schemas.enums import TaskStatus
+from app.providers.downloader.ytdlp import guess_site
+from app.schemas.enums import ResourceKind, TaskStatus
 from app.schemas.models import DownloadRequest, DownloadTaskOut, Message
 from app.services import download as download_service
 
@@ -53,6 +54,52 @@ async def add_download(payload: DownloadRequest, user: OperatorUser) -> dict[str
     )
     if not task:
         raise HTTPException(status_code=400, detail="添加下载失败，请检查下载器配置")
+    return {"success": True, "task_id": task.id, "status": task.status}
+
+
+@router.post("/webvideo/probe", summary="解析视频网页（不下载）")
+async def probe_webvideo(
+    user: OperatorUser, url: str = Query(min_length=4, description="视频页面地址")
+) -> dict[str, Any]:
+    """先看清楚再决定下不下：返回标题、作者、时长与可用画质。
+
+    只支持**公开可访问**的内容。长视频平台的正片播放页会被直接拒绝，
+    因为那类内容需要会员，抓取等于绕过付费墙。
+    """
+    from app.providers.registry import create_provider
+
+    provider = create_provider("ytdlp", {"name": "yt-dlp"})
+    if provider is None:
+        raise HTTPException(status_code=500, detail="yt-dlp Provider 未注册")
+    result = await provider.probe(url)
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("message") or "解析失败")
+    return {"success": True, "data": result}
+
+
+@router.post("/webvideo", summary="下载视频网页（B 站/YouTube/抖音等公开视频）")
+async def add_webvideo(
+    user: OperatorUser,
+    url: str = Query(min_length=4),
+    title: str | None = None,
+    save_path: str | None = None,
+) -> dict[str, Any]:
+    """把一个公开视频页面加入下载队列（由 yt-dlp 解析）。"""
+    task = await download_service.add_download(
+        {
+            "title": title or url,
+            "link": url,
+            "kind": ResourceKind.WEBVIDEO.value,
+            "site": guess_site(url),
+            "page_url": url,
+        },
+        save_path=save_path,
+    )
+    if not task:
+        raise HTTPException(status_code=400, detail="添加失败，请检查 yt-dlp 下载器是否启用")
+    if task.status == TaskStatus.FAILED.value:
+        # 任务已落库便于追溯，但要如实告诉用户这次没成功
+        raise HTTPException(status_code=400, detail=task.error or "下载失败")
     return {"success": True, "task_id": task.id, "status": task.status}
 
 

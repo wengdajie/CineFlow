@@ -1001,3 +1001,148 @@ select.input.sm {
 
 /* 超小号标签：用于"需重启""已被在线修改"这类元信息 */
 .tag.tiny { padding: 1px 6px; font-size: 10px; letter-spacing: 0.02em; }
+
+/* ---------------- 热榜画板模式（封面卡片墙） ---------------- */
+/* 用 auto-fill 而非固定列数：侧边栏收起、窗口缩放、移动端都能自适应 */
+.board {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  gap: var(--sp-4);
+  padding: var(--sp-4);
+}
+.pad { padding: var(--sp-4); }
+
+.board-card {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-lg);
+  background: var(--surface-2);
+  overflow: hidden;
+  cursor: pointer;
+  transition: transform 0.18s var(--ease), border-color 0.18s var(--ease),
+    box-shadow 0.18s var(--ease);
+}
+.board-card:hover,
+.board-card:focus-visible {
+  transform: translateY(-3px);
+  border-color: var(--accent-line);
+  box-shadow: var(--shadow-2);
+  outline: none;
+}
+/* 2:3 是影视海报通用比例；aspect-ratio 占位可避免图片加载完成时页面跳动 */
+.board-cover {
+  position: relative;
+  aspect-ratio: 2 / 3;
+  background: var(--surface-inset);
+}
+.poster,
+.poster img,
+.poster-ph {
+  width: 100%;
+  height: 100%;
+}
+.poster img { object-fit: cover; display: block; }
+
+/* 无封面时的占位：按标题算出的稳定色相 + 首字，比裂图或灰块更易辨识 */
+.poster-ph {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  background: linear-gradient(
+    145deg,
+    hsl(var(--ph-hue, 220) 42% 30%),
+    hsl(var(--ph-hue, 220) 38% 16%)
+  );
+  color: #fff;
+}
+.poster-ph-text { font-size: 30px; font-weight: 700; opacity: 0.92; }
+.poster-ph .icon { width: 15px; height: 15px; opacity: 0.62; }
+.board-badges {
+  position: absolute;
+  top: var(--sp-2);
+  left: var(--sp-2);
+  right: var(--sp-2);
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  pointer-events: none;
+}
+.board-rank {
+  padding: 2px 8px;
+  border-radius: var(--r-full);
+  background: rgba(8, 10, 14, 0.72);
+  color: #fff;
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  backdrop-filter: blur(6px);
+}
+.board-rank.top { background: linear-gradient(135deg, #f5a524, #e5484d); }
+.board-score {
+  padding: 2px 8px;
+  border-radius: var(--r-full);
+  background: rgba(8, 10, 14, 0.72);
+  color: var(--warn-text);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  backdrop-filter: blur(6px);
+}
+
+/* 热度条压在封面底部：不额外占垂直空间，又能一眼比较 */
+.board-heat {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background: rgba(8, 10, 14, 0.55);
+}
+.board-heat i {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), #f5a524);
+}
+.board-body {
+  padding: var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+}
+.board-title {
+  font-size: var(--fs-md);
+  font-weight: 600;
+  line-height: 1.34;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.board-sub { font-size: var(--fs-xs); color: var(--text-3); }
+.tiny-chips { gap: 4px; }
+.board-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  margin-top: auto;
+  padding-top: 4px;
+}
+.board-actions {
+  display: flex;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-3) var(--sp-3);
+}
+.board-actions .btn { flex: 1; justify-content: center; }
+
+@media (max-width: 640px) {
+  .board {
+    grid-template-columns: repeat(auto-fill, minmax(134px, 1fr));
+    gap: var(--sp-3);
+    padding: var(--sp-3);
+  }
+  .board-title { font-size: var(--fs-sm); }
+  .board-actions { flex-direction: column; }
+}

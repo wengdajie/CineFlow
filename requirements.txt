@@ -10,3 +10,4 @@ passlib[bcrypt]>=1.7.4
 python-multipart>=0.0.9
 feedparser>=6.0
 PyYAML>=6.0
+yt-dlp>=2026.8.19
