@@ -8,11 +8,15 @@ from fastapi import APIRouter, HTTPException, Query
 
 from app.api.deps import CurrentUser, OperatorUser
 from app.schemas.models import (
+    PanCookieImportRequest,
+    PanLoginCompleteRequest,
+    PanLoginStartRequest,
     PanMkdirRequest,
     PanMoveRequest,
     PanRenameRequest,
     PanSaveRequest,
 )
+from app.services import pan_login as login_service
 from app.services import pan_storage as pan_service
 
 router = APIRouter(prefix="/pan", tags=["网盘管理"])
@@ -184,6 +188,69 @@ async def download_url(
     if not result.get("success"):
         raise HTTPException(status_code=400, detail=result.get("message", "换取失败"))
     return result
+
+
+@router.get("/login/providers", summary="网盘登录能力清单")
+def login_providers(user: CurrentUser) -> dict[str, Any]:
+    """哪些网盘能扫码、哪些只能导 Cookie。前端据此渲染，不在前端写死。"""
+    return {"success": True, "data": login_service.providers()}
+
+
+@router.post("/login/qrcode", summary="开始扫码登录")
+async def login_start(payload: PanLoginStartRequest, user: OperatorUser) -> dict[str, Any]:
+    """申请二维码。返回的 token 用于后续轮询。"""
+    result = await login_service.start_qrcode(payload.provider)
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("message", "无法开始登录"))
+    return result
+
+
+@router.get("/login/qrcode/{token}", summary="轮询扫码状态")
+async def login_poll(token: str, user: OperatorUser) -> dict[str, Any]:
+    """查询扫码进度。**响应绝不包含 Cookie**，只给状态。"""
+    result = await login_service.poll_qrcode(token)
+    if not result.get("success"):
+        raise HTTPException(status_code=404, detail=result.get("message", "会话不存在"))
+    return result
+
+
+@router.post("/login/complete", summary="扫码成功后保存凭据")
+async def login_complete(
+    payload: PanLoginCompleteRequest, user: OperatorUser
+) -> dict[str, Any]:
+    """把扫到的凭据写入站点（没有对应站点会自动创建并启用）。"""
+    result = await login_service.complete_qrcode(
+        payload.token, site_id=payload.site_id, site_name=payload.site_name
+    )
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("message", "保存失败"))
+    return result
+
+
+@router.post("/login/cookie", summary="导入 Cookie（可选即时校验）")
+async def login_cookie(
+    payload: PanCookieImportRequest, user: OperatorUser
+) -> dict[str, Any]:
+    """粘贴 Cookie 并**立刻校验**，无效就不写库——避免半夜任务才发现填错。"""
+    result = await login_service.apply_cookie(
+        payload.provider,
+        payload.cookie,
+        site_id=payload.site_id,
+        site_name=payload.site_name,
+        # 恒为 True：对外接口不开放跳过校验的口子（见 schema 注释与 ADR-40）
+        verify=True,
+    )
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("message", "保存失败"))
+    return result
+
+
+@router.post("/login/verify", summary="只校验 Cookie 不保存")
+async def login_verify(
+    payload: PanCookieImportRequest, user: OperatorUser
+) -> dict[str, Any]:
+    """校验但不落库，用于"我这串 Cookie 还有效吗"的自查。"""
+    return await login_service.verify_cookie(payload.provider, payload.cookie)
 
 
 @router.post("/{site_id}/test", summary="网盘连通性测试")

@@ -28,12 +28,14 @@ from app.providers.registry import list_providers, load_builtin_providers  # noq
 load_builtin_providers()
 providers = list_providers()
 names = {p["name"] for p in providers}
-check("Provider 总数 27", len(providers) == 27, f"实际 {len(providers)}")
-check("README 声明 27 个 Provider", "27 个注册 Provider" in README)
+check("Provider 总数 28", len(providers) == 28, f"实际 {len(providers)}")
+check("README 声明 28 个 Provider", "28 个注册 Provider" in README)
 for expected in ("api_generic", "html_generic", "mukaku", "pan_generic",
                  "torznab", "rss", "nyaa", "pansou",
                  # v1.7.0 新增：两个视频站搜索 + 两个资源站
-                 "bilibili", "youtube", "yyets", "wp_film"):
+                 "bilibili", "youtube", "yyets", "wp_film",
+                 # v1.8.0 新增：115 网盘存储
+                 "pan115"):
     check(f"Provider {expected} 已注册", expected in names)
     check(f"README 提及 {expected}", expected in README)
 
@@ -101,8 +103,8 @@ try:
         for m in methods
         if m.lower() in ("get", "post", "patch", "delete", "put")
     )
-    check("API 端点 126 个", total == 126, f"实际 {total}")
-    check("README 声明 126 个端点", "126 个端点" in README and "共 126 个" in README)
+    check("API 端点 136 个", total == 136, f"实际 {total}")
+    check("README 声明 136 个端点", "136 个端点" in README and "共 136 个" in README)
     paths = set(spec["paths"])
     for path in ("/api/v1/users", "/api/v1/users/{user_id}",
                  "/api/v1/system/settings", "/api/v1/system/settings/reset",
@@ -198,8 +200,8 @@ check("README 说明定时任务可改期", "定时任务" in README and "cron" 
 
 # ---- 测试文件 ----
 test_files = sorted(p.name for p in pathlib.Path("tests").glob("test_*.py"))
-check("测试文件 33 个", len(test_files) == 33, str(test_files))
-check("README 声明 33 个测试文件", "33 个测试文件" in README)
+check("测试文件 35 个", len(test_files) == 35, str(test_files))
+check("README 声明 35 个测试文件", "35 个测试文件" in README)
 for name in ("test_custom_sites.py", "test_radar.py", "test_trending.py",
              "test_panstorage.py", "test_chatops.py", "test_nfo.py",
              "test_scraper.py", "test_webdav.py", "test_strm_sync.py",
@@ -214,12 +216,12 @@ for script in ("smoke_test.py", "ui_check.py", "demo_pipeline.py", "live_check.p
     check(f"脚本存在 {script}", pathlib.Path("scripts", script).exists())
     check(f"scripts/README 提及 {script}", script in SCRIPTS_README)
 check("README 声明六个验证脚本", "六个开发期验证工具" in README)
-check("README 测试徽章 706", "tests-706%20passed" in README)
-check("README 版本号 1.7.0", "1.7.0" in README)
+check("README 测试徽章 773", "tests-773%20passed" in README)
+check("README 版本号 1.8.0", "1.8.0" in README)
 version_src = pathlib.Path("app/core/version.py").read_text(encoding="utf-8")
-check("代码版本号为 1.7.0", 'APP_VERSION = "1.7.0"' in version_src)
-check("README 声明 228 项接口用例", "228 项真实 HTTP 接口用例" in README)
-check("scripts/README 声明 228 项", "228 项接口用例" in SCRIPTS_README)
+check("代码版本号为 1.8.0", 'APP_VERSION = "1.8.0"' in version_src)
+check("README 声明 255 项接口用例", "255 项真实 HTTP 接口用例" in README)
+check("scripts/README 声明 255 项", "255 项接口用例" in SCRIPTS_README)
 
 # ---- 服务模块 ----
 for module in ("radar", "discovery", "presets", "trending", "settings_store",
@@ -279,7 +281,8 @@ if changelog.exists():
 
 # ADR 必须覆盖本轮的关键决策
 adr_text = (docs_dir / "04-决策记录.md").read_text(encoding="utf-8")
-for adr in ("ADR-24", "ADR-25", "ADR-26", "ADR-27"):
+for adr in ("ADR-24", "ADR-25", "ADR-26", "ADR-27",
+            "ADR-36", "ADR-37", "ADR-38", "ADR-39", "ADR-40"):
     check(f"决策记录含 {adr}", adr in adr_text)
 check("ADR-24 记录 yt-dlp 合规边界", "只下**公开内容**" in adr_text)
 check("ADR-25 记录公平性靠交错", "轮转交错" in adr_text)
@@ -715,8 +718,16 @@ check("榜单有封面补全", "async def enrich_posters" in
 img_src = pathlib.Path("app/api/routers/images.py").read_text(encoding="utf-8")
 check("图片代理有域名白名单", "ALLOWED_HOSTS" in img_src)
 check("图片代理只允许 http/https", 'parsed.scheme not in ("http", "https")' in img_src)
-check("图片代理校验响应为图片", 'content_type.startswith("image/")' in img_src)
+check("图片代理校验响应为图片", 'candidate_type.startswith("image/")' in img_src)
 check("图片代理防后缀混淆", 'host.endswith("." + suffix)' in img_src)
+# v1.8.0：豆瓣 img9 是坏镜像（恒返回 200+text/html 反爬页），必须排除并轮换重试
+check("图片代理排除豆瓣坏镜像 img9", 'DOUBAN_BAD_MIRRORS' in img_src
+      and '"img9"' in img_src)
+check("图片代理支持豆瓣镜像轮换", "douban_candidates" in img_src
+      and "for candidate in candidates" in img_src)
+check("豆瓣榜单入库前改写坏镜像",
+      "_normalize_cover" in pathlib.Path(
+          "app/providers/metadata/douban_chart.py").read_text(encoding="utf-8"))
 check("前端豆瓣封面走代理", "posterSrc" in app_js and "images/proxy" in app_js)
 
 # ---- v1.7.0：YouTube / Bilibili 搜索 ----
@@ -747,6 +758,108 @@ check("网盘保活任务可解析", '"pan_keepalive": (pan_service.keep_alive_a
 check("网盘保活配置项存在",
       "PAN_KEEPALIVE_INTERVAL_MINUTES" in
       pathlib.Path("app/core/config.py").read_text(encoding="utf-8"))
+
+# ---- v1.8.0：发现榜（豆瓣分类 + B 站排行）----
+douban_chart_src = pathlib.Path("app/providers/metadata/douban_chart.py").read_text(encoding="utf-8")
+check("豆瓣榜走公开 search_subjects", "search_subjects" in douban_chart_src)
+check("豆瓣榜带 Referer（不带会被拒）", "movie.douban.com/explore" in douban_chart_src)
+# 实测踩坑：type 只有 movie/tv，动漫/综艺得靠 tv 的 tag 区分；
+# 且 tag=动画 返回 0 条，必须用「日本动画」
+check("豆瓣榜 tag 用日本动画（动画返 0 条）", "日本动画" in douban_chart_src)
+check("豆瓣榜四个分类齐全",
+      all(k in douban_chart_src for k in ("movie", "tv", "anime", "show")))
+check("豆瓣榜有缓存与退避",
+      "_CACHE" in douban_chart_src and "is_rate_limited" in douban_chart_src)
+
+bili_chart_src = pathlib.Path("app/providers/indexer/bili_chart.py").read_text(encoding="utf-8")
+# 裸请求排行榜返回 code=-352（风控），必须先访问首页拿 buvid3
+check("B 站榜先预热首页破 -352 风控", "www.bilibili.com" in bili_chart_src)
+# rid=13/167 在 ranking/v2 返回 -400：番剧/国创属 PGC，接口不同
+check("B 站 UGC 走 ranking/v2", "ranking/v2" in bili_chart_src)
+check("B 站 PGC 走 pgc/season/rank", "pgc/season/rank" in bili_chart_src)
+check("B 站榜有缓存", "_CACHE" in bili_chart_src)
+
+discover_src = pathlib.Path("app/services/discover.py").read_text(encoding="utf-8")
+check("发现榜 5 个分类（含 bilibili）", '"bilibili"' in discover_src)
+# 相对纯榜单站的价值点：标注本地站点已有多少片源
+check("发现榜标注本地已有片源", "_annotate_local" in discover_src)
+check("发现榜聚合总览", "async def overview" in discover_src)
+# 真实列名是 site（不是 site_name），照抄猜测的列名会静默失效
+check("本地片源统计用真实列名 site", "ResourceRecord.site" in discover_src)
+check("标题解析来自 app.core.meta", "from app.core.meta import" in discover_src)
+
+trending_router = pathlib.Path("app/api/routers/trending.py").read_text(encoding="utf-8")
+for route in ("/discover", "/discover/categories", "/discover/{category}",
+              "/bilibili/{partition}"):
+    check(f"发现榜端点 {route} 存在", f'"{route}"' in trending_router)
+
+# ---- v1.8.0：网盘扫码登录 ----
+panlogin_src = pathlib.Path("app/services/panlogin/__init__.py").read_text(encoding="utf-8")
+check("扫码会话有 TTL", "SESSION_TTL" in panlogin_src)
+# 安全铁律：Cookie 是最高敏感度凭据，给前端的视图绝不能带上
+check("扫码会话视图不含 cookie",
+      '"""给前端的视图：**绝不包含 cookie**。"""' in panlogin_src)
+check("扫码会话只存内存不落库", "_SESSIONS: dict" in panlogin_src)
+check("会话可区分过期与不存在", "async def peek_session" in panlogin_src)
+
+pan115_login_src = pathlib.Path("app/services/panlogin/pan115.py").read_text(encoding="utf-8")
+check("115 扫码用官方 qrcodeapi", "qrcodeapi.115.com" in pan115_login_src)
+check("115 换 Cookie 走 passportapi", "passportapi.115.com" in pan115_login_src)
+
+baidu_login_src = pathlib.Path("app/services/panlogin/baidu.py").read_text(encoding="utf-8")
+check("百度扫码走 passport", "passport.baidu.com" in baidu_login_src)
+# 踩坑：unicast 返回双层 JSON；且 status/errno 的成功值是 0，
+# 用 `x or -1` 会被假值吃掉，必须走 _as_int
+check("百度 unicast 按双层 JSON 解析", "channel_v" in baidu_login_src)
+check("百度整数转换不被 0 假值坑", "def _as_int" in baidu_login_src)
+check("百度扫码失败引导改用 Cookie 导入", "Cookie 导入" in baidu_login_src)
+
+quark_login_src = pathlib.Path("app/services/panlogin/quark.py").read_text(encoding="utf-8")
+# 夸克登录需签名公参（x-pan-client-id/tm/token），逆向属对抗风控，沿用 ADR-34 不做
+check("夸克如实说明不支持扫码", "x-pan-client-id" in quark_login_src)
+check("夸克只有 Cookie 校验（无 start）", "async def start" not in quark_login_src)
+
+pan_login_src = pathlib.Path("app/services/pan_login.py").read_text(encoding="utf-8")
+check("登录能力由后端声明", "PROVIDERS: dict" in pan_login_src)
+check("夸克声明 qrcode=False", '"qrcode": False' in pan_login_src)
+# 校验不过就写库，只会让后续定时任务静默失败
+check("校验不过不写库", "校验不过就不写库" in pan_login_src)
+check("扫码成功后销毁会话", "await drop_session(token)" in pan_login_src)
+
+pan_router = pathlib.Path("app/api/routers/pan.py").read_text(encoding="utf-8")
+for route in ("/login/providers", "/login/qrcode", "/login/qrcode/{token}",
+              "/login/complete", "/login/cookie", "/login/verify"):
+    check(f"网盘登录端点 {route} 存在", f'"{route}"' in pan_router)
+
+pan115_store_src = pathlib.Path("app/providers/panstorage/pan115.py").read_text(encoding="utf-8")
+check("115 存储 Provider 能力全开", "supports_search = True" in pan115_store_src)
+check("115 用 fid 区分文件与目录", "fid" in pan115_store_src)
+
+check("前端有网盘登录弹窗", "panLoginDialog" in app_js)
+check("前端有发现榜画板", "discoverBoard" in app_js)
+check("前端发现榜可切列表", "discoverTable" in app_js)
+
+# ---- v1.8.0：文档必须给出可操作的接入与部署步骤 ----
+site_guide = docs_dir / "10-站点接入指南.md"
+check("站点接入指南存在", site_guide.exists())
+if site_guide.exists():
+    guide_text = site_guide.read_text(encoding="utf-8")
+    check("指南含 torznab 地址拼法", "api/v2.0/indexers" in guide_text)
+    check("指南含 api_generic 字段映射", "api_generic" in guide_text)
+    check("指南含 html_generic 选择器说明", "html_generic" in guide_text)
+    check("指南说明 Cookie 从哪来", "F12" in guide_text or "开发者工具" in guide_text)
+    check("指南含站点诊断读法", "诊断" in guide_text)
+    check("指南含 403 站点手工 Cookie 处置", "403" in guide_text)
+
+ops_text = (docs_dir / "07-运维手册.md").read_text(encoding="utf-8")
+check("运维手册含 docker compose up", "docker compose up -d" in ops_text)
+check("运维手册说明 PUID/PGID 怎么查", "PUID" in ops_text and "id -u" in ops_text)
+# 下载目录不一致会让硬链接失效、变成整份拷贝，是最常见的部署事故
+check("运维手册强调下载目录须与下载器一致", "硬链接" in ops_text)
+check("运维手册含群晖/威联通路径说明", "/volume1" in ops_text)
+check("运维手册含健康检查", "/api/health" in ops_text)
+check("运维手册含备份迁移", "备份" in ops_text)
+
 
 print()
 print("=" * 60)

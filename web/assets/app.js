@@ -102,6 +102,10 @@
     pulse: '<path d="M2.5 12.5h4L9 7l3.5 10L15 12h6.5"/>',
     trophy: '<path d="M7 4h10v4a5 5 0 0 1-10 0z"/><path d="M7 5.5H4.5A3.5 3.5 0 0 0 8 9"/><path d="M17 5.5h2.5A3.5 3.5 0 0 1 16 9"/><path d="M12 13v4"/><path d="M8.5 20h7"/>',
     layers: '<path d="M12 3.5 3.5 8 12 12.5 20.5 8z"/><path d="m3.5 12.5 8.5 4.5 8.5-4.5"/><path d="m3.5 16.5 8.5 4.5 8.5-4.5"/>',
+    qr: '<rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><path d="M13.5 13.5h3v3h-3zM17.5 17.5h3v3h-3z"/>',
+    key: '<circle cx="8" cy="12" r="4"/><path d="M12 12h9"/><path d="M17 12v3.5M20 12v2.5"/>',
+    back: '<path d="M20 12H4.5"/><path d="M10.5 6 4.5 12l6 6"/>',
+    user: '<circle cx="12" cy="8" r="4"/><path d="M4.5 20.5c0-4 3.4-6.5 7.5-6.5s7.5 2.5 7.5 6.5"/>',
   };
 
   function icon(name, cls) {
@@ -158,6 +162,14 @@
     return h
       ? h + ":" + String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0")
       : m + ":" + String(s).padStart(2, "0");
+  };
+  /** 大数字压成中文量级：847421 → 84.7万。B 站播放量动辄上亿，
+      直接铺出来会把卡片撑破，也没人读得出位数。 */
+  const fmtCompact = (value) => {
+    const n = Number(value) || 0;
+    if (n >= 100000000) return (n / 100000000).toFixed(1).replace(/\.0$/, "") + "亿";
+    if (n >= 10000) return (n / 10000).toFixed(1).replace(/\.0$/, "") + "万";
+    return String(n);
   };
   /** 取路径最后一段（Windows/Unix 分隔符都吃）。 */
   const baseName = (value) => {
@@ -1213,7 +1225,15 @@
   }
 
   // ---------------- 热度排行 ----------------
-  const trendingState = { tab: "resources", days: 14, mediaType: "", view: "board" };
+  const trendingState = {
+    tab: "discover",
+    days: 14,
+    mediaType: "",
+    view: "board",
+    // 发现榜当前分类（电影/电视剧/动漫/综艺/Bilibili）与 B 站二级分区
+    discoverCat: "movie",
+    biliPartition: "all",
+  };
 
   function subscribeFromTrending(row) {
     modal(
@@ -1434,6 +1454,190 @@
     );
   }
 
+  /** 发现榜画板：来源是豆瓣/B 站，字段与本地资源榜不同，单独渲染。
+
+      与 rankingBoard 的区别：这里没有"做种数/站点数"，而是有评分、
+      更新进度、以及**本地是否已有片源**（local_count）——后者是本项目
+      相对纯榜单站的价值：榜单上直接看出哪几部你的站点已经能下了。
+  */
+  function discoverBoard(data) {
+    const items = data.items || [];
+    if (!items.length) {
+      return el("div", { class: "pad" }, [
+        emptyBox(data.message || "暂无数据", "flame"),
+      ]);
+    }
+    const isBili = data.source === "bilibili";
+    return el(
+      "div",
+      { class: "board" },
+      items.map((row) => {
+        const hasLocal = (row.local_count || 0) > 0;
+        const card = el("div", { class: "board-card", tabindex: "0", role: "button" }, [
+          el("div", { class: "board-cover" }, [
+            posterBox(row),
+            el("div", { class: "board-badges" }, [
+              el("span", {
+                class: "board-rank" + (row.rank <= 3 ? " top" : ""),
+                text: "#" + row.rank,
+              }),
+              row.rating ? el("span", { class: "board-score", text: String(row.rating) }) : null,
+            ]),
+            // 已有片源是最重要的信息，做成醒目角标
+            hasLocal
+              ? el("div", { class: "board-flag" }, [
+                  icon("check", "sm"),
+                  el("span", { text: "已有 " + row.local_count + " 条" }),
+                ])
+              : null,
+          ]),
+          el("div", { class: "board-body" }, [
+            el("div", { class: "board-title", title: row.title, text: row.title }),
+            el("div", { class: "board-sub", text:
+              [
+                isBili ? row.uploader : typeLabel(row.media_type),
+                row.episodes_info || null,
+                isBili && row.duration ? fmtDuration(row.duration) : null,
+              ].filter(Boolean).join(" · ") || (isBili ? "Bilibili" : "豆瓣") }),
+            el("div", { class: "board-foot" }, [
+              el("span", { class: "tiny dim", text: isBili
+                ? fmtCompact(row.heat) + " 播放"
+                : (row.rating ? row.rating + " 分" : "暂无评分") }),
+              hasLocal
+                ? el("span", { class: "tiny dim", text: (row.local_sites || []).slice(0, 2).join("/") })
+                : el("span", { class: "tiny dim", text: "未入库" }),
+            ]),
+          ]),
+          el("div", { class: "board-actions" }, [
+            iconButton("订阅", "star", (event) => {
+              event.stopPropagation();
+              subscribeFromTrending({
+                title: row.title,
+                media_type: row.media_type || (isBili ? "tv" : "movie"),
+                season: 1,
+              });
+            }, "sm primary"),
+            iconButton("搜资源", "search", (event) => {
+              event.stopPropagation();
+              searchState.keyword = row.title;
+              searchState.items = [];
+              go("search");
+            }, "sm ghost"),
+          ]),
+        ]);
+        const open = () => discoverDetail(row, data);
+        card.addEventListener("click", open);
+        card.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            open();
+          }
+        });
+        return card;
+      })
+    );
+  }
+
+  /** 发现榜列表视图。 */
+  function discoverTable(data) {
+    const isBili = data.source === "bilibili";
+    return table(
+      [
+        { title: "#", render: (row) => rankCell(row.rank) },
+        {
+          title: "作品",
+          render: (row) =>
+            el("div", {}, [
+              el("div", { class: "truncate", title: row.title, text: row.title }),
+              el("div", { class: "cell-sub", text:
+                [isBili ? row.uploader : typeLabel(row.media_type), row.episodes_info]
+                  .filter(Boolean).join(" · ") }),
+            ]),
+        },
+        isBili
+          ? { title: "播放", class: "num", render: (row) => fmtCompact(row.heat) }
+          : { title: "评分", class: "num", render: (row) => row.rating || "-" },
+        {
+          title: "本地片源",
+          render: (row) =>
+            (row.local_count || 0) > 0
+              ? el("span", { class: "tag brand", text: row.local_count + " 条" })
+              : el("span", { class: "tiny dim", text: "未入库" }),
+        },
+        {
+          title: "操作",
+          render: (row) =>
+            el("div", { class: "row tight" }, [
+              iconButton("订阅", "star", () => subscribeFromTrending({
+                title: row.title,
+                media_type: row.media_type || (isBili ? "tv" : "movie"),
+                season: 1,
+              }), "sm"),
+              iconButton("搜资源", "search", () => {
+                searchState.keyword = row.title;
+                searchState.items = [];
+                go("search");
+              }, "sm ghost"),
+            ]),
+        },
+      ],
+      data.items || [],
+      data.message || "暂无数据"
+    );
+  }
+
+  function discoverDetail(row, data) {
+    const isBili = data.source === "bilibili";
+    const info = (label, value) =>
+      el("div", { class: "kv-item" }, [
+        el("div", { class: "kv-label", text: label }),
+        el("div", { text: value }),
+      ]);
+    let close = () => {};
+    close = panelModal(
+      row.title,
+      isBili ? "来自 Bilibili 排行榜" : "来自豆瓣榜单",
+      el("div", {}, [
+        el("div", { class: "kv" }, [
+          info("排名", "#" + row.rank),
+          info("评分", row.rating ? String(row.rating) : "暂无"),
+          isBili ? info("播放量", fmtCompact(row.heat)) : info("类型", typeLabel(row.media_type)),
+          isBili ? info("UP 主", row.uploader || "-") : info("更新", row.episodes_info || "-"),
+          info("本地片源", (row.local_count || 0) > 0 ? row.local_count + " 条" : "未入库"),
+          info("来源站点", (row.local_sites || []).join("、") || "-"),
+        ]),
+        row.desc ? el("div", { class: "divider" }) : null,
+        row.desc ? el("div", { class: "dim tiny", text: row.desc }) : null,
+        el("div", { class: "divider" }),
+        el("div", { class: "row tight" }, [
+          iconButton("搜索资源", "search", () => {
+            searchState.keyword = row.title;
+            searchState.items = [];
+            close();
+            go("search");
+          }, "sm primary"),
+          iconButton("创建订阅", "star", () => {
+            subscribeFromTrending({
+              title: row.title,
+              media_type: row.media_type || (isBili ? "tv" : "movie"),
+              season: 1,
+            });
+          }, "sm"),
+          row.douban_url || row.url
+            ? el("a", {
+                class: "btn sm ghost",
+                href: row.douban_url || row.url,
+                target: "_blank",
+                rel: "noreferrer noopener",
+                text: isBili ? "去 B 站看" : "去豆瓣看",
+              })
+            : null,
+        ]),
+      ]),
+      true
+    );
+  }
+
   /** 按当前视图模式渲染榜单（画板 / 列表）。 */
   function rankingView(items, opts) {
     return trendingState.view === "board"
@@ -1496,7 +1700,26 @@
   }
 
   async function pageTrending() {
-    shell(loading(), "热度排行", "多维度热度榜：资源 / 实时 / 热词 / 站点");
+    shell(loading(), "热度排行", "发现榜（豆瓣/B 站）+ 本地资源热度");
+
+    // 分类与 B 站分区由后端下发，前端不写死；只在首次进页面时拉一次。
+    // 拉失败不阻塞页面——用一份兜底分类，至少还能看电影榜。
+    if (!store.discoverCategories) {
+      try {
+        const meta = await api("/trending/discover/categories");
+        store.discoverCategories = meta.data.categories || [];
+        store.biliPartitions = meta.data.bili_partitions || [];
+      } catch (error) {
+        store.discoverCategories = [
+          { key: "movie", label: "电影" },
+          { key: "tv", label: "电视剧" },
+          { key: "anime", label: "动漫" },
+          { key: "show", label: "综艺" },
+          { key: "bilibili", label: "Bilibili" },
+        ];
+        store.biliPartitions = [{ key: "all", label: "全站" }];
+      }
+    }
 
     const body = el("div", {});
     const meta = el("div", { class: "dim tiny" });
@@ -1504,6 +1727,50 @@
     const load = async () => {
       body.replaceChildren(loading());
       try {
+        if (trendingState.tab === "discover") {
+          const cat = trendingState.discoverCat;
+          const isBili = cat === "bilibili";
+          // Bilibili 页签支持二级分区（番剧/国创/电影…），走专门的分区端点
+          const path = isBili
+            ? "/trending/bilibili/" + trendingState.biliPartition + "?limit=30"
+            : "/trending/discover/" + cat + "?limit=30";
+          const response = await api(path);
+          const data = response.data;
+          const hit = (data.items || []).filter((r) => (r.local_count || 0) > 0).length;
+          meta.textContent =
+            (isBili ? "Bilibili · " : "豆瓣 · ") + data.label + " " + data.count + " 条" +
+            (hit ? "，其中 " + hit + " 部你的站点已有片源" : "") +
+            (data.message ? " · " + data.message : "");
+          body.replaceChildren(
+            el("div", { class: "card flush" }, [
+              el("div", { class: "card-head" }, [
+                el("h3", {}, [
+                  icon(isBili ? "video" : "flame", "sm"),
+                  el("span", { text: data.label + "榜" }),
+                ]),
+                el("span", { class: "tag brand", text: isBili ? "Bilibili" : "豆瓣" }),
+              ]),
+              isBili
+                ? el("div", { class: "pad-sm" }, [
+                    segment(
+                      (store.biliPartitions || [{ value: "all", label: "全站" }]).map((p) => ({
+                        value: p.key || p.value,
+                        label: p.label,
+                      })),
+                      trendingState.biliPartition,
+                      (value) => {
+                        trendingState.biliPartition = value;
+                        load();
+                      }
+                    ),
+                  ])
+                : null,
+              trendingState.view === "board" ? discoverBoard(data) : discoverTable(data),
+            ])
+          );
+          return;
+        }
+
         if (trendingState.tab === "live") {
           const response = await api(
             "/trending/live?limit=25&limit_per_site=40" +
@@ -1612,6 +1879,7 @@
 
     const tabs = segment(
       [
+        { value: "discover", label: "发现榜" },
         { value: "resources", label: "资源热榜" },
         { value: "live", label: "实时热榜" },
         { value: "keywords", label: "搜索热词" },
@@ -1665,7 +1933,12 @@
     );
 
     // 热词榜/站点榜是「关键词」和「站点」维度，没有封面可画，切了也没意义
-    const worksTab = trendingState.tab === "resources" || trendingState.tab === "live";
+    const worksTab =
+      trendingState.tab === "resources" ||
+      trendingState.tab === "live" ||
+      trendingState.tab === "discover";
+    // 发现榜数据来自豆瓣/B 站的实时榜，不存在"统计窗口"与本地类型过滤
+    const localTab = trendingState.tab !== "discover";
 
     const filterBar = el("div", { class: "card" }, [
       el("div", { class: "row center" }, [
@@ -1679,14 +1952,34 @@
               views,
             ])
           : null,
-        el("div", { style: "flex:0 0 auto" }, [
-          el("div", { class: "dim tiny", style: "margin-bottom:6px", text: "统计窗口" }),
-          windows,
-        ]),
-        el("div", { style: "flex:0 0 auto" }, [
-          el("div", { class: "dim tiny", style: "margin-bottom:6px", text: "类型" }),
-          types,
-        ]),
+        trendingState.tab === "discover"
+          ? el("div", { style: "flex:0 0 auto" }, [
+              el("div", { class: "dim tiny", style: "margin-bottom:6px", text: "分类" }),
+              segment(
+                (store.discoverCategories || []).map((c) => ({
+                  value: c.key,
+                  label: c.label,
+                })),
+                trendingState.discoverCat,
+                (value) => {
+                  trendingState.discoverCat = value;
+                  pageTrending();
+                }
+              ),
+            ])
+          : null,
+        localTab
+          ? el("div", { style: "flex:0 0 auto" }, [
+              el("div", { class: "dim tiny", style: "margin-bottom:6px", text: "统计窗口" }),
+              windows,
+            ])
+          : null,
+        localTab
+          ? el("div", { style: "flex:0 0 auto" }, [
+              el("div", { class: "dim tiny", style: "margin-bottom:6px", text: "类型" }),
+              types,
+            ])
+          : null,
       ]),
       el("div", { class: "divider" }),
       meta,
@@ -3451,6 +3744,186 @@
   /** 网盘浏览器的当前位置（页面级状态，切页后保留便于来回跳转）。 */
   const panState = { siteId: null, path: "/" };
 
+  /** 网盘账号登录入口：扫码（115/百度）或导入 Cookie（含夸克）。
+
+      能力清单由后端 /pan/login/providers 下发，前端**不写死**哪个盘能扫码
+      —— 与网盘能力位（capabilities）同一原则，将来新增网盘前端零改动。
+  */
+  async function panLoginDialog(onDone) {
+    let providers = [];
+    try {
+      const response = await api("/pan/login/providers");
+      providers = response.data || [];
+    } catch (error) {
+      toast(error.message, "err");
+      return;
+    }
+    if (!providers.length) {
+      toast("没有可用的登录方式", "err");
+      return;
+    }
+
+    const body = el("div", {});
+    const close = panelModal(
+      "登录网盘账号",
+      "扫码登录后凭据会自动写入站点并启用；不支持扫码的网盘可导入 Cookie",
+      body,
+      true
+    );
+
+    const renderPicker = () => {
+      body.replaceChildren(
+        el("div", { class: "grid" },
+          providers.map((p) =>
+            el("div", { class: "card" }, [
+              el("div", { class: "row center between" }, [
+                el("div", {}, [
+                  el("div", { class: "row tight center" }, [
+                    icon("cloud", "sm"),
+                    el("strong", { text: p.label }),
+                    p.qrcode
+                      ? el("span", { class: "tag brand tiny", text: "支持扫码" })
+                      : el("span", { class: "tag tiny", text: "仅 Cookie" }),
+                  ]),
+                  el("div", { class: "tiny dim", style: "margin-top:4px", text: p.note }),
+                ]),
+                el("div", { class: "row tight" }, [
+                  p.qrcode
+                    ? iconButton("扫码登录", "qr", () => startQr(p), "sm primary")
+                    : null,
+                  p.cookie
+                    ? iconButton("导入 Cookie", "key", () => importCookie(p), "sm ghost")
+                    : null,
+                ]),
+              ]),
+            ])
+          )
+        )
+      );
+    };
+
+    /** 扫码：拉二维码后轮询状态，成功即落库。 */
+    const startQr = async (provider) => {
+      body.replaceChildren(loading());
+      let session;
+      try {
+        const response = await api("/pan/login/qrcode", {
+          method: "POST",
+          body: { provider: provider.provider },
+        });
+        session = response.data;
+      } catch (error) {
+        body.replaceChildren(
+          el("div", { class: "card" }, [
+            emptyBox("无法获取二维码：" + error.message, "alert"),
+            el("div", { class: "row tight" }, [
+              iconButton("返回", "back", renderPicker, "sm ghost"),
+            ]),
+          ])
+        );
+        return;
+      }
+
+      const statusLine = el("div", { class: "dim tiny", text: session.message || "等待扫码…" });
+      // 二维码图走后端图片代理：115/百度的二维码接口都校验 Referer
+      const qrImg = el("img", {
+        src: API + "/images/proxy?url=" + encodeURIComponent(session.qr_image),
+        alt: "登录二维码",
+        style: "width:200px;height:200px;background:#fff;padding:8px;border-radius:12px",
+      });
+      qrImg.addEventListener("error", () => {
+        qrImg.replaceWith(
+          el("div", { class: "tiny dim", style: "max-width:220px;word-break:break-all" }, [
+            el("div", { text: "二维码图片加载失败，请用手机打开下面的地址：" }),
+            el("div", { text: session.qr_content || "-" }),
+          ])
+        );
+      });
+
+      let stopped = false;
+      const stop = () => { stopped = true; };
+
+      body.replaceChildren(
+        el("div", { class: "card" }, [
+          el("div", { class: "col center", style: "align-items:center;gap:12px" }, [
+            el("strong", { text: "请用「" + provider.label + "」App 扫码" }),
+            qrImg,
+            statusLine,
+            el("div", { class: "row tight" }, [
+              iconButton("返回", "back", () => { stop(); renderPicker(); }, "sm ghost"),
+              iconButton("换个二维码", "refresh", () => { stop(); startQr(provider); }, "sm ghost"),
+            ]),
+          ]),
+        ])
+      );
+
+      // 轮询：后端对上游是长轮询，这里间隔 2 秒足够，不会打爆接口
+      const poll = async () => {
+        if (stopped) return;
+        try {
+          const response = await api("/pan/login/qrcode/" + session.token);
+          const data = response.data;
+          statusLine.textContent = data.message || data.status;
+          if (data.status === "success") {
+            stopped = true;
+            const saved = await api("/pan/login/complete", {
+              method: "POST",
+              body: { token: session.token },
+            });
+            toast(saved.message || "登录成功", "ok");
+            close();
+            if (onDone) onDone();
+            return;
+          }
+          if (data.status === "expired" || data.status === "failed") {
+            stopped = true;
+            statusLine.textContent = data.message || "二维码已失效，请重新获取";
+            return;
+          }
+        } catch (error) {
+          // 单次轮询失败不终止整个流程（可能只是网络抖动）
+          statusLine.textContent = "查询状态失败，重试中…";
+        }
+        setTimeout(poll, 2000);
+      };
+      setTimeout(poll, 1500);
+    };
+
+    /** 导入 Cookie：保存前先校验，无效不写库。 */
+    const importCookie = (provider) => {
+      close();
+      modal(
+        "导入「" + provider.label + "」Cookie",
+        [
+          {
+            key: "cookie",
+            label: "完整 Cookie",
+            type: "textarea",
+            placeholder: "浏览器登录后 F12 → Network → 任一请求 → 复制 Cookie 请求头",
+            hint: provider.note,
+          },
+          { key: "site_name", label: "站点名称（留空自动生成）", placeholder: provider.label },
+        ],
+        async (values) => {
+          const result = await api("/pan/login/cookie", {
+            method: "POST",
+            body: {
+              provider: provider.provider,
+              cookie: values.cookie,
+              site_name: values.site_name || null,
+            },
+          });
+          toast(result.message || "已保存", "ok");
+          if (onDone) onDone();
+        },
+        "校验并保存",
+        { lead: "会先调接口验证有效性，校验不过就不保存——避免半夜任务才发现填错。" }
+      );
+    };
+
+    renderPicker();
+  }
+
   function quotaCard(item, onPick, active) {
     const q = item.quota || {};
     const percent = Number(q.percent) || 0;
@@ -3913,6 +4386,8 @@
         : "尚未启用网盘存储",
       [
         saveButton,
+        // 扫码登录：比让用户去浏览器抠 Cookie 友好得多
+        iconButton("登录网盘", "user", () => panLoginDialog(() => pageStorage()), "ghost"),
         // 网盘 Cookie 会静默过期，提供一键巡检比等任务失败再排查高效得多
         iconButton("凭据保活巡检", "shield", async () => {
           try {

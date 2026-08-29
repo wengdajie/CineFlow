@@ -312,6 +312,34 @@ class PanMoveRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
+# ---------------- 网盘登录 ----------------
+class PanLoginStartRequest(BaseModel):
+    """开始一次扫码登录。"""
+
+    provider: str = Field(description="pan115 / baidu")
+
+
+class PanLoginCompleteRequest(BaseModel):
+    """扫码成功后把凭据落库。"""
+
+    token: str = Field(min_length=1, description="扫码会话 token")
+    site_id: int | None = Field(default=None, description="写入已有站点；留空则自动创建")
+    site_name: str | None = Field(default=None, description="自动创建时的站点名")
+
+
+class PanCookieImportRequest(BaseModel):
+    """导入 Cookie（夸克等不支持扫码的网盘走这条）。"""
+
+    provider: str = Field(description="pan115 / baidu / quark")
+    cookie: str = Field(min_length=1, description="浏览器完整 Cookie")
+    site_id: int | None = Field(default=None)
+    site_name: str | None = Field(default=None)
+    # 故意**不提供** verify 开关：带上 verify=false 就能把任意字符串
+    # 当 Cookie 写进站点记录，等于绕过 ADR-40（校验不过不写库）。
+    # 服务层仍保留 verify 参数，但只给扫码流程内部用——
+    # 扫码本身已证明凭据有效，再校验一次反而更容易撞风控。
+
+
 # ---------------- STRM 同步 ----------------
 class StrmSyncRequest(BaseModel):
     """手动触发一次 STRM 同步。site_id 为空表示全部网盘。"""

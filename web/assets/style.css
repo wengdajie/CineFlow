@@ -831,6 +831,9 @@ tbody tr:last-child td { border-bottom: 0; }
 .pan-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--sp-3); }
 .pan-name { font-weight: 600; }
 .row.between { justify-content: space-between; }
+/* 纵向排列容器（扫码弹窗等需要竖着堆） */
+.col { display: flex; flex-direction: column; gap: var(--sp-3); }
+.col.center { align-items: center; }
 
 .crumbs { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; font-size: var(--fs-sm); }
 .crumb {
@@ -1090,6 +1093,28 @@ select.input.sm {
   font-weight: 700;
   backdrop-filter: blur(6px);
 }
+
+/* 「已有片源」角标：发现榜最重要的一条信息（这部片你能不能马上下），
+   所以放在封面左下角、用品牌色实底，比右上角的评分更抢眼。 */
+.board-flag {
+  position: absolute;
+  left: var(--sp-2);
+  bottom: var(--sp-2);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: var(--r-full);
+  background: var(--brand);
+  color: #fff;
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  box-shadow: 0 2px 8px rgba(8, 10, 14, 0.35);
+}
+.board-flag .icon { width: 12px; height: 12px; }
+
+/* B 站二级分区选择器所在的窄内边距容器 */
+.pad-sm { padding: var(--sp-3) var(--sp-4) 0; }
 
 /* 热度条压在封面底部：不额外占垂直空间，又能一眼比较 */
 .board-heat {

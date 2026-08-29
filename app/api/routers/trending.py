@@ -8,6 +8,7 @@ from fastapi import APIRouter, Query
 
 from app.api.deps import CurrentUser
 from app.schemas.enums import MediaType, ResourceKind
+from app.services import discover as discover_service
 from app.services import trending as trending_service
 
 router = APIRouter(prefix="/trending", tags=["热度排行"])
@@ -101,4 +102,52 @@ async def douban_suggest(
         "total": len(items),
         "rate_limited": douban.is_rate_limited(),
         "items": items,
+    }
+
+
+@router.get("/discover", summary="发现榜总览（豆瓣四分类 + B 站，一次并发拉全部）")
+async def discover_overview(
+    user: CurrentUser,
+    limit: int = Query(12, ge=1, le=50, description="每个分类取几条"),
+) -> dict[str, Any]:
+    """首屏用：一次拿到全部分类榜，避免前端串行请求 5 次。"""
+    return {"success": True, "data": await discover_service.overview(limit=limit)}
+
+
+@router.get("/discover/categories", summary="发现榜分类清单（含 B 站分区）")
+def discover_categories(user: CurrentUser) -> dict[str, Any]:
+    """前端据此渲染页签，新增分类无需改前端。"""
+    return {
+        "success": True,
+        "data": {
+            "categories": discover_service.categories(),
+            "bili_partitions": discover_service.bili_partitions(),
+        },
+    }
+
+
+@router.get("/discover/{category}", summary="单个分类榜（电影/电视剧/动漫/综艺/Bilibili）")
+async def discover_chart(
+    category: str,
+    user: CurrentUser,
+    limit: int = Query(24, ge=1, le=100),
+) -> dict[str, Any]:
+    """切页签时只拉一个分类，比 overview 快。
+
+    未知分类返回 success=True + 空 items + 可读 message，
+    而不是 404 —— 榜单页拿不到数据时应当显示"暂无"而非整页报错。
+    """
+    return {"success": True, "data": await discover_service.chart(category, limit=limit)}
+
+
+@router.get("/bilibili/{partition}", summary="B 站分区榜（番剧/国创/电影/电视剧…）")
+async def bili_partition_chart(
+    partition: str,
+    user: CurrentUser,
+    limit: int = Query(24, ge=1, le=100),
+) -> dict[str, Any]:
+    """Bilibili 页签内的二级分区切换。"""
+    return {
+        "success": True,
+        "data": await discover_service.bili_categories_chart(partition, limit=limit),
     }

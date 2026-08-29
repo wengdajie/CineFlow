@@ -239,6 +239,55 @@ call("GET", "/images/proxy?url=" + urllib.parse.quote("https://evil.example.com/
      expect=(400,))
 
 print("\n" + "=" * 70)
+print("4e) 发现榜：豆瓣四分类 + Bilibili（v1.8.0）")
+print("=" * 70)
+# 分类清单：前端据此渲染页签，所以它必须先对
+cats = call("GET", "/trending/discover/categories", token=token)
+cat_data = cats.get("data") or {}
+cat_keys = [c.get("key") for c in (cat_data.get("categories") or [])]
+print(f"       分类 {len(cat_keys)} 个：{cat_keys}")
+assert len(cat_keys) == 5, f"发现榜应有 5 个分类，实际 {cat_keys}"
+assert "bilibili" in cat_keys, "缺少 Bilibili 分类"
+parts = cat_data.get("bili_partitions") or []
+print(f"       B 站二级分区 {len(parts)} 个：{[p.get('key') for p in parts]}")
+
+# 总览：一次并发拉全部分类，首屏用
+dv = call("GET", "/trending/discover?limit=4", token=token)
+charts = (dv.get("data") or {}).get("charts") or []
+print(f"       总览返回 {len(charts)} 个榜")
+for chart in charts:
+    print(
+        f"         {chart.get('label')!s:10} {chart.get('count')} 条"
+        f" 来源={chart.get('source')}"
+    )
+
+# 逐个分类单拉（切页签的路径）。外部榜单可能限流/被风控，
+# 所以只断言 HTTP 200 + 结构正确，不断言一定有数据——否则门禁会随外网状态飘。
+for category in ("movie", "tv", "anime", "show", "bilibili"):
+    one = call("GET", f"/trending/discover/{category}?limit=6", token=token)
+    body = one.get("data") or {}
+    rows = items_of(body)
+    print(f"       {category:9} {len(rows):3} 条  {str(body.get('message') or '')[:40]}")
+    for row in rows[:2]:
+        print(
+            f"         {str(row.get('title'))[:22]:24} 评分={row.get('rating')}"
+            f" 封面={'有' if row.get('poster') else '无'}"
+            f" 本地片源={row.get('local_count')}"
+        )
+
+# B 站二级分区：番剧/国创走的是 PGC 接口（与 UGC 分区不同），必须都能通
+for partition in ("all", "bangumi", "guochuang", "douga"):
+    call("GET", f"/trending/bilibili/{partition}?limit=5", token=token)
+
+# 未知分类应优雅降级：200 + 空列表 + 可读提示，而不是 404 让整页报错
+unknown = call("GET", "/trending/discover/nosuchcategory?limit=5", token=token)
+assert not items_of(unknown.get("data") or {}), "未知分类不该返回条目"
+print(f"       未知分类降级提示：{str((unknown.get('data') or {}).get('message'))[:40]}")
+call("GET", "/trending/bilibili/nosuchpartition?limit=5", token=token)
+# 发现榜需要登录（榜单里带本地片源统计，属于用户数据）
+call("GET", "/trending/discover", expect=(401,))
+
+print("\n" + "=" * 70)
 print("5) 搜索（无启用站点时应优雅返回空）")
 print("=" * 70)
 search = call("GET", "/search?keyword=" + urllib.parse.quote("庆余年") + "&media_type=tv", token=token)
@@ -837,6 +886,59 @@ for expected in ("site_health", "ranking"):
 call("PUT", "/schedules/site_health", token=token,
      body={"cron": "这不是 cron"}, expect=(400, 422))
 call("POST", "/schedules/site_health/reset", token=token)
+
+print("\n" + "=" * 70)
+print("9c) 网盘账号登录：能力声明 / 扫码会话 / Cookie 校验（v1.8.0）")
+print("=" * 70)
+# 能力清单：夸克不支持扫码这件事由后端声明，前端不写死
+provs = call("GET", "/pan/login/providers", token=token)
+prov_rows = provs.get("data") or []
+by_name = {p.get("provider"): p for p in prov_rows}
+print(f"       登录能力 {len(prov_rows)} 项")
+for p in prov_rows:
+    print(
+        f"         {p.get('label')!s:10} 扫码={'✓' if p.get('qrcode') else '✗'}"
+        f" Cookie={'✓' if p.get('cookie') else '✗'}  {str(p.get('note'))[:40]}"
+    )
+assert by_name.get("pan115", {}).get("qrcode") is True, "115 应支持扫码"
+assert by_name.get("baidu", {}).get("qrcode") is True, "百度应支持扫码"
+# 夸克登录需签名公参，逆向属对抗风控，明确不做（ADR-38）
+assert by_name.get("quark", {}).get("qrcode") is False, "夸克不应声明支持扫码"
+assert all(p.get("cookie") for p in prov_rows), "所有网盘都应支持 Cookie 导入"
+
+# 夸克要扫码必须被拒（而不是给一个用不了的二维码）
+call("POST", "/pan/login/qrcode", token=token, body={"provider": "quark"}, expect=(400,))
+call("POST", "/pan/login/qrcode", token=token, body={"provider": "nosuchpan"}, expect=(400,))
+# 假 token 轮询 → 404（会话只存内存，不存在就是不存在）
+call("GET", "/pan/login/qrcode/definitely-not-a-real-token", token=token, expect=(404,))
+# 没扫码就想保存 → 必须拒绝，不能写一份空凭据进库
+call("POST", "/pan/login/complete", token=token,
+     body={"token": "definitely-not-a-real-token"}, expect=(400,))
+# 空 Cookie 不写库（min_length=1 由 schema 挡掉 → 422）
+call("POST", "/pan/login/cookie", token=token,
+     body={"provider": "quark", "cookie": "   "}, expect=(400, 422))
+# 明显无效的 Cookie → 拒绝写库（校验不过不落库，ADR-40）
+call("POST", "/pan/login/cookie", token=token,
+     body={"provider": "quark", "cookie": "totally=invalid"}, expect=(400,))
+# 对外接口**不接受** verify=false：否则带上它就能把任意字符串写成 Cookie，
+# 把 ADR-40 直接绕过去。多余字段被忽略，校验照样执行 → 仍是 400。
+call("POST", "/pan/login/cookie", token=token,
+     body={"provider": "quark", "cookie": "totally=invalid", "verify": False},
+     expect=(400,))
+# 只校验不保存：无论有效与否都是 200，success 字段给结论
+vr = call("POST", "/pan/login/verify", token=token,
+          body={"provider": "quark", "cookie": "totally=invalid"})
+print(f"       Cookie 自查结论 success={vr.get('success')} {str(vr.get('message'))[:40]}")
+call("POST", "/pan/login/verify", token=token,
+     body={"provider": "nosuchpan", "cookie": "x=1"})
+# 登录类接口必须要鉴权（凭据写入是高危操作，至少 operator）
+call("GET", "/pan/login/providers", expect=(401,))
+call("POST", "/pan/login/qrcode", body={"provider": "pan115"}, expect=(401,))
+call("POST", "/pan/login/cookie",
+     body={"provider": "quark", "cookie": "x=1"}, expect=(401,))
+# 注意：这里**不能**用 viewer_token 测 403 边界——§9j 的角色测试已经把
+# cf_smoke_viewer 提权成 operator 了，此时它不再是只读账号。
+# 网盘登录接口的 operator 门槛由 §9j 的通用 403 边界用例覆盖。
 
 print("\n" + "=" * 70)
 print("10) 清理测试数据")

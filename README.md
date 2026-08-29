@@ -9,8 +9,8 @@
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)](#-docker-部署推荐)
-[![Tests](https://img.shields.io/badge/tests-706%20passed-brightgreen)](#-测试)
-[![Version](https://img.shields.io/badge/version-1.7.0-blue)](docs/08-变更日志.md)
+[![Tests](https://img.shields.io/badge/tests-773%20passed-brightgreen)](#-测试)
+[![Version](https://img.shields.io/badge/version-1.8.0-blue)](docs/08-变更日志.md)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 </div>
@@ -295,6 +295,42 @@ heat = min(做种数, 5000) ^ 0.5 × 3      # 做种数（开方避免头部通�
 **响应 content-type 必须是 `image/*`**。它刻意不挂登录校验——`<img>`
 标签带不了 `Authorization` 头，加了图就永远加载不出来。
 
+#### 🧭 发现榜：豆瓣四分类 + Bilibili（v1.8.0）
+
+上面那些榜单回答的是「**我的站点上什么资源最好下**」。
+但你还需要另一个问题的答案：「**外面现在什么剧火**」——哪怕它一条片源都还没有。
+所以 v1.8.0 新增了「发现」榜，**与热度排行并存而不是替换**（口径不同，混在一起就都读不懂了，见 ADR-36）：
+
+| 页签 | 数据来源 | 说明 |
+|---|---|---|
+| 电影 | 豆瓣正在热映/热门 | `type=movie` |
+| 电视剧 | 豆瓣国产剧热门 | `type=tv&tag=国产剧` |
+| 动漫 | 豆瓣日本动画热门 | `type=tv&tag=日本动画` |
+| 综艺 | 豆瓣综艺热门 | `type=tv&tag=综艺` |
+| Bilibili | B 站排行榜 | 内含 **8 个二级分区**：全站 / 番剧 / 国创 / 动画 / 影视 / 电视剧 / 纪录片 / 娱乐 |
+
+画板（封面墙）↔ 列表两种视图可切，点进去能直接订阅。
+
+**这个榜相对纯榜单站的价值**：每一条都会标注「**你的站点已有 N 条片源**」
+（封面左下角的品牌色角标）。榜单站只能告诉你什么火，
+CineFlow 还能同时告诉你**这部现在能不能立刻下**——
+把「外部热度」和「本地可得性」并排放在一个卡片上。
+
+实测数据（都是真实返回，不是构造的）：动漫榜「死神 千年血战篇」9.2 分、
+综艺榜「花儿与少年·丝路季」9.3 分、B 站全站榜 100 条、番剧榜「凡人修仙传」9.7 分。
+
+两个踩过的坑，都写进代码注释和 ADR 了：
+
+- **豆瓣的 `type` 只有 `movie` / `tv` 两种**，动漫和综艺得靠 `tv` 的 tag 区分。
+  而且 `tag=动画` 实测返回 **0 条**，必须用 `日本动画`。
+- **B 站排行榜裸请求返回 `code=-352`**（风控）→ 先 GET 一次 B 站首页拿 `buvid3` Cookie。
+  另外 `rid=13`（番剧）/ `rid=167`（国创）在 `ranking/v2` 返回 `-400`：
+  它们属于 **PGC** 内容，必须走 `pgc/season/rank` 接口（ADR-37）。
+  Provider 内部分流，上层只认「分区」这一个概念。
+
+榜单挂了不会让页面报错：豆瓣缓存 30 分钟 / 限流退避 5 分钟、B 站缓存 15 分钟，
+任何异常都降级成空列表 + 可读提示。
+
 ### ⏱ 定时任务可视化设置
 
 **12 内置任务**的触发规则都能在界面上改，**不用改配置文件、不用重启**：
@@ -330,12 +366,13 @@ heat = min(做种数, 5000) ^ 0.5 × 3      # 做种数（开方避免头部通�
 | 分类 | Provider | 干什么 |
 |---|---|---|
 | `pan`（搜索器） | `pansou` `pan_generic` | **找**分享链接 |
-| `panstorage`（存储器） | `alist` `quark` `webdav` `local_dir` | **存**进你自己的盘、浏览、给直链 |
+| `panstorage`（存储器） | `alist` `quark` `pan115` `webdav` `local_dir` | **存**进你自己的盘、浏览、给直链 |
 
 | 存储 Provider | 鉴权 | 转存方式 | 适合 |
 |---|---|---|---|
 | `alist` **推荐** | 账号密码或固定 `api_key` | `add_offline_download` 离线下载 | 一套接 20+ 网盘，已有 AList 的首选 |
 | `quark` | 浏览器 Cookie | 官方分享转存四步流程（换 stoken → 列文件 → 提交 → 轮询任务） | 国内影视分享最多的夸克 |
+| `pan115` | **扫码登录**或 Cookie | 分享转存（`/share/receive`） | 115 网盘，**唯一支持完整扫码登录**的网盘 |
 | `webdav` ⭐ | Basic Auth（账号密码） | 不支持分享转存（协议无此语义），支持浏览/上传/删除/容量 | **一份实现覆盖 Nextcloud / 坚果云 / 群晖 / TeraCLOUD / AList DAV / Alist 兼容层** |
 | `local_dir` | 无 | 不支持转存（只读） | 把 rclone / CloudDrive 挂载目录当网盘浏览，**零配置试用** |
 
@@ -355,14 +392,14 @@ heat = min(做种数, 5000) ^ 0.5 × 3      # 做种数（开方避免头部通�
 原先只能浏览和删除，现在补齐了**改名 / 移动 / 复制 / 盘内搜索**，
 并引入**能力位矩阵**（参考 T3FAP 的插件能力声明思路）：
 
-| 能力 | `quark` | `alist` | `webdav` | `local_dir` |
-|---|---|---|---|---|
-| 分享转存 `save` | ✅ | ✅ | — | — |
-| 删除 `delete` | ✅ | ✅ | ✅ | ✅ |
-| 重命名 `rename` | ✅ | ✅ | ✅ | ✅ |
-| 移动/复制 `move` | ✅ | ✅ | ✅ (MOVE/COPY) | ✅ |
-| 盘内搜索 `search` | ✅ | ✅ | — | ✅ (rglob) |
-| 凭据保活 `keepalive` | ✅ | ✅ | ✅ | — |
+| 能力 | `quark` | `pan115` | `alist` | `webdav` | `local_dir` |
+|---|---|---|---|---|---|
+| 分享转存 `save` | ✅ | ✅ | ✅ | — | — |
+| 删除 `delete` | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 重命名 `rename` | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 移动/复制 `move` | ✅ | ✅ | ✅ | ✅ (MOVE/COPY) | ✅ |
+| 盘内搜索 `search` | ✅ | ✅ | ✅ | — | ✅ (rglob) |
+| 凭据保活 `keepalive` | ✅ | ✅ | ✅ | ✅ | — |
 
 **为什么要能力位**：后端在 `GET /api/v1/pan` 里下发 `capabilities`，
 前端据此决定渲染哪些按钮。不支持的操作**根本不显示**，而不是让用户点了
@@ -373,6 +410,42 @@ heat = min(做种数, 5000) ^ 0.5 × 3      # 做种数（开方避免头部通�
 往往是半夜任务失败了才发现。新增的「网盘凭据保活」定时任务每 6 小时
 轻量调一次各网盘接口（夸克查容量、AList 换 token），既刷新登录态又能
 提前发现失效；页面上也有「凭据保活巡检」按钮可随时手动跑一遍。
+
+#### 🔐 网盘账号登录：扫码 / Cookie 导入（v1.8.0）
+
+原先所有网盘都只能「去浏览器按 F12、翻出 Cookie、复制粘贴」。
+这对普通 NAS 用户门槛太高，也是 T3FAP 做得比本项目好的地方。v1.8.0 补上了：
+
+| 网盘 | 扫码登录 | Cookie 导入 | 说明 |
+|---|---|---|---|
+| **115** | ✅ 实测跑通全链路 | ✅ | 官方开放了完整扫码接口，支持得最好 |
+| **百度** | ⚠️ 可用，风控较严 | ✅ | 走 passport 扫码；拿不到 BDUSS 时会引导你改用 Cookie |
+| **夸克** | ❌ **不支持** | ✅ + 即时校验 | 见下面的说明 |
+
+**关于夸克，如实说明而不是标成「已支持」**：夸克的登录接口要求签名过的客户端公参
+（实测返回 `公参缺失，x-pan-client-id, x-pan-tm, x-pan-token不能为空`）。
+拿到扫码能力必须逆向它的签名算法，这和绕反爬、绕付费墙是同一件事，
+沿用 ADR-34 的立场**明确不做**（ADR-38）。
+作为补偿，夸克的 Cookie 导入做了**即时校验**——粘完立刻告诉你有没有效，
+而不是先存下来、等半夜的定时任务失败了你才发现填错。
+
+前端**不写死**这些差异：它读后端声明的 `qrcode` 能力位来决定显不显示扫码按钮
+（和网盘能力位矩阵一个思路，新增网盘时前端零改动）。
+
+**四条安全约束**（刻意设计的，不是遗漏）：
+
+1. 扫码会话**只存进程内存**，不落库、不写日志、不进缓存文件。它的有效生命周期
+   只有几十秒（从扫码到写入站点），为此付出永久持久化的风险不值得（ADR-39）。
+2. 会话的**唯一对外序列化出口**（`to_dict()`）不含 `cookie` 字段，
+   所以不存在「某个端点不小心把 Cookie 返回给前端」的路径。有专门的回归测试钉住。
+3. **校验不过一律不写库**（ADR-40）。存一份已知无效的凭据，
+   唯一效果是让半夜的定时任务静默失败——把错误推迟到最难排查的时刻。
+4. 对外的 Cookie 导入接口**不提供 `verify=false` 开关**。
+   这是本轮冒烟测试真实抓到的漏洞：带上它就能把任意字符串当 Cookie 写进站点记录并启用，
+   等于把第 3 条整条绕过去。
+
+**顺手的便利**：校验通过但没有对应站点记录时会**自动创建并启用**一条。
+用户刚扫码成功，最不该做的事是让他再去站点管理手工建一条、还得猜 `provider` 填什么。
 
 ### 🏷 NFO 刮削与分类归档
 
@@ -661,7 +734,8 @@ NAS 离线内网直接可用，整个前端只有 `index.html` + `app.js` + `sty
 | [`docs/05-ChatOps-机器人.md`](docs/05-ChatOps-机器人.md) | 三平台配置步骤、验签算法、指令表 |
 | [`docs/06-网盘管理.md`](docs/06-网盘管理.md) | 盘搜 vs 网盘、三种存储配置、转存流程 |
 | [`docs/07-运维手册.md`](docs/07-运维手册.md) | 部署、备份、排障、验证脚本 |
-| [`docs/08-变更日志.md`](docs/08-变更日志.md) | v1.0.0 → v1.7.0 逐版本记录 |
+| [`docs/08-变更日志.md`](docs/08-变更日志.md) | v1.0.0 → v1.8.0 逐版本记录 |
+| [`docs/10-站点接入指南.md`](docs/10-站点接入指南.md) | **加站点的完整操作指南**：Jackett/Prowlarr torznab 地址怎么拼、`api_generic`/`html_generic` 逐字段说明、Cookie 从哪抠、403 站怎么办、站点诊断怎么读 |
 | [`docs/09-竞品对标与差距分析.md`](docs/09-竞品对标与差距分析.md) | 对标 MoviePilot / quark-auto-save / SmartStrm / MediaWarp / TgtoDrive，**差距与不做的事** |
 
 ---
@@ -672,7 +746,7 @@ NAS 离线内网直接可用，整个前端只有 `index.html` + `app.js` + `sty
 ┌──────────────────────────────────────────────────────────────┐
 │  web/  零依赖 Web 控制台（原生 JS，无 CDN）                     │
 └────────────────────────────┬─────────────────────────────────┘
-                             │ REST /api/v1（126 个端点）
+                             │ REST /api/v1（136 个端点）
 ┌────────────────────────────▼─────────────────────────────────┐
 │  app/api/      21 个 router：auth search trending subscribes  │
 │                 radar ranking rule-groups schedules downloads │
@@ -709,7 +783,7 @@ NAS 离线内网直接可用，整个前端只有 `index.html` + `app.js` + `sty
 │    rules 规则组分层匹配（有序偏好，层内再按分排序）              │
 │    config 三级配置 · security PBKDF2+JWT · logger 环形缓冲       │
 ├──────────────────────────────────────────────────────────────┤
-│  app/providers/ 27 个注册 Provider + TMDB 单例，装饰器自动发现   │
+│  app/providers/ 28 个注册 Provider + TMDB 单例，装饰器自动发现   │
 │    indexer  torznab rss nyaa api_generic html_generic mukaku  │
 │    pan      pansou pan_generic         ← 找分享链接（搜索器）    │
 │    panstorage alist quark webdav local_dir ← 存到自己的盘（存储器）  │
@@ -1223,7 +1297,7 @@ curl -X POST -H "X-API-Token: your-token" \
      http://127.0.0.1:6060/api/v1/subscribes/run-all
 ```
 
-主要端点分组（共 126 个）：
+主要端点分组（共 136 个）：
 
 | 前缀 | 用途 |
 |---|---|
@@ -1255,7 +1329,7 @@ curl -X POST -H "X-API-Token: your-token" \
 
 ```bash
 pip install -r requirements-dev.txt
-pytest -q                 # 706 passed
+pytest -q                 # 773 passed
 ruff check app tests      # 静态检查
 ```
 
@@ -1291,6 +1365,8 @@ ruff check app tests      # 静态检查
 | `test_users.py` | **用户权限**：三档角色鉴权边界、`is_superuser` 由 role 推导、不能删/停自己、最后一个管理员不能降级 |
 | `test_site_health.py` | **站点健康**：三档判定（0 结果=降级）、连续失败告警阈值、历史裁剪、状态翻转才通知 |
 | `test_ranking.py` | **榜单订阅**：候选筛选纯函数、单次上限、`handled_ids` 去重、dry-run 不建订阅 |
+| `test_discover.py` | **发现榜**：豆瓣四分类 tag 映射、B 站 UGC/PGC 分流、缓存与退避、本地片源标注用真实列名、未知分类降级不抛异常 |
+| `test_pan_login.py` | **网盘登录**：会话视图**不泄漏 Cookie**、TTL 与回收、115/百度扫码状态机、夸克无扫码、**校验不过不写库**、对外接口无 `verify` 后门 |
 
 全部测试使用内存假 Provider，**全程不触网**。
 
@@ -1301,7 +1377,7 @@ ruff check app tests      # 静态检查
 ```bash
 python -m app.main &                  # 先起服务
 
-python scripts/smoke_test.py          # 228 项真实 HTTP 接口用例
+python scripts/smoke_test.py          # 255 项真实 HTTP 接口用例
 python scripts/ui_check.py            # Playwright 真浏览器逐页点检 20 个页面 + 主题切换，捕获 JS 报错
 python scripts/demo_pipeline.py       # 真实文件演示解析→硬链入库→缺集收敛（无需服务）
 python scripts/live_check.py          # 真实站点端到端：启用 mukaku→搜索→订阅→雷达匹配（联网）
@@ -1333,9 +1409,9 @@ cineflow/
 │   └── main.py        应用入口（lifespan / CORS / 静态资源）
 ├── web/               index.html + assets/(app.js style.css)  ← 零依赖前端
 ├── plugins/           auto_cleanup pan_transfer daily_digest  ← 示例插件
-├── tests/             33 个测试文件
+├── tests/             35 个测试文件
 ├── scripts/           smoke_test / ui_check / demo_pipeline 验证脚本
-├── docs/              10 篇维护文档（现状/架构/路线图/决策/运维/变更日志/竞品对标…）
+├── docs/              11 篇维护文档（现状/架构/路线图/决策/运维/站点接入/变更日志/竞品对标…）
 ├── config/            config.yaml.example
 ├── docker/            entrypoint.sh
 ├── Dockerfile         多阶段构建
