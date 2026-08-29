@@ -859,6 +859,27 @@ check("运维手册强调下载目录须与下载器一致", "硬链接" in ops_
 check("运维手册含群晖/威联通路径说明", "/volume1" in ops_text)
 check("运维手册含健康检查", "/api/health" in ops_text)
 check("运维手册含备份迁移", "备份" in ops_text)
+check("运维手册指向飞牛专用指南", "11-飞牛NAS部署指南" in ops_text)
+
+# ---- 飞牛 fnOS 部署指南：钉住那些抄群晖教程会踩的差异 ----
+fnos_guide = docs_dir / "11-飞牛NAS部署指南.md"
+check("飞牛部署指南存在", fnos_guide.exists())
+if fnos_guide.exists():
+    fnos_text = fnos_guide.read_text(encoding="utf-8")
+    # 飞牛是 /vol1，抄群晖的 /volume1 会挂载到空目录——这是最容易踩的坑
+    check("飞牛指南用 /vol1 路径", "/vol1" in fnos_text)
+    check("飞牛指南提醒别用群晖 /volume1", "/volume1" in fnos_text)
+    check("飞牛指南含 PUID/PGID 实查命令", "id -u" in fnos_text and "id -g" in fnos_text)
+    # 硬链接要求同一文件系统，跨存储空间会报 cross-device link
+    check("飞牛指南含硬链接同盘校验", "stat -c" in fnos_text
+          and "cross-device" in fnos_text)
+    check("飞牛指南含健康检查与 scheduler 判读", "/api/health" in fnos_text
+          and "scheduler" in fnos_text)
+    # 容器内 127.0.0.1 指容器自己，下载器地址必须用服务名
+    check("飞牛指南强调下载器用服务名", "qbittorrent:8080" in fnos_text)
+    check("飞牛指南含 fnOS 影视 App 联动", "影视" in fnos_text)
+    check("飞牛指南含公网暴露前改密提醒", "改密" in fnos_text or "改密码" in fnos_text)
+    check("飞牛指南含自检清单", "自检清单" in fnos_text)
 
 
 print()
