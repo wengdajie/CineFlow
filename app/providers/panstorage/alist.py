@@ -28,6 +28,12 @@ class AListStorage(BasePanStorage):
     name = "alist"
     display_name = "AList 网盘网关"
 
+    # AList 提供统一的 /api/fs/* 文件管理接口
+    supports_rename = True
+    supports_move = True
+    supports_search = True
+    supports_keepalive = True
+
     def __init__(self, config: dict[str, Any] | None = None) -> None:
         super().__init__(config)
         self._token: str | None = None
@@ -188,6 +194,95 @@ class AListStorage(BasePanStorage):
             return None
         raw = data.get("raw_url")
         return str(raw) if raw else None
+
+    # ---------------- 文件管理 ----------------
+    async def rename(
+        self, path: str, new_name: str, *, file_id: str | None = None
+    ) -> bool:
+        name = str(new_name or "").strip()
+        if not name:
+            return False
+        data = await self._request(
+            "/api/fs/rename", body={"path": self.normalize_path(path), "name": name}
+        )
+        return data is not None
+
+    async def move(
+        self, path: str, target_dir: str, *, file_id: str | None = None
+    ) -> bool:
+        target = self.normalize_path(path)
+        src_dir = self.join_path(*target.split("/")[:-1])
+        name = target.split("/")[-1]
+        if not name:
+            return False
+        data = await self._request(
+            "/api/fs/move",
+            body={
+                "src_dir": src_dir,
+                "dst_dir": self.normalize_path(target_dir),
+                "names": [name],
+            },
+        )
+        return data is not None
+
+    async def copy(
+        self, path: str, target_dir: str, *, file_id: str | None = None
+    ) -> bool:
+        target = self.normalize_path(path)
+        src_dir = self.join_path(*target.split("/")[:-1])
+        name = target.split("/")[-1]
+        if not name:
+            return False
+        data = await self._request(
+            "/api/fs/copy",
+            body={
+                "src_dir": src_dir,
+                "dst_dir": self.normalize_path(target_dir),
+                "names": [name],
+            },
+        )
+        return data is not None
+
+    async def search(self, keyword: str, *, limit: int = 50) -> list[PanFile]:
+        word = str(keyword or "").strip()
+        if not word:
+            return []
+        data = await self._request(
+            "/api/fs/search",
+            body={
+                "parent": self.root_path,
+                "keywords": word,
+                "scope": 0,
+                "page": 1,
+                "per_page": max(1, min(int(limit or 50), 200)),
+            },
+        )
+        items = (data or {}).get("content") or []
+        files: list[PanFile] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "")
+            if not name:
+                continue
+            files.append(
+                PanFile(
+                    name=name,
+                    path=self.join_path(str(item.get("parent") or "/"), name),
+                    is_dir=bool(item.get("is_dir")),
+                    size=int(item.get("size") or 0),
+                )
+            )
+        return files
+
+    async def keep_alive(self) -> tuple[bool, str]:
+        """AList 保活：重新走一次登录换 token（token 有默认有效期）。"""
+        if not self.base_url:
+            return False, "未配置服务地址"
+        token = await self._auth_token()
+        if not token:
+            return False, "登录失败，请检查用户名/密码或 token"
+        return True, "令牌有效"
 
     async def health_check(self) -> tuple[bool, str]:
         if not self.base_url:

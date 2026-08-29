@@ -7,7 +7,12 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 
 from app.api.deps import CurrentUser, OperatorUser
-from app.schemas.models import PanMkdirRequest, PanSaveRequest
+from app.schemas.models import (
+    PanMkdirRequest,
+    PanMoveRequest,
+    PanRenameRequest,
+    PanSaveRequest,
+)
 from app.services import pan_storage as pan_service
 
 router = APIRouter(prefix="/pan", tags=["网盘管理"])
@@ -121,6 +126,50 @@ async def delete_file(
     if not result.get("success"):
         raise HTTPException(status_code=400, detail=result.get("message", "删除失败"))
     return result
+
+
+@router.get("/search", summary="盘内搜索文件")
+async def search_files(
+    user: CurrentUser,
+    site_id: int = Query(description="网盘站点 ID"),
+    keyword: str = Query(min_length=1, description="文件名关键词"),
+    limit: int = Query(50, ge=1, le=200),
+) -> dict[str, Any]:
+    """在网盘内部按文件名搜索（夸克/AList/本地目录支持）。"""
+    result = await pan_service.search_files(site_id, keyword, limit=limit)
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("message", "搜索失败"))
+    return result
+
+
+@router.post("/rename", summary="重命名网盘文件或目录")
+async def rename_file(payload: PanRenameRequest, user: OperatorUser) -> dict[str, Any]:
+    result = await pan_service.rename_file(
+        payload.site_id, payload.path, payload.new_name, file_id=payload.file_id
+    )
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("message", "重命名失败"))
+    return result
+
+
+@router.post("/move", summary="移动或复制网盘文件")
+async def move_file(payload: PanMoveRequest, user: OperatorUser) -> dict[str, Any]:
+    result = await pan_service.move_file(
+        payload.site_id,
+        payload.path,
+        payload.target_dir,
+        file_id=payload.file_id,
+        copy=payload.copy_mode,
+    )
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("message", "操作失败"))
+    return result
+
+
+@router.post("/keep-alive", summary="网盘凭据保活巡检")
+async def keep_alive(user: OperatorUser) -> dict[str, Any]:
+    """对全部启用网盘做一次登录态探活，及时发现 Cookie 过期。"""
+    return {"success": True, **(await pan_service.keep_alive_all())}
 
 
 @router.get("/download-url", summary="换取临时直链")

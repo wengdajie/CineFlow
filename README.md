@@ -9,8 +9,8 @@
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)](#-docker-部署推荐)
-[![Tests](https://img.shields.io/badge/tests-618%20passed-brightgreen)](#-测试)
-[![Version](https://img.shields.io/badge/version-1.6.0-blue)](docs/08-变更日志.md)
+[![Tests](https://img.shields.io/badge/tests-706%20passed-brightgreen)](#-测试)
+[![Version](https://img.shields.io/badge/version-1.7.0-blue)](docs/08-变更日志.md)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 </div>
@@ -91,6 +91,10 @@ CineFlow 是一个**从零实现**的 NAS 影视自动化项目，设计上参�
 | **自定义站点** | `api_generic` | **字段映射式，不写代码接入任意 JSON 资源站**；支持「列表直出链接」与「列表+详情两阶段」 |
 | | `html_generic` | **正则映射式，接入没有 API 的网页站**；也可一键抓取页面内全部磁力 |
 | | `mukaku` | 内置预设站点，一次请求同时拿到全部磁力 + 网盘分享，支持最新流追新 |
+| | `yyets` | 人人影视（yyets 系镜像），两阶段取资源：搜剧集 → 取全部电驴/磁力/网盘地址 |
+| | `wp_film` | **WordPress 影视站通用适配器**：RSS 搜索 + 详情页抓链，一份代码适配多站 |
+| **公开视频站** | `bilibili` | B 站视频搜索，下载交由 yt-dlp（仅公开内容） |
+| | `youtube` | YouTube 视频搜索（复用 yt-dlp `ytsearch`），国内需配代理 |
 | **网盘盘搜** | `pansou` | 对接 PanSou 系 API，聚合夸克/阿里/百度/迅雷/天翼/115/UC/PikPak |
 | | `pan_generic` | **字段映射式，不写代码就能接入任意第三方盘搜 JSON API** |
 
@@ -112,6 +116,21 @@ CineFlow 是一个**从零实现**的 NAS 影视自动化项目，设计上参�
 **单站不再被大站挤掉**。聚合时按站点**轮转交错**合并（A1,B1,A2,B2…），
 公平性靠交错次序保证，而不是砍掉返回多的站点。
 `SEARCH_MAX_PER_SITE`（默认 300）只是防单站刷爆内存的**安全阀**，不是公平性旋钮。
+
+#### 聚合搜索纳入 B 站 / YouTube（v1.7.0）
+
+影视资源之外，很多内容只存在于视频平台（预告、纪录片、UP 主解说）。
+启用 `bilibili` / `youtube` 站点后，它们和 BT 站、盘搜一起并发搜索，
+产出 `webvideo` 类型资源，**下载自动交给已内置的 yt-dlp**。
+
+- **B 站 412 是怎么解决的**：`api.bilibili.com` 对没有 `buvid3` Cookie 的请求
+  直接返 **HTTP 412**（yt-dlp 自带的 `bilisearch:` 也栽在这）。这里的做法是
+  **先请求一次 B 站首页拿 Cookie，再带着它搜索**——实测稳定返回。
+  填自己的 Cookie 能进一步提升配额，但不是必需。
+- **YouTube** 复用 yt-dlp 的 `ytsearch`，不自己解析那套混淆 JSON；
+  `extract_flat` 只取列表元信息，快得多。缩略图缺失时按 video id 兜底拼地址。
+- 播放量会投影到 `seeders` 字段，这样**无需给榜单加特例**就能参与既有热度排序。
+- 两者都有 10 分钟结果缓存 + 失败退避，且**只支持公开内容**（不解析会员/付费正片）。
 
 ### 🎯 择优：打分而非死规则
 
@@ -251,9 +270,34 @@ heat = min(做种数, 5000) ^ 0.5 × 3      # 做种数（开方避免头部通�
 
 评分为 0 / 空 / "暂无" 时**不显示评分角标**，避免把"没数据"渲染成"0 分差评"。
 
+#### 豆瓣封面兜底与图片代理（v1.7.0）
+
+站点自带元数据覆盖不全（纯盘搜站点根本不返回封面），于是加了一条
+**封面多级回退链**：
+
+```
+站点自带封面  →  豆瓣 subject_suggest  →  TMDB（需 Key）  →  占位色块
+   最准                免 Key、中文命中率最高        可选           永不留白
+```
+
+豆瓣走的是**公开 suggest 接口，无需申请 API Key**。为了不打扰对方，
+做了三层保护：结果缓存 6 小时、失败后静默退避 5 分钟、任何异常都返回空
+（榜单接口绝不会因为豆瓣挂了而 500）。只给首屏前 24 条补图，翻页时再补。
+
+**为什么需要图片代理**：豆瓣图床校验 `Referer`，缺了就返回 **HTTP 418**
+（实测裸请求 418、带 Referer 200）。浏览器出于隐私会剥离跨站 Referer，
+前端怎么设都拿不到图。所以豆瓣封面改走 `GET /api/v1/images/proxy?url=…`：
+后端带正确 Referer 代拉再转发。B 站 / YouTube / TMDB 图床能直连，就不绕后端。
+
+该接口天生有 SSRF 风险，因此有三道硬约束：**域名白名单**（拒绝
+`127.0.0.1` / `169.254.169.254` / `192.168.*` 等内网，且防
+`doubanio.com.attacker.net` 这类后缀混淆）、**只允许 http/https**、
+**响应 content-type 必须是 `image/*`**。它刻意不挂登录校验——`<img>`
+标签带不了 `Authorization` 头，加了图就永远加载不出来。
+
 ### ⏱ 定时任务可视化设置
 
-**11 内置任务**的触发规则都能在界面上改，**不用改配置文件、不用重启**：
+**12 内置任务**的触发规则都能在界面上改，**不用改配置文件、不用重启**：
 
 | 任务 | 默认 | 作用 |
 |---|---|---|
@@ -262,6 +306,7 @@ heat = min(做种数, 5000) ^ 0.5 × 3      # 做种数（开方避免头部通�
 | 下载状态同步与自动整理 | 每 5 分钟 | 同步进度，完成即硬链入库并刷新媒体服务器 |
 | 网盘待转存队列 | 每 20 分钟 | 把命中但没转存成功的网盘资源批量重试转存 |
 | 网盘分享追更 | 每 60 分钟 | 巡检订阅的分享链接，只转存新增的集 |
+| 网盘凭据保活 | 每 6 小时 | 轻量调一次各网盘接口，刷新登录态并在 Cookie 过期时告警 |
 | 网盘 STRM 同步 | 关闭（`0`） | 把网盘目录映射成 `.strm`，媒体库直接能播 |
 | 媒体库补刮（NFO + 图片） | 每天 `30 4 * * *` | 给缺 NFO 的历史文件补刮元数据与海报 |
 | 洗版巡检（更优版本替换） | 关闭 | 发现明显更优版本时替换已入库文件 |
@@ -304,6 +349,30 @@ heat = min(做种数, 5000) ^ 0.5 × 3      # 做种数（开方避免头部通�
 - **目录浏览**：容量进度条 + 面包屑导航 + 建目录 / 删除 / 换取临时直链（可喂给 STRM 或 aria2）
 - **优雅降级**：不支持某个能力的网盘（如 `local_dir` 不能转存）会返回**明确提示**，
   不是 500 也不是假装成功
+
+#### 完整文件管理 + 凭据保活（v1.7.0）
+
+原先只能浏览和删除，现在补齐了**改名 / 移动 / 复制 / 盘内搜索**，
+并引入**能力位矩阵**（参考 T3FAP 的插件能力声明思路）：
+
+| 能力 | `quark` | `alist` | `webdav` | `local_dir` |
+|---|---|---|---|---|
+| 分享转存 `save` | ✅ | ✅ | — | — |
+| 删除 `delete` | ✅ | ✅ | ✅ | ✅ |
+| 重命名 `rename` | ✅ | ✅ | ✅ | ✅ |
+| 移动/复制 `move` | ✅ | ✅ | ✅ (MOVE/COPY) | ✅ |
+| 盘内搜索 `search` | ✅ | ✅ | — | ✅ (rglob) |
+| 凭据保活 `keepalive` | ✅ | ✅ | ✅ | — |
+
+**为什么要能力位**：后端在 `GET /api/v1/pan` 里下发 `capabilities`，
+前端据此决定渲染哪些按钮。不支持的操作**根本不显示**，而不是让用户点了
+才发现"不支持"；新增网盘时前端零改动。基类的默认实现一律**返回 False/空
+而不是抛 `NotImplementedError`**，保证任何网盘都不会把接口打成 500。
+
+**凭据保活**解决的是网盘最烦人的故障：**Cookie 静默过期**，
+往往是半夜任务失败了才发现。新增的「网盘凭据保活」定时任务每 6 小时
+轻量调一次各网盘接口（夸克查容量、AList 换 token），既刷新登录态又能
+提前发现失效；页面上也有「凭据保活巡检」按钮可随时手动跑一遍。
 
 ### 🏷 NFO 刮削与分类归档
 
@@ -592,7 +661,7 @@ NAS 离线内网直接可用，整个前端只有 `index.html` + `app.js` + `sty
 | [`docs/05-ChatOps-机器人.md`](docs/05-ChatOps-机器人.md) | 三平台配置步骤、验签算法、指令表 |
 | [`docs/06-网盘管理.md`](docs/06-网盘管理.md) | 盘搜 vs 网盘、三种存储配置、转存流程 |
 | [`docs/07-运维手册.md`](docs/07-运维手册.md) | 部署、备份、排障、验证脚本 |
-| [`docs/08-变更日志.md`](docs/08-变更日志.md) | v1.0.0 → v1.6.0 逐版本记录 |
+| [`docs/08-变更日志.md`](docs/08-变更日志.md) | v1.0.0 → v1.7.0 逐版本记录 |
 | [`docs/09-竞品对标与差距分析.md`](docs/09-竞品对标与差距分析.md) | 对标 MoviePilot / quark-auto-save / SmartStrm / MediaWarp / TgtoDrive，**差距与不做的事** |
 
 ---
@@ -603,9 +672,9 @@ NAS 离线内网直接可用，整个前端只有 `index.html` + `app.js` + `sty
 ┌──────────────────────────────────────────────────────────────┐
 │  web/  零依赖 Web 控制台（原生 JS，无 CDN）                     │
 └────────────────────────────┬─────────────────────────────────┘
-                             │ REST /api/v1（120 个端点）
+                             │ REST /api/v1（126 个端点）
 ┌────────────────────────────▼─────────────────────────────────┐
-│  app/api/      20 个 router：auth search trending subscribes  │
+│  app/api/      21 个 router：auth search trending subscribes  │
 │                 radar ranking rule-groups schedules downloads │
 │                 library media sites site-health pan           │
 │                 pan-subscribes strm chatops plugins users     │
@@ -627,7 +696,7 @@ NAS 离线内网直接可用，整个前端只有 `index.html` + `app.js` + `sty
 │    pan_subscribe 网盘分享追更（增量转存新集）                    │
 │    upgrade   洗版：更优版本替换已入库文件                        │
 │    notify    事件总线 + 多渠道推送                              │
-│    scheduler APScheduler（11 内置任务 + 插件任务），可视化改期     │
+│    scheduler APScheduler（12 内置任务 + 插件任务），可视化改期     │
 │    settings_store 运行期设置持久化（settings 表）               │
 │    config_store  可编辑配置白名单 · 校验 · 热生效               │
 │    site_health   站点健康探测（真搜一次）· 告警 · 历史           │
@@ -640,7 +709,7 @@ NAS 离线内网直接可用，整个前端只有 `index.html` + `app.js` + `sty
 │    rules 规则组分层匹配（有序偏好，层内再按分排序）              │
 │    config 三级配置 · security PBKDF2+JWT · logger 环形缓冲       │
 ├──────────────────────────────────────────────────────────────┤
-│  app/providers/ 23 个注册 Provider + TMDB 单例，装饰器自动发现   │
+│  app/providers/ 27 个注册 Provider + TMDB 单例，装饰器自动发现   │
 │    indexer  torznab rss nyaa api_generic html_generic mukaku  │
 │    pan      pansou pan_generic         ← 找分享链接（搜索器）    │
 │    panstorage alist quark webdav local_dir ← 存到自己的盘（存储器）  │
@@ -772,7 +841,7 @@ YAML 里的二级 key 会拍平成 `CF_<父>_<子>`，例如 `tmdb.api_key` → 
 
 ## 🔌 接入你自己的站点
 
-首次启动会写入 13 条示例站点。需要填地址/账号的一律**默认禁用**（避免启动就对外发请求，示例值也跑不通）；yt-dlp 是本地库调用、装了依赖就能用，故默认启用。
+首次启动会写入 22 条示例站点。需要填地址/账号的一律**默认禁用**（避免启动就对外发请求，示例值也跑不通）；yt-dlp 是本地库调用、装了依赖就能用，故默认启用。
 版本升级时会**按名字补齐新增的示例站点**，已存在的同名站点不会被覆盖。
 在 **站点管理** 页填好地址后点「启用」即可。
 
@@ -1154,13 +1223,14 @@ curl -X POST -H "X-API-Token: your-token" \
      http://127.0.0.1:6060/api/v1/subscribes/run-all
 ```
 
-主要端点分组（共 120 个）：
+主要端点分组（共 126 个）：
 
 | 前缀 | 用途 |
 |---|---|
 | `/api/v1/auth` | 登录、当前用户、改密 |
 | `/api/v1/search` | 聚合搜索（GET 快查 / POST 带完整过滤条件） |
-| `/api/v1/trending` | 热度排行：总览、资源榜、实时榜、搜索热词、站点贡献榜 |
+| `/api/v1/trending` | 热度排行：总览、资源榜、实时榜、搜索热词、站点贡献榜、**豆瓣条目查询** |
+| `/api/v1/images` | **封面图代理**（绕过豆瓣图床防盗链，带白名单 SSRF 防护，匿名可用） |
 | `/api/v1/subscribes` | 订阅 CRUD、缺集查询、单个/全部巡检 |
 | `/api/v1/downloads` | 任务列表、手动添加、暂停恢复、删除、同步 |
 | `/api/v1/library` | 统计、文件列表、扫描、手动整理、整理记录、刷新 |
@@ -1170,7 +1240,7 @@ curl -X POST -H "X-API-Token: your-token" \
 | `/api/v1/ranking-rules` | 榜单自动订阅：规则 CRUD、试算候选、单条/全部执行 |
 | `/api/v1/rule-groups` | 过滤规则组：CRUD、设为默认、样例资源试算分层 |
 | `/api/v1/site-health` | 站点健康：概览、历史记录、单站/批量探测 |
-| `/api/v1/pan` | 网盘管理：总览、目录浏览、转存、批量转存、建目录、删除、直链、记录 |
+| `/api/v1/pan` | 网盘管理：总览（含能力位）、目录浏览、转存、批量转存、建目录、删除、直链、记录、**改名/移动/盘内搜索/凭据保活** |
 | `/api/v1/pan-subscribes` | 网盘分享追更：订阅 CRUD、单个/全部巡检 |
 | `/api/v1/strm` | STRM 同步：概览、记录、手动同步、`play/{id}` 匿名 302 跳转 |
 | `/api/v1/chatops` | 机器人：入站 Webhook、平台清单、配置、指令试跑、解析、审计 |
@@ -1185,7 +1255,7 @@ curl -X POST -H "X-API-Token: your-token" \
 
 ```bash
 pip install -r requirements-dev.txt
-pytest -q                 # 537 passed
+pytest -q                 # 706 passed
 ruff check app tests      # 静态检查
 ```
 
@@ -1205,6 +1275,11 @@ ruff check app tests      # 静态检查
 | `test_chatops.py` | **ChatOps**：40+ 别名解析、中文季号、三平台**验签正反用例**（含钉钉真实 HMAC、防重放）、飞书加解密与挑战、幂等去重、白名单、**搜索→下载 N 会话上下文**、Webhook 全链路 |
 | `test_nfo.py` | **NFO 渲染**：四种根节点、演职员、图片命名惯例、TMDB id 回读、无 IO 纯函数 |
 | `test_scraper.py` | **刮削服务**：入库即刮、TMDB 不可用降级、不覆盖已有 NFO、批量补刮上限 |
+| `test_douban.py` | **豆瓣封面**：归一化、缓存命中不重复请求、失败退避、类型优先与回退、健康检查 |
+| `test_pan_manage.py` | **网盘文件管理**：能力位矩阵、改名越界防护、移动/复制、盘内搜索、夸克接口体断言、保活失效检测 |
+| `test_webvideo_search.py` | **B 站/YouTube 搜索**：高亮标签清理、bvid 优先、协议相对封面补全、缓存与退避、缩略图兜底 |
+| `test_new_sites.py` | **新增资源站**：`Resource.actions` 双动作、yyets 四层结构拍平与去重、wp_film RSS→详情抓链、密码只给网盘 |
+| `test_image_proxy.py` | **图片代理 SSRF**：白名单、后缀混淆攻击、内网地址、非 http 协议、匿名可用 |
 | `test_categories.py` | **分类归档**：TMDB genre 优先、关键词兜底、判不出返回 `None` 不猜 |
 | `test_webdav.py` | **WebDAV**：PROPFIND 解析、MKCOL、容量、percent 编码、明确不支持分享转存 |
 | `test_strm_sync.py` | **STRM 同步**：`proxy`/`direct` 两种链接、302 播放解析、失效清理、随行文件 |
@@ -1226,7 +1301,7 @@ ruff check app tests      # 静态检查
 ```bash
 python -m app.main &                  # 先起服务
 
-python scripts/smoke_test.py          # 210 项真实 HTTP 接口用例
+python scripts/smoke_test.py          # 228 项真实 HTTP 接口用例
 python scripts/ui_check.py            # Playwright 真浏览器逐页点检 20 个页面 + 主题切换，捕获 JS 报错
 python scripts/demo_pipeline.py       # 真实文件演示解析→硬链入库→缺集收敛（无需服务）
 python scripts/live_check.py          # 真实站点端到端：启用 mukaku→搜索→订阅→雷达匹配（联网）
@@ -1258,7 +1333,7 @@ cineflow/
 │   └── main.py        应用入口（lifespan / CORS / 静态资源）
 ├── web/               index.html + assets/(app.js style.css)  ← 零依赖前端
 ├── plugins/           auto_cleanup pan_transfer daily_digest  ← 示例插件
-├── tests/             28 个测试文件
+├── tests/             33 个测试文件
 ├── scripts/           smoke_test / ui_check / demo_pipeline 验证脚本
 ├── docs/              10 篇维护文档（现状/架构/路线图/决策/运维/变更日志/竞品对标…）
 ├── config/            config.yaml.example

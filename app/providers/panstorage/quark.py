@@ -40,6 +40,12 @@ class QuarkStorage(BasePanStorage):
     name = "quark"
     display_name = "夸克网盘"
 
+    # 夸克开放了完整的文件管理接口，能力位全开
+    supports_rename = True
+    supports_move = True
+    supports_search = True
+    supports_keepalive = True
+
     @property
     def cookie(self) -> str:
         # 用 option() 而非 config.get()：Cookie 既可能填在站点字段上，
@@ -374,6 +380,100 @@ class QuarkStorage(BasePanStorage):
         if isinstance(items, list) and items:
             return str(items[0].get("download_url") or "") or None
         return None
+
+    # ---------------- 文件管理 ----------------
+    async def _fid_of(self, path: str, file_id: str | None = None) -> str:
+        """把「路径或已知 fid」统一解析成 fid，避免每个方法都重复一遍。"""
+        if file_id:
+            return file_id
+        target = self.normalize_path(path)
+        if target == "/":
+            return "0"
+        parent = self.join_path(*target.split("/")[:-1])
+        name = target.split("/")[-1]
+        siblings = await self.list_dir(parent)
+        match = next((s for s in siblings if s.name == name), None)
+        return match.file_id or "" if match else ""
+
+    async def rename(
+        self, path: str, new_name: str, *, file_id: str | None = None
+    ) -> bool:
+        name = str(new_name or "").strip()
+        if not name:
+            return False
+        fid = await self._fid_of(path, file_id)
+        if not fid or fid == "0":
+            return False
+        payload = await self._call(
+            "/file/rename",
+            method="POST",
+            body={"fid": fid, "file_name": name},
+        )
+        return payload is not None
+
+    async def move(
+        self, path: str, target_dir: str, *, file_id: str | None = None
+    ) -> bool:
+        fid = await self._fid_of(path, file_id)
+        to_fid = await self._resolve_fid(target_dir)
+        # to_fid 为空说明目标目录不存在；根目录是 "0" 属于合法值，所以只判空串
+        if not fid or fid == "0" or not to_fid:
+            return False
+        payload = await self._call(
+            "/file/move",
+            method="POST",
+            body={
+                "action_type": 1,
+                "filelist": [fid],
+                "to_pdir_fid": to_fid,
+                "exclude_fids": [],
+            },
+        )
+        return payload is not None
+
+    async def search(self, keyword: str, *, limit: int = 50) -> list[PanFile]:
+        word = str(keyword or "").strip()
+        if not word:
+            return []
+        payload = await self._call(
+            "/file/search",
+            params={
+                "q": word,
+                "_page": 1,
+                "_size": max(1, min(int(limit or 50), 200)),
+                "_fetch_total": 1,
+                "_sort": "file_type:desc,updated_at:desc",
+            },
+        )
+        items = ((payload or {}).get("data") or {}).get("list") or []
+        files: list[PanFile] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("file_name") or "")
+            if not name:
+                continue
+            files.append(
+                PanFile(
+                    name=name,
+                    # 搜索结果里夸克会带 path_str（所在目录），拼出完整路径便于直接操作
+                    path=self.join_path(str(item.get("path_str") or "/"), name),
+                    is_dir=bool(item.get("dir") or item.get("file_type") == 0),
+                    size=int(item.get("size") or 0),
+                    file_id=str(item.get("fid") or ""),
+                    modified_at=str(item.get("updated_at") or "") or None,
+                )
+            )
+        return files
+
+    async def keep_alive(self) -> tuple[bool, str]:
+        """夸克保活：查一次容量即可刷新会话活跃度。"""
+        if not self.cookie:
+            return False, "未配置 Cookie"
+        quota = await self.quota()
+        if quota.total <= 0:
+            return False, "Cookie 已失效，请重新登录夸克并复制 Cookie"
+        return True, "Cookie 有效"
 
     async def health_check(self) -> tuple[bool, str]:
         if not self.cookie:

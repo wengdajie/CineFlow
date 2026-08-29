@@ -47,6 +47,119 @@ DEFAULT_SITES = [
         },
     },
     {
+        # 实测：/api/resource?keyword= 搜剧集，再按 id 取详情，含电驴/磁力/网盘
+        "name": "人人影视 YYeTs",
+        "kind": ProviderKind.INDEXER.value,
+        "provider": "yyets",
+        "url": "https://yyets.click",
+        "enabled": False,
+        "priority": 25,
+        "options": {
+            "note": "内置解析，启用即可用；站点常换域名，失效时改上面的地址即可",
+            "detail_limit": 5,
+        },
+    },
+    {
+        # 实测：WordPress 搜索 RSS + 详情页抓磁力（单页可达上百条）
+        "name": "BD电影首发站",
+        "kind": ProviderKind.INDEXER.value,
+        "provider": "wp_film",
+        "url": "https://www.bdflixs.com",
+        "enabled": False,
+        "priority": 30,
+        "options": {
+            "note": "WordPress 站：RSS 搜索 + 详情页抓磁力，已实测可用",
+            "article_limit": 5,
+            "per_article_limit": 12,
+        },
+    },
+    {
+        # 与 bdflixs 同为 WordPress 结构；实测首页 200 但疑似限流，故仅作预设
+        "name": "MJF 美剧站",
+        "kind": ProviderKind.INDEXER.value,
+        "provider": "wp_film",
+        "url": "https://www.mjf2020.com",
+        "enabled": False,
+        "priority": 35,
+        "options": {
+            "note": "实测存在限流/SSL 握手超时，建议配代理或降低搜索频率；"
+                    "搜索路径为 /ss/?s={keyword}",
+            "search_url": "https://www.mjf2020.com/ss/?s={keyword}",
+            "article_limit": 3,
+        },
+    },
+    {
+        # 电影天堂系：GB2312 编码，搜索走 POST，故用 html_generic + encoding
+        "name": "电影天堂 DyGod",
+        "kind": ProviderKind.INDEXER.value,
+        "provider": "wp_film",
+        "url": "https://www.dygod.vip",
+        "enabled": False,
+        "priority": 40,
+        "options": {
+            "note": "GB2312 老站：搜索接口为 POST /e/search/index.php（需 gb2312 编码），"
+                    "本预设先用 RSS/栏目页兜底；如搜不到请改用「自定义网页站点」配正则",
+            "encoding": "gb2312",
+            "latest_url": "https://www.dygod.vip/html/gndy/dyzz/index.html",
+            "article_limit": 3,
+        },
+    },
+    {
+        # 聚合BD：真实搜索路径 /q/?k=（从 /js/front.js 里挖出）
+        "name": "聚合BD",
+        "kind": ProviderKind.INDEXER.value,
+        "provider": "html_generic",
+        "url": "https://www.juhebd.com",
+        "enabled": False,
+        "priority": 45,
+        "options": {
+            "note": "搜索页可解析条目，但下载链接需关注公众号才显示；"
+                    "适合当「有没有这部片」的探针，实际下载请配合其它站点",
+            "search_url": "https://www.juhebd.com/q/?k={keyword}",
+            "row_pattern": "<a[^>]+href=\"(/(?:mv|tv|acg)/[^\"]+)\"[^>]*title=\"([^\"]+)\"",
+            "field_patterns": {
+                "page_url": "href=\"(/(?:mv|tv|acg)/[^\"]+)\"",
+                "title": "title=\"([^\"]+)\"",
+            },
+            "max_rows": 40,
+        },
+    },
+    {
+        # 蓝光影视：POST /api.php fun=get_video 返回豆瓣级元数据（无直链）
+        "name": "蓝光影视 LDYSG",
+        "kind": ProviderKind.INDEXER.value,
+        "provider": "api_generic",
+        "url": "https://www.ldysg.top",
+        "enabled": False,
+        "priority": 50,
+        "options": {
+            "note": "注意域名是 .top（.win 已 404）。接口返回单条影片元数据"
+                    "（封面/年份/导演），主要用于补元数据而非直链下载",
+            "api_base": "https://www.ldysg.top",
+            "search_path": "api.php",
+            "method": "POST",
+            "query_key": "title",
+            "fixed_params": {"fun": "get_video"},
+            "list_path": "data",
+            "item_map": {"title": "title", "year": "year", "poster": "pic"},
+        },
+    },
+    {
+        # hdzu 有自定义反爬（非 Cloudflare），必须用户提供登录后 Cookie
+        "name": "HDZU 高清组",
+        "kind": ProviderKind.INDEXER.value,
+        "provider": "html_generic",
+        "url": "https://hdzu.org",
+        "enabled": False,
+        "priority": 55,
+        "options": {
+            "note": "站点有自定义反爬，直连返回 403。必须在下方 cookie 字段填入"
+                    "浏览器登录后的完整 Cookie 才能使用",
+            "search_url": "https://hdzu.org/search?q={keyword}",
+            "magnet_only": True,
+        },
+    },
+    {
         "name": "自定义 JSON API 站点（示例）",
         "kind": ProviderKind.INDEXER.value,
         "provider": "api_generic",
@@ -73,6 +186,36 @@ DEFAULT_SITES = [
             "note": "用正则描述行与字段；只需磁力可开 magnet_only",
             "search_url": "https://example.com/search?q={keyword}",
             "magnet_only": True,
+        },
+    },
+    {
+        # B 站搜索无需任何配置（内部会先摸首页拿 buvid Cookie 破 412），
+        # 但产出的是"视频网页"而非影视正片，故默认禁用，按需开启
+        "name": "Bilibili 视频搜索",
+        "kind": ProviderKind.INDEXER.value,
+        "provider": "bilibili",
+        "url": "https://www.bilibili.com",
+        "enabled": False,
+        "priority": 70,
+        "options": {
+            "note": "搜索 B 站公开视频，下载交由 yt-dlp；仅公开内容，不解析大会员正片。"
+                    "填入自己的 Cookie 可提升配额稳定性（非必需）",
+            "limit": 20,
+        },
+    },
+    {
+        # YouTube 搜索复用 yt-dlp 的 ytsearch，国内网络通常需要代理
+        "name": "YouTube 视频搜索",
+        "kind": ProviderKind.INDEXER.value,
+        "provider": "youtube",
+        "url": "https://www.youtube.com",
+        "enabled": False,
+        "priority": 75,
+        "options": {
+            "note": "复用 yt-dlp 的 ytsearch；国内网络请在 proxy 里填代理地址，"
+                    "如 http://127.0.0.1:7890",
+            "limit": 20,
+            "proxy": "",
         },
     },
     {

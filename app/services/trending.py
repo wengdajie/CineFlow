@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import math
 import re
 from collections import defaultdict
@@ -403,6 +404,57 @@ async def live_ranking(
         "total": len(items),
         "items": items,
     }
+
+
+async def enrich_posters(
+    items: list[dict[str, Any]], *, limit: int = 24
+) -> list[dict[str, Any]]:
+    """给榜单条目补全封面（画板模式的关键）。
+
+    **封面回退链**：站点自带 → 豆瓣 → TMDB → 前端占位。
+    站点自带的最准（就是那条资源的封面），豆瓣对中文片名命中率最高且免 Key，
+    TMDB 需要用户配 Key 所以排最后。
+
+    只给**前 ``limit`` 条**补图：画板首屏就这么多，再往后补属于浪费外部配额；
+    用户滚动/翻页时会带着新的 offset 再来一次。
+    """
+    from app.providers.metadata import douban
+
+    targets = [i for i in items[:limit] if not i.get("poster")]
+    if not targets:
+        return items
+
+    # 并发但有上限：外部接口都怕突发，8 并发足够快又不至于触发限流
+    semaphore = asyncio.Semaphore(8)
+
+    async def fill(item: dict[str, Any]) -> None:
+        title = str(item.get("title") or "").strip()
+        if not title:
+            return
+        media_type = item.get("media_type")
+        kind = "tv" if media_type == MediaType.TV.value else (
+            "movie" if media_type == MediaType.MOVIE.value else None
+        )
+        year = item.get("year") if isinstance(item.get("year"), int) else None
+        async with semaphore:
+            try:
+                found = await douban.match(title, year=year, media_type=kind)
+            except Exception as exc:  # 补图失败绝不能影响榜单本身
+                logger.debug("豆瓣补图失败 %s: %s", title, exc)
+                return
+        if not found:
+            return
+        item["poster"] = found.get("poster")
+        item["poster_source"] = "douban"
+        item.setdefault("douban_url", found.get("douban_url"))
+        # 顺手补齐空字段：年份/集数对画板卡片的信息密度很有用
+        if not item.get("year") and found.get("year"):
+            item["year"] = found["year"]
+        if not item.get("total_episodes") and found.get("episodes"):
+            item["total_episodes"] = found["episodes"]
+
+    await asyncio.gather(*(fill(i) for i in targets))
+    return items
 
 
 def hot_keywords(*, limit: int = 12, days: int = 30) -> dict[str, Any]:

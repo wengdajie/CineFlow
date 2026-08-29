@@ -28,10 +28,12 @@ from app.providers.registry import list_providers, load_builtin_providers  # noq
 load_builtin_providers()
 providers = list_providers()
 names = {p["name"] for p in providers}
-check("Provider 总数 23", len(providers) == 23, f"实际 {len(providers)}")
-check("README 声明 23 个 Provider", "23 个注册 Provider" in README)
+check("Provider 总数 27", len(providers) == 27, f"实际 {len(providers)}")
+check("README 声明 27 个 Provider", "27 个注册 Provider" in README)
 for expected in ("api_generic", "html_generic", "mukaku", "pan_generic",
-                 "torznab", "rss", "nyaa", "pansou"):
+                 "torznab", "rss", "nyaa", "pansou",
+                 # v1.7.0 新增：两个视频站搜索 + 两个资源站
+                 "bilibili", "youtube", "yyets", "wp_film"):
     check(f"Provider {expected} 已注册", expected in names)
     check(f"README 提及 {expected}", expected in README)
 
@@ -47,8 +49,8 @@ for table in ("audit_logs", "pan_saves", "pan_subscribes", "strm_records",
 # ---- 默认站点 ----
 from app.db.init_db import DEFAULT_SITES  # noqa: E402
 
-check("默认示例站点 13 条", len(DEFAULT_SITES) == 13, f"实际 {len(DEFAULT_SITES)}")
-check("README 声明 13 条示例站点", "写入 13 条" in README)
+check("默认示例站点 22 条", len(DEFAULT_SITES) == 22, f"实际 {len(DEFAULT_SITES)}")
+check("README 声明 22 条示例站点", "写入 22 条" in README)
 check("默认站点含 webdav", any(s["provider"] == "webdav" for s in DEFAULT_SITES))
 # 需要填地址/账号的站点必须默认禁用（示例值直接跑必然报错）；
 # yt-dlp 是本地库调用、装了依赖就能用，是唯一例外
@@ -81,9 +83,10 @@ for key, default in (("RADAR_ENABLED", True), ("RADAR_INTERVAL_MINUTES", 15),
 # ---- 调度任务 ----
 scheduler_src = pathlib.Path("app/services/scheduler.py").read_text(encoding="utf-8")
 job_ids = re.findall(r'^JOB_\w+ = "([^"]+)"', scheduler_src, re.M)
-check("内置调度任务 11 个", len(job_ids) == 11, str(job_ids))
-check("README 声明 11 内置任务", "11 内置任务" in README)
+check("内置调度任务 12 个", len(job_ids) == 12, str(job_ids))
+check("README 声明 12 内置任务", "12 内置任务" in README)
 for job in ("cineflow.radar", "cineflow.pan_transfer", "cineflow.pan_subscribe",
+            "cineflow.pan_keepalive",
             "cineflow.strm_sync", "cineflow.scrape", "cineflow.upgrade",
             "cineflow.site_health", "cineflow.ranking"):
     check(f"任务已注册 {job}", job in job_ids)
@@ -98,8 +101,8 @@ try:
         for m in methods
         if m.lower() in ("get", "post", "patch", "delete", "put")
     )
-    check("API 端点 120 个", total == 120, f"实际 {total}")
-    check("README 声明 120 个端点", "120 个端点" in README and "共 120 个" in README)
+    check("API 端点 126 个", total == 126, f"实际 {total}")
+    check("README 声明 126 个端点", "126 个端点" in README and "共 126 个" in README)
     paths = set(spec["paths"])
     for path in ("/api/v1/users", "/api/v1/users/{user_id}",
                  "/api/v1/system/settings", "/api/v1/system/settings/reset",
@@ -116,7 +119,11 @@ try:
                  "/api/v1/trending/live", "/api/v1/trending/keywords",
                  "/api/v1/trending/sites",
                  "/api/v1/schedules", "/api/v1/schedules/{key}",
-                 "/api/v1/schedules/{key}/reset", "/api/v1/schedules/{key}/run"):
+                 "/api/v1/schedules/{key}/reset", "/api/v1/schedules/{key}/run",
+                 # v1.7.0：网盘文件管理 + 保活 + 豆瓣封面 + 图片代理
+                 "/api/v1/pan/rename", "/api/v1/pan/move", "/api/v1/pan/search",
+                 "/api/v1/pan/keep-alive", "/api/v1/trending/douban",
+                 "/api/v1/images/proxy"):
         check(f"端点存在 {path}", path in paths)
 except Exception as exc:
     check("API 端点校验（需先起服务）", False, str(exc)[:80])
@@ -124,8 +131,8 @@ except Exception as exc:
 # ---- router 数量 ----
 router_src = pathlib.Path("app/api/router.py").read_text(encoding="utf-8")
 router_count = router_src.count("api_router.include_router(")
-check("router 20 个", router_count == 20, f"实际 {router_count}")
-check("README 声明 20 个 router", "20 个 router" in README)
+check("router 21 个", router_count == 21, f"实际 {router_count}")
+check("README 声明 21 个 router", "21 个 router" in README)
 for name in ("trending", "schedules", "pan", "chatops", "strm", "pan_subscribes",
              "users", "site_health", "ranking", "rule_groups"):
     check(f"router {name} 已挂载", f"{name}.router" in router_src)
@@ -191,8 +198,8 @@ check("README 说明定时任务可改期", "定时任务" in README and "cron" 
 
 # ---- 测试文件 ----
 test_files = sorted(p.name for p in pathlib.Path("tests").glob("test_*.py"))
-check("测试文件 28 个", len(test_files) == 28, str(test_files))
-check("README 声明 28 个测试文件", "28 个测试文件" in README)
+check("测试文件 33 个", len(test_files) == 33, str(test_files))
+check("README 声明 33 个测试文件", "33 个测试文件" in README)
 for name in ("test_custom_sites.py", "test_radar.py", "test_trending.py",
              "test_panstorage.py", "test_chatops.py", "test_nfo.py",
              "test_scraper.py", "test_webdav.py", "test_strm_sync.py",
@@ -207,12 +214,12 @@ for script in ("smoke_test.py", "ui_check.py", "demo_pipeline.py", "live_check.p
     check(f"脚本存在 {script}", pathlib.Path("scripts", script).exists())
     check(f"scripts/README 提及 {script}", script in SCRIPTS_README)
 check("README 声明六个验证脚本", "六个开发期验证工具" in README)
-check("README 测试徽章 618", "tests-618%20passed" in README)
-check("README 版本号 1.6.0", "1.6.0" in README)
+check("README 测试徽章 706", "tests-706%20passed" in README)
+check("README 版本号 1.7.0", "1.7.0" in README)
 version_src = pathlib.Path("app/core/version.py").read_text(encoding="utf-8")
-check("代码版本号为 1.6.0", 'APP_VERSION = "1.6.0"' in version_src)
-check("README 声明 210 项接口用例", "210 项真实 HTTP 接口用例" in README)
-check("scripts/README 声明 210 项", "210 项接口用例" in SCRIPTS_README)
+check("代码版本号为 1.7.0", 'APP_VERSION = "1.7.0"' in version_src)
+check("README 声明 228 项接口用例", "228 项真实 HTTP 接口用例" in README)
+check("scripts/README 声明 228 项", "228 项接口用例" in SCRIPTS_README)
 
 # ---- 服务模块 ----
 for module in ("radar", "discovery", "presets", "trending", "settings_store",
@@ -259,13 +266,13 @@ if roadmap.exists():
                       "M17", "M18", "M19", "M20"):
         check(f"路线图含里程碑 {milestone}", milestone in roadmap_text)
     # 路线图必须往前看：候选章节要指向下一个版本，不能还停在已发布的版本上
-    check("路线图候选指向 v1.7.0", "v1.7.0 候选" in roadmap_text)
+    check("路线图候选指向 v1.8.0", "v1.8.0 候选" in roadmap_text)
 
 # 变更日志必须记录到当前版本
 changelog = (docs_dir / "08-变更日志.md")
 if changelog.exists():
     changelog_text = changelog.read_text(encoding="utf-8")
-    for version in ("1.0.0", "1.1.0", "1.2.0", "1.3.0", "1.4.0", "1.5.0", "1.6.0"):
+    for version in ("1.0.0", "1.1.0", "1.2.0", "1.3.0", "1.4.0", "1.5.0", "1.6.0", "1.7.0"):
         check(f"变更日志含 v{version}", version in changelog_text)
     # 变更日志要如实记录「没做什么」，否则下次接手的人会重复踩同一个坑
     check("变更日志说明拒绝 VIP 解析", "付费墙" in changelog_text)
@@ -280,7 +287,7 @@ check("ADR-26 记录不强依赖 TMDB", "不强依赖 TMDB" in adr_text)
 check("ADR-27 记录渲染归属校验", "这一屏属于谁" in adr_text)
 # 竞品分析里被推翻的旧判断必须写清原因，而不是悄悄删掉
 gap_text = (docs_dir / "09-竞品对标与差距分析.md").read_text(encoding="utf-8")
-check("竞品分析标注 v1.6.0 推翻了旧判断", "v1.6.0 部分推翻" in gap_text)
+check("竞品分析标注 v1.7.0 推翻了旧判断", "v1.7.0 部分推翻" in gap_text)
 check("竞品分析记录 VIP 解析不做", "明确不做" in gap_text)
 # 运维手册要能回答本轮用户问过的问题
 ops_text = (docs_dir / "07-运维手册.md").read_text(encoding="utf-8")
@@ -678,6 +685,68 @@ check(f"README 中 {len(blocks)} 个 JSON 示例均合法", not bad, "; ".join(b
 check("README 说明导航站不提供资源",
       "导航站本身不提供影视资源与磁力链接" in README)
 check("README 说明 mukaku 需用中文名", "中文片名" in README)
+
+# ---- v1.7.0：网盘文件管理能力位 ----
+pan_base_src = pathlib.Path("app/providers/panstorage/base.py").read_text(encoding="utf-8")
+for method in ("async def rename", "async def move", "async def copy",
+               "async def search", "async def keep_alive"):
+    check(f"网盘基类有 {method}", method in pan_base_src)
+check("网盘基类有能力位汇总", "def capabilities" in pan_base_src)
+for flag in ("supports_rename", "supports_move", "supports_search", "supports_keepalive"):
+    check(f"网盘能力位 {flag} 已定义", flag in pan_base_src)
+# 降级铁律：基类默认实现必须返回而不是 raise NotImplementedError
+check(
+    "网盘新增能力默认优雅降级（不抛异常）",
+    "raise NotImplementedError" not in pan_base_src,
+)
+quark_src = pathlib.Path("app/providers/panstorage/quark.py").read_text(encoding="utf-8")
+for api_path in ("/file/rename", "/file/move", "/file/search"):
+    check(f"夸克实现 {api_path}", api_path in quark_src)
+
+# ---- v1.7.0：豆瓣封面 ----
+douban_src = pathlib.Path("app/providers/metadata/douban.py").read_text(encoding="utf-8")
+check("豆瓣用公开 suggest 接口（无需 Key）", "subject_suggest" in douban_src)
+check("豆瓣有缓存", "_CACHE" in douban_src)
+check("豆瓣有限流退避", "is_rate_limited" in douban_src and "_BACKOFF_SECONDS" in douban_src)
+check("榜单有封面补全", "async def enrich_posters" in
+      pathlib.Path("app/services/trending.py").read_text(encoding="utf-8"))
+
+# ---- v1.7.0：图片代理与 SSRF 防护 ----
+img_src = pathlib.Path("app/api/routers/images.py").read_text(encoding="utf-8")
+check("图片代理有域名白名单", "ALLOWED_HOSTS" in img_src)
+check("图片代理只允许 http/https", 'parsed.scheme not in ("http", "https")' in img_src)
+check("图片代理校验响应为图片", 'content_type.startswith("image/")' in img_src)
+check("图片代理防后缀混淆", 'host.endswith("." + suffix)' in img_src)
+check("前端豆瓣封面走代理", "posterSrc" in app_js and "images/proxy" in app_js)
+
+# ---- v1.7.0：YouTube / Bilibili 搜索 ----
+wv_src = pathlib.Path("app/providers/indexer/webvideo.py").read_text(encoding="utf-8")
+check("B 站先预热首页拿 Cookie 破 412", "HOME_URL" in wv_src)
+check("YouTube 复用 yt-dlp ytsearch", "ytsearch" in wv_src)
+check("视频搜索产出 WEBVIDEO", "ResourceKind.WEBVIDEO" in wv_src)
+
+# ---- v1.7.0：资源双动作（转存 / 下载）----
+base_src = pathlib.Path("app/providers/base.py").read_text(encoding="utf-8")
+check("Resource 有 actions 能力位", "def actions" in base_src)
+check("Resource.to_dict 下发 actions", '"actions"' in base_src)
+check("前端按能力位渲染操作", "function resourceActions" in app_js)
+check("前端有网盘转存按钮", "function saveButton" in app_js)
+
+# ---- v1.7.0：新增资源站 ----
+check("人人影视 Provider 存在", pathlib.Path("app/providers/indexer/yyets.py").exists())
+check("WordPress 影视站 Provider 存在",
+      pathlib.Path("app/providers/indexer/wp_film.py").exists())
+check("fetch_text 支持强制编码（GB2312 老站）",
+      "encoding: str | None = None" in
+      pathlib.Path("app/utils/http.py").read_text(encoding="utf-8"))
+
+# ---- v1.7.0：网盘保活定时任务 ----
+sched_src = pathlib.Path("app/services/scheduler.py").read_text(encoding="utf-8")
+check("网盘保活任务已注册", "JOB_PAN_KEEPALIVE" in sched_src)
+check("网盘保活任务可解析", '"pan_keepalive": (pan_service.keep_alive_all, {})' in sched_src)
+check("网盘保活配置项存在",
+      "PAN_KEEPALIVE_INTERVAL_MINUTES" in
+      pathlib.Path("app/core/config.py").read_text(encoding="utf-8"))
 
 print()
 print("=" * 60)

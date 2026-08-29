@@ -44,6 +44,10 @@ class WebDavStorage(BasePanStorage):
     display_name = "WebDAV（Nextcloud/坚果云/群晖等）"
     #: WebDAV 无分享转存概念
     supports_save = False
+    # WebDAV 原生就有 MOVE/COPY 方法
+    supports_rename = True
+    supports_move = True
+    supports_keepalive = True
 
     @property
     def base_url(self) -> str:
@@ -220,6 +224,58 @@ class WebDavStorage(BasePanStorage):
         parsed = urllib.parse.urlparse(url)
         credential = f"{urllib.parse.quote(user)}:{urllib.parse.quote(password)}"
         return parsed._replace(netloc=f"{credential}@{parsed.netloc}").geturl()
+
+    # ---------------- 文件管理 ----------------
+    async def _move_or_copy(self, method: str, path: str, dest_path: str) -> bool:
+        """WebDAV 的 MOVE / COPY 共用同一套语义：靠 Destination 头指定目标。"""
+        if not self.base_url:
+            return False
+        status, _ = await self._request(
+            method,
+            path,
+            headers={
+                "Destination": self._url_for(dest_path),
+                # 覆盖同名目标，避免 412；用户的意图就是移动过去
+                "Overwrite": "T",
+            },
+        )
+        return 200 <= status < 300
+
+    async def rename(
+        self, path: str, new_name: str, *, file_id: str | None = None
+    ) -> bool:
+        name = str(new_name or "").strip()
+        if not name:
+            return False
+        target = self.normalize_path(path)
+        parent = self.join_path(*target.split("/")[:-1])
+        return await self._move_or_copy("MOVE", target, self.join_path(parent, name))
+
+    async def move(
+        self, path: str, target_dir: str, *, file_id: str | None = None
+    ) -> bool:
+        target = self.normalize_path(path)
+        name = target.split("/")[-1]
+        if not name:
+            return False
+        return await self._move_or_copy(
+            "MOVE", target, self.join_path(target_dir, name)
+        )
+
+    async def copy(
+        self, path: str, target_dir: str, *, file_id: str | None = None
+    ) -> bool:
+        target = self.normalize_path(path)
+        name = target.split("/")[-1]
+        if not name:
+            return False
+        return await self._move_or_copy(
+            "COPY", target, self.join_path(target_dir, name)
+        )
+
+    async def keep_alive(self) -> tuple[bool, str]:
+        """WebDAV 是无状态 Basic 认证，探活等价于健康检查。"""
+        return await self.health_check()
 
     def auth_header(self) -> dict[str, str]:
         """给 302 播放/STRM 场景用的 Basic Auth 头。"""

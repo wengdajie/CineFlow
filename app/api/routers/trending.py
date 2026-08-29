@@ -24,20 +24,28 @@ def overview(
 
 
 @router.get("/resources", summary="资源热度榜（基于本地搜索缓存）")
-def resources(
+async def resources(
     user: CurrentUser,
     days: int = Query(14, ge=1, le=180),
     limit: int = Query(20, ge=1, le=100),
     media_type: MediaType | None = None,
     kind: ResourceKind | None = None,
+    with_poster: bool = Query(
+        True, description="是否用豆瓣补全缺失封面（画板模式需要）"
+    ),
 ) -> dict[str, Any]:
-    """按「作品 + 季」聚合搜索缓存，热度 = 做种 + 站点覆盖 + 新鲜度 + 画质。"""
+    """按「作品 + 季」聚合搜索缓存，热度 = 做种 + 站点覆盖 + 新鲜度 + 画质。
+
+    ``with_poster=true`` 时会对缺封面的条目走豆瓣补图（有缓存与限流退避）。
+    """
     data = trending_service.resource_ranking(
         days=days,
         limit=limit,
         media_type=media_type.value if media_type else None,
         kind=kind.value if kind else None,
     )
+    if with_poster:
+        data["items"] = await trending_service.enrich_posters(data.get("items") or [])
     return {"success": True, "data": data}
 
 
@@ -47,6 +55,7 @@ async def live(
     limit: int = Query(20, ge=1, le=100),
     limit_per_site: int = Query(40, ge=1, le=200),
     media_type: MediaType | None = None,
+    with_poster: bool = Query(True, description="是否用豆瓣补全缺失封面"),
 ) -> dict[str, Any]:
     """不依赖历史数据，直接聚合站点最新流；未启用站点时返回空榜。"""
     data = await trending_service.live_ranking(
@@ -54,6 +63,8 @@ async def live(
         limit_per_site=limit_per_site,
         media_type=media_type.value if media_type else None,
     )
+    if with_poster:
+        data["items"] = await trending_service.enrich_posters(data.get("items") or [])
     return {"success": True, "data": data}
 
 
@@ -73,3 +84,21 @@ def sites(
     limit: int = Query(20, ge=1, le=100),
 ) -> dict[str, Any]:
     return {"success": True, "data": trending_service.site_activity(days=days, limit=limit)}
+
+
+@router.get("/douban", summary="豆瓣条目搜索（封面与元数据）")
+async def douban_suggest(
+    user: CurrentUser,
+    keyword: str = Query(min_length=1, description="片名关键词"),
+    limit: int = Query(10, ge=1, le=20),
+) -> dict[str, Any]:
+    """直接查豆瓣公开 suggest 接口，用于手动挑封面或校正元数据。"""
+    from app.providers.metadata import douban
+
+    items = await douban.suggest(keyword, limit=limit)
+    return {
+        "success": True,
+        "total": len(items),
+        "rate_limited": douban.is_rate_limited(),
+        "items": items,
+    }

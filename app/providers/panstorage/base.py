@@ -103,6 +103,29 @@ class BasePanStorage(BaseProvider):
     supports_save: bool = True
     #: 该网盘是否支持删除
     supports_delete: bool = True
+    #: 该网盘是否支持重命名
+    supports_rename: bool = False
+    #: 该网盘是否支持移动/复制
+    supports_move: bool = False
+    #: 该网盘是否支持盘内搜索
+    supports_search: bool = False
+    #: 该网盘是否支持 Cookie/凭据保活（keep_alive）
+    supports_keepalive: bool = False
+
+    def capabilities(self) -> dict[str, bool]:
+        """汇总能力位，供 API/前端按能力渲染按钮（而不是写死一堆 if）。
+
+        这样新增网盘时前端零改动：能力位为 False 的按钮直接不渲染，
+        避免用户点了才发现「不支持」。
+        """
+        return {
+            "save": self.supports_save,
+            "delete": self.supports_delete,
+            "rename": self.supports_rename,
+            "move": self.supports_move,
+            "search": self.supports_search,
+            "keepalive": self.supports_keepalive,
+        }
 
     @property
     def root_path(self) -> str:
@@ -166,6 +189,38 @@ class BasePanStorage(BaseProvider):
     async def download_url(self, path: str, *, file_id: str | None = None) -> str | None:
         """换取临时直链（用于 STRM 或投给 aria2）。"""
         return None
+
+    # ---------------- 文件管理（v1.7.0 新增，参考 T3FAP 网盘插件能力矩阵） ----------------
+    async def rename(
+        self, path: str, new_name: str, *, file_id: str | None = None
+    ) -> bool:
+        """重命名文件/目录。不支持的网盘返回 False（不抛异常）。"""
+        return False
+
+    async def move(
+        self, path: str, target_dir: str, *, file_id: str | None = None
+    ) -> bool:
+        """移动文件/目录到 ``target_dir``。"""
+        return False
+
+    async def copy(
+        self, path: str, target_dir: str, *, file_id: str | None = None
+    ) -> bool:
+        """复制文件/目录到 ``target_dir``。"""
+        return False
+
+    async def search(self, keyword: str, *, limit: int = 50) -> list[PanFile]:
+        """盘内搜索。不支持的网盘返回空列表，调用方会提示「该网盘不支持搜索」。"""
+        return []
+
+    async def keep_alive(self) -> tuple[bool, str]:
+        """凭据保活探活。
+
+        网盘 Cookie 普遍是「不用就过期」，所以定时轻量调用一次接口既能
+        探测有效期、又能顺带续期。默认实现直接复用 :meth:`health_check`，
+        这样即使子类没重写也能参与巡检。
+        """
+        return await self.health_check()
 
     def normalize_path(self, path: str | None) -> str:
         """规范化网盘路径：统一用 ``/`` 开头、去掉重复斜杠与尾部斜杠。"""

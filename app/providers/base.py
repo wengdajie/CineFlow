@@ -52,10 +52,40 @@ class Resource:
                     break
         return md5(f"{self.kind}:{base}".encode()).hexdigest()
 
+    @property
+    def actions(self) -> list[str]:
+        """这条资源支持哪些动作，供前端按能力渲染按钮。
+
+        参考 T3FAP 的「能力位」思路：不让前端去猜「网盘资源能不能转存」，
+        而是后端明确告知。这样新增资源类型时前端零改动。
+
+        - ``save``：转存进自己的网盘（仅网盘分享链接）
+        - ``download``：投给下载器（磁力/种子/直链，以及网盘直链下载）
+        - ``open``：在浏览器打开详情页
+        """
+        result: list[str] = []
+        link = str(self.link or "").lower()
+        if self.kind == ResourceKind.PAN.value:
+            # 网盘分享既可以「转存」进自己的盘，也可以「下载」——
+            # 下载走的是先转存再换直链、或直接由支持的网盘取直链
+            result.append("save")
+            result.append("download")
+        elif self.kind == ResourceKind.WEBVIDEO.value:
+            # 公开视频页（YouTube/B 站等）只能交给 yt-dlp 下载
+            result.append("download")
+        else:
+            # 种子/磁力：投下载器
+            if link.startswith("magnet:") or link:
+                result.append("download")
+        if self.page_url:
+            result.append("open")
+        return result
+
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
         data["publish_at"] = self.publish_at.isoformat() if self.publish_at else None
         data["unique_key"] = self.unique_key
+        data["actions"] = self.actions
         return data
 
 

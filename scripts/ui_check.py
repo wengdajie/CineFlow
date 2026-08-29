@@ -890,8 +890,18 @@ def _is_noise(item):
     lowered = item.lower()
     if "favicon" in lowered:
         return True
-    if "err_socket_not_connected" in lowered or "err_name_not_resolved" in lowered:
-        return BASE.replace("http://", "") not in lowered
+    # ERR_CONNECTION_CLOSED 与前两者同类：外站图床挂了/被墙。
+    # 只要不是本机地址就算噪声——本机连不上才是真问题。
+    for signal in (
+        "err_socket_not_connected",
+        "err_name_not_resolved",
+        "err_connection_closed",
+        "err_connection_reset",
+        "err_connection_timed_out",
+        "err_certificate",
+    ):
+        if signal in lowered:
+            return BASE.replace("http://", "") not in lowered
     return "400 (bad request)" in lowered
 
 

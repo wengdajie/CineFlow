@@ -29,6 +29,10 @@ class LocalDirStorage(BasePanStorage):
     name = "local_dir"
     display_name = "本地目录（含 rclone/CloudDrive 挂载）"
     supports_save = False
+    # 本地文件系统天然支持全部文件管理操作
+    supports_rename = True
+    supports_move = True
+    supports_search = True
 
     @property
     def base_dir(self) -> Path | None:
@@ -123,6 +127,87 @@ class LocalDirStorage(BasePanStorage):
         except OSError as exc:
             logger.warning("删除失败 %s: %s", path, exc)
             return False
+
+    # ---------------- 文件管理 ----------------
+    async def rename(
+        self, path: str, new_name: str, *, file_id: str | None = None
+    ) -> bool:
+        name = str(new_name or "").strip()
+        # 不允许改名时带路径分隔符，否则等于偷偷做了一次移动、可能越界
+        if not name or "/" in name or "\\" in name:
+            return False
+        try:
+            source = self._resolve(path)
+            if not source.exists():
+                return False
+            source.rename(source.parent / name)
+            return True
+        except Exception as exc:
+            logger.warning("本地重命名失败 %s: %s", path, exc)
+            return False
+
+    async def move(
+        self, path: str, target_dir: str, *, file_id: str | None = None
+    ) -> bool:
+        try:
+            source = self._resolve(path)
+            dest_dir = self._resolve(target_dir)
+            if not source.exists():
+                return False
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(source), str(dest_dir / source.name))
+            return True
+        except Exception as exc:
+            logger.warning("本地移动失败 %s: %s", path, exc)
+            return False
+
+    async def copy(
+        self, path: str, target_dir: str, *, file_id: str | None = None
+    ) -> bool:
+        try:
+            source = self._resolve(path)
+            dest_dir = self._resolve(target_dir)
+            if not source.exists():
+                return False
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            target = dest_dir / source.name
+            if source.is_dir():
+                shutil.copytree(str(source), str(target), dirs_exist_ok=True)
+            else:
+                shutil.copy2(str(source), str(target))
+            return True
+        except Exception as exc:
+            logger.warning("本地复制失败 %s: %s", path, exc)
+            return False
+
+    async def search(self, keyword: str, *, limit: int = 50) -> list[PanFile]:
+        word = str(keyword or "").strip().lower()
+        if not word or not self.base_dir:
+            return []
+        root = self.base_dir.resolve()
+        cap = max(1, min(int(limit or 50), 500))
+        files: list[PanFile] = []
+        try:
+            for item in root.rglob("*"):
+                if len(files) >= cap:
+                    break
+                if word not in item.name.lower():
+                    continue
+                try:
+                    stat = item.stat()
+                except OSError:
+                    continue
+                files.append(
+                    PanFile(
+                        name=item.name,
+                        path="/" + item.relative_to(root).as_posix(),
+                        is_dir=item.is_dir(),
+                        size=0 if item.is_dir() else stat.st_size,
+                    )
+                )
+        except Exception as exc:
+            logger.warning("本地搜索失败 %s: %s", keyword, exc)
+        return files
 
     async def health_check(self) -> tuple[bool, str]:
         if not self.base_dir:

@@ -217,6 +217,27 @@ live = call("GET", "/trending/live?limit=5&limit_per_site=10", token=token)
 live_rows = (live.get("data") or {}).get("items") or []
 print(f"       实时热榜 {len(live_rows)} 条（未启用站点时为 0 属正常）")
 
+# v1.7.0：豆瓣封面 + 图片代理
+douban = call("GET", "/trending/douban?keyword=" + urllib.parse.quote("庆余年") + "&limit=3",
+              token=token)
+d_items = items_of(douban)
+print(f"       豆瓣条目 {len(d_items)} 条 限流={douban.get('rate_limited')}")
+for row in d_items[:3]:
+    print(
+        f"         {str(row.get('title'))[:20]:22} {row.get('year')} "
+        f"{row.get('media_type')} 封面={'有' if row.get('poster') else '无'}"
+    )
+# 关掉补图时不该报错（画板之外的调用方用得到）
+call("GET", "/trending/resources?days=30&limit=5&with_poster=false", token=token)
+# 图片代理：白名单外必须 400（SSRF 防线），内网地址同样拒绝
+call("GET", "/images/proxy?url=" + urllib.parse.quote("https://evil.example.com/x.jpg"),
+     token=token, expect=(400,))
+call("GET", "/images/proxy?url=" + urllib.parse.quote("http://127.0.0.1:6060/api/health"),
+     token=token, expect=(400,))
+# 代理端点必须匿名可用（img 标签带不了 token），所以不能是 401
+call("GET", "/images/proxy?url=" + urllib.parse.quote("https://evil.example.com/x.jpg"),
+     expect=(400,))
+
 print("\n" + "=" * 70)
 print("5) 搜索（无启用站点时应优雅返回空）")
 print("=" * 70)
@@ -378,6 +399,12 @@ for item in pan_items:
         f"         {item.get('name')[:16]:18} {item.get('provider'):10} "
         f"已用 {quota.get('percent')}% 可转存={item.get('supports_save')}"
     )
+    caps = item.get("capabilities") or {}
+    assert caps, "总览必须下发能力位（前端据此渲染文件管理按钮）"
+    print(
+        f"           能力位：改名={caps.get('rename')} 移动={caps.get('move')} "
+        f"搜索={caps.get('search')} 保活={caps.get('keepalive')}"
+    )
 
 pending = call("GET", "/pan/pending?limit=10", token=token)
 print(f"       待转存队列 {len(items_of(pending))} 条")
@@ -401,6 +428,29 @@ if pan_items:
     call("GET", f"/pan/download-url?site_id={pan_site}&path={probe_file}",
          token=token, expect=(200, 400))
     call("POST", f"/pan/{pan_site}/test", token=token)
+
+    # v1.7.0 文件管理链路：建目录 → 改名 → 盘内搜索 → 移动 → 清理
+    caps = pan_items[0].get("capabilities") or {}
+    call("POST", "/pan/mkdir", token=token,
+         body={"site_id": pan_site, "path": "/cf_smoke_src"}, expect=(200, 400))
+    if caps.get("rename"):
+        call("POST", "/pan/rename", token=token,
+             body={"site_id": pan_site, "path": "/cf_smoke_src",
+                   "new_name": "cf_smoke_renamed"}, expect=(200, 400))
+    if caps.get("search"):
+        found = call("GET", f"/pan/search?site_id={pan_site}&keyword=cf_smoke&limit=10",
+                     token=token, expect=(200, 400))
+        print(f"       盘内搜索命中 {found.get('total')} 条")
+    if caps.get("move"):
+        call("POST", "/pan/mkdir", token=token,
+             body={"site_id": pan_site, "path": "/cf_smoke_dst"}, expect=(200, 400))
+        call("POST", "/pan/move", token=token,
+             body={"site_id": pan_site, "path": "/cf_smoke_renamed",
+                   "target_dir": "/cf_smoke_dst", "copy": False}, expect=(200, 400))
+        call("DELETE", f"/pan/files?site_id={pan_site}&path={urllib.parse.quote('/cf_smoke_dst')}",
+             token=token, expect=(200, 400))
+    call("DELETE", f"/pan/files?site_id={pan_site}&path={urllib.parse.quote('/cf_smoke_renamed')}",
+         token=token, expect=(200, 400))
 else:
     print("       （未启用网盘，跳过目录类端点；下面仍验证降级提示）")
 
@@ -411,9 +461,20 @@ call("POST", "/pan/save", token=token,
      body={"share_url": "https://pan.quark.cn/s/smoketest"}, expect=(200, 400))
 transfer = call("POST", "/pan/transfer?limit=5", token=token)
 print(f"       批量转存：待处理 {transfer.get('pending')} 成功 {transfer.get('saved')}")
+# 凭据保活巡检：无论有没有网盘都必须返回结构化结果
+keep = call("POST", "/pan/keep-alive", token=token)
+print(f"       保活巡检：共 {keep.get('total')} 个，异常 {keep.get('failed')} 个")
+# 不存在的网盘做文件管理要 400 而不是 500
+call("POST", "/pan/rename", token=token,
+     body={"site_id": 999999, "path": "/a", "new_name": "b"}, expect=(400,))
+call("POST", "/pan/move", token=token,
+     body={"site_id": 999999, "path": "/a", "target_dir": "/b"}, expect=(400,))
+call("GET", "/pan/search?site_id=999999&keyword=x", token=token, expect=(400,))
 # 未授权拦截
 call("GET", "/pan", expect=(401,))
 call("POST", "/pan/save", body={"share_url": "x"}, expect=(401,))
+call("POST", "/pan/keep-alive", expect=(401,))
+call("GET", "/pan/search?site_id=1&keyword=x", expect=(401,))
 
 print("\n" + "=" * 70)
 print("9d) ChatOps 机器人：平台 / 配置 / 指令 / 审计 / Webhook 验签")

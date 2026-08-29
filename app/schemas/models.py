@@ -287,6 +287,31 @@ class PanMkdirRequest(BaseModel):
     path: str = Field(min_length=1)
 
 
+class PanRenameRequest(BaseModel):
+    """重命名网盘文件/目录。"""
+
+    site_id: int
+    path: str = Field(min_length=1, description="待改名的完整路径")
+    new_name: str = Field(min_length=1, description="新名称（不含路径分隔符）")
+    file_id: str | None = Field(default=None, description="已知文件 ID 可跳过路径解析，更快")
+
+
+class PanMoveRequest(BaseModel):
+    """移动或复制网盘文件/目录。"""
+
+    site_id: int
+    path: str = Field(min_length=1, description="源路径")
+    target_dir: str = Field(min_length=1, description="目标目录")
+    file_id: str | None = Field(default=None, description="已知文件 ID 可跳过路径解析")
+    # 字段名不能直接叫 copy —— 会遮蔽 BaseModel.copy 并触发 pydantic 警告。
+    # 用 alias 保持请求体字段仍是 "copy"，对前端与 API 完全无感。
+    copy_mode: bool = Field(
+        default=False, alias="copy", description="true=复制，false=移动"
+    )
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
 # ---------------- STRM 同步 ----------------
 class StrmSyncRequest(BaseModel):
     """手动触发一次 STRM 同步。site_id 为空表示全部网盘。"""

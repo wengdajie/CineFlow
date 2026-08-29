@@ -249,7 +249,7 @@ def test_movie_subscribe_completes(automation_env):
 
 # ------------------------------------------------- 内置调度任务（v1.5.0 扩容）
 def test_all_builtin_jobs_are_registered_and_resolvable():
-    """11 个内置任务都要有可解析的执行目标，否则调度器起来就报错。"""
+    """12 个内置任务都要有可解析的执行目标，否则调度器起来就报错。"""
     from app.services.scheduler import builtin_specs, scheduler_service
 
     specs = builtin_specs()
@@ -260,6 +260,7 @@ def test_all_builtin_jobs_are_registered_and_resolvable():
         "download",
         "pan_transfer",
         "pan_subscribe",
+        "pan_keepalive",
         "strm_sync",
         "site_health",
         "ranking",

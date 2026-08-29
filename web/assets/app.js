@@ -87,6 +87,7 @@
     info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5M12 7.7v.4"/>',
     box: '<path d="M3.5 8 12 3.5 20.5 8v8L12 20.5 3.5 16z"/><path d="M3.5 8 12 12.5 20.5 8M12 12.5v8"/>',
     cloud: '<path d="M7 18a4 4 0 0 1-.4-8A5.5 5.5 0 0 1 17 10.5a3.8 3.8 0 0 1 .3 7.5z"/>',
+    shield: '<path d="M12 3.5 19 6v6c0 4.2-2.9 7.6-7 8.5-4.1-.9-7-4.3-7-8.5V6z"/><path d="M9 12l2 2 4-4"/>',
     link: '<path d="M9.5 14.5 14.5 9.5"/><path d="M11 6.5 13 4.5a4 4 0 0 1 5.7 5.7l-2 2"/><path d="M13 17.5 11 19.5a4 4 0 0 1-5.7-5.7l2-2"/>',
     film: '<rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M7.5 4.5v15M16.5 4.5v15M3 12h18"/>',
     video: '<rect x="2.5" y="6" width="13" height="12" rx="2"/><path d="M15.5 10.5l6-3v9l-6-3z"/>',
@@ -864,6 +865,102 @@
     return button;
   }
 
+  /**
+   * 网盘资源的「转存」按钮。
+   *
+   * 为什么和「下载」并列而不是二选一：网盘分享有两种正当用法——
+   * 转存进自己的盘（秒传、留存）、或直接下到本地（走 aria2 等）。
+   * 后端用 row.actions 明确告知支持哪些，这里按能力位渲染。
+   */
+  function saveButton(row, onDone) {
+    const button = el("button", { class: "btn sm" }, [
+      icon("cloud", "sm"),
+      el("span", { text: "转存" }),
+    ]);
+    button.addEventListener("click", async () => {
+      // 先取网盘列表：只有一个盘时直接转存，多个盘让用户选，零个盘给明确提示
+      let storages = [];
+      try {
+        const overview = await api("/pan");
+        storages = (overview.items || []).filter((item) => item.supports_save);
+      } catch (error) {
+        toast(error.message, "err");
+        return;
+      }
+      if (!storages.length) {
+        toast("尚未启用支持转存的网盘，请先到「站点管理」添加夸克/AList", "err");
+        return;
+      }
+
+      const doSave = async (siteId, targetDir) => {
+        button.disabled = true;
+        button.querySelector("span").textContent = "转存中…";
+        try {
+          const result = await api("/pan/save", {
+            method: "POST",
+            body: {
+              share_url: row.link,
+              password: row.password || null,
+              site_id: siteId || null,
+              target_dir: targetDir || null,
+            },
+          });
+          button.querySelector("span").textContent = "已转存";
+          toast("已转存到 " + (result.saved_path || "网盘"), "ok");
+          if (onDone) onDone();
+        } catch (error) {
+          toast(error.message, "err");
+          button.disabled = false;
+          button.querySelector("span").textContent = "转存";
+        }
+      };
+
+      modal(
+        "转存到网盘",
+        [
+          {
+            key: "site_id",
+            label: "目标网盘",
+            type: "select",
+            options: [{ value: "", label: "自动选择（按链接域名匹配）" }].concat(
+              storages.map((item) => ({ value: String(item.site_id), label: item.name }))
+            ),
+          },
+          { key: "target_dir", label: "落地目录", placeholder: "留空用网盘默认目录" },
+        ],
+        async (values) => {
+          await doSave(
+            values.site_id ? Number(values.site_id) : null,
+            values.target_dir || null
+          );
+        },
+        "开始转存"
+      );
+    });
+    return button;
+  }
+
+  /**
+   * 按后端下发的能力位渲染资源操作区。
+   *
+   * 参考 T3FAP 的能力位设计：前端不再猜「这条资源能干什么」，
+   * 而是读 row.actions。这样新增资源类型时前端零改动。
+   */
+  function resourceActions(row, onDone) {
+    const actions = row.actions || [];
+    const nodes = [];
+    // 网盘资源：转存 + 下载 两个按钮并列（本轮需求）
+    if (actions.indexOf("save") >= 0) nodes.push(saveButton(row, onDone));
+    if (actions.indexOf("download") >= 0) nodes.push(downloadButton(row, onDone));
+    if (!nodes.length) nodes.push(downloadButton(row, onDone));
+    if (row.page_url) {
+      nodes.push(
+        iconButton("详情页", "link", () => window.open(row.page_url, "_blank", "noopener"), "sm ghost")
+      );
+    }
+    return el("div", { class: "row tight" }, nodes);
+  }
+
   async function pageSearch() {
     const keyword = el("input", {
       class: "input",
@@ -968,7 +1065,7 @@
                 class: "num",
                 render: (row) => el("span", { class: "tag brand", text: String(Math.round(row.score || 0)) }),
               },
-              { title: "操作", render: (row) => downloadButton(row) },
+              { title: "操作", render: (row) => resourceActions(row) },
             ],
             filtered,
             "没有匹配的资源，试试更换关键词或启用更多站点"
@@ -1227,7 +1324,7 @@
       return holder;
     }
     const image = el("img", {
-      src: row.poster,
+      src: posterSrc(row.poster),
       alt: row.title,
       loading: "lazy",
       // 部分站点图床有防盗链，带 referrer 会 403
@@ -1238,6 +1335,33 @@
     });
     holder.appendChild(image);
     return holder;
+  }
+
+  /**
+   * 把封面地址转成可直接加载的地址。
+   *
+   * 豆瓣图床对缺少 Referer 的请求返回 418（浏览器跨站会剥离 Referer，
+   * 前端无论怎么设都拿不到图），因此这类图床改走后端图片代理：
+   * 后端带正确 Referer 代拉后转发。其它图床（B 站/YouTube/TMDB）能直连，
+   * 就不绕后端，省一次转发。
+   */
+  const PROXY_HOSTS = ["doubanio.com", "douban.com"];
+  function posterSrc(url) {
+    const raw = String(url || "");
+    if (!raw) return raw;
+    // 协议相对地址（//i0.hdslb.com/...）补上 https 免得走成 file://
+    const normalized = raw.indexOf("//") === 0 ? "https:" + raw : raw;
+    let host = "";
+    try {
+      host = new URL(normalized).hostname.toLowerCase();
+    } catch (error) {
+      return normalized;
+    }
+    const needsProxy = PROXY_HOSTS.some(
+      (suffix) => host === suffix || host.endsWith("." + suffix)
+    );
+    if (!needsProxy) return normalized;
+    return API + "/images/proxy?url=" + encodeURIComponent(normalized);
   }
 
   /** 画板模式：封面卡片网格。 */
@@ -3446,10 +3570,93 @@
         pageStorage();
       };
 
+      // 能力位由后端下发：不支持的操作直接不渲染按钮，避免"点了才知道不支持"
+      const caps = current.capabilities || {};
+
       browser = el("div", { class: "card flush" }, [
         el("div", { class: "card-head" }, [
-          el("h3", {}, [icon("library", "sm"), el("span", { text: current.name + " · 文件浏览" })]),
+          el("h3", {}, [icon("library", "sm"), el("span", { text: current.name + " · 文件管理" })]),
           el("div", { class: "row tight center" }, [
+            caps.search
+              ? iconButton("盘内搜索", "search", () => {
+                  modal(
+                    current.name + " · 盘内搜索",
+                    [{ key: "keyword", label: "文件名关键词", required: true }],
+                    async (values) => {
+                      const result = await api(
+                        "/pan/search?site_id=" + current.site_id +
+                          "&keyword=" + encodeURIComponent(values.keyword) + "&limit=100"
+                      );
+                      const rows = result.items || [];
+                      if (!rows.length) {
+                        toast("没有匹配的文件", "");
+                        return;
+                      }
+                      // 搜索结果用只读弹窗展示，点「定位」直接跳到所在目录
+                      let closePanel = null;
+                      closePanel = panelModal(
+                        "搜索「" + values.keyword + "」",
+                        "共 " + rows.length + " 条结果",
+                        el("div", { class: "card flush" }, [
+                          table(
+                            [
+                              {
+                                title: "名称",
+                                render: (row) =>
+                                  el("div", {}, [
+                                    el("div", { class: "row tight center" }, [
+                                      icon(row.is_dir ? "box" : "film", "sm"),
+                                      el("span", { class: "truncate", title: row.name, text: row.name }),
+                                    ]),
+                                    el("div", { class: "cell-sub mono", text: row.path }),
+                                  ]),
+                              },
+                              { title: "大小", class: "num", render: (row) => (row.is_dir ? "-" : fmtSize(row.size)) },
+                              {
+                                title: "操作",
+                                render: (row) =>
+                                  iconButton("定位", "link", () => {
+                                    const parent = row.is_dir
+                                      ? row.path
+                                      : row.path.split("/").slice(0, -1).join("/") || "/";
+                                    if (closePanel) closePanel();
+                                    goPath(parent);
+                                  }, "sm ghost"),
+                              },
+                            ],
+                            rows
+                          ),
+                        ]),
+                        true
+                      );
+                    },
+                    "搜索"
+                  );
+                }, "sm ghost")
+              : null,
+            iconButton("新建目录", "plus", () => {
+              modal(
+                "新建目录",
+                [
+                  {
+                    key: "name",
+                    label: "目录名",
+                    required: true,
+                    hint: "将创建在当前目录 " + files.path + " 下",
+                  },
+                ],
+                async (values) => {
+                  const base = files.path === "/" ? "" : files.path;
+                  await api("/pan/mkdir", {
+                    method: "POST",
+                    body: { site_id: current.site_id, path: base + "/" + values.name },
+                  });
+                  toast("已创建", "ok");
+                  pageStorage();
+                },
+                "创建"
+              );
+            }, "sm ghost"),
             files.parent ? iconButton("上一级", "refresh", () => goPath(files.parent), "sm ghost") : null,
             iconButton("刷新", "refresh", () => pageStorage(), "sm ghost"),
           ]),
@@ -3492,6 +3699,68 @@
                               toast(error.message, "err");
                             }
                           }, "sm ghost"),
+                      caps.rename
+                        ? iconButton("重命名", "edit", () => {
+                            modal(
+                              "重命名",
+                              [{ key: "new_name", label: "新名称", value: row.name, required: true }],
+                              async (values) => {
+                                await api("/pan/rename", {
+                                  method: "POST",
+                                  body: {
+                                    site_id: current.site_id,
+                                    path: row.path,
+                                    new_name: values.new_name,
+                                    file_id: row.file_id || null,
+                                  },
+                                });
+                                toast("已重命名", "ok");
+                                pageStorage();
+                              },
+                              "保存"
+                            );
+                          }, "sm ghost")
+                        : null,
+                      caps.move
+                        ? iconButton("移动", "box", () => {
+                            modal(
+                              "移动 / 复制",
+                              [
+                                {
+                                  key: "target_dir",
+                                  label: "目标目录",
+                                  value: files.path,
+                                  required: true,
+                                  hint: "填网盘内的绝对路径，如 /影视/电影",
+                                },
+                                {
+                                  key: "mode",
+                                  label: "方式",
+                                  type: "select",
+                                  options: [
+                                    { value: "move", label: "移动" },
+                                    { value: "copy", label: "复制" },
+                                  ],
+                                },
+                              ],
+                              async (values) => {
+                                await api("/pan/move", {
+                                  method: "POST",
+                                  body: {
+                                    site_id: current.site_id,
+                                    path: row.path,
+                                    target_dir: values.target_dir,
+                                    file_id: row.file_id || null,
+                                    copy: values.mode === "copy",
+                                  },
+                                });
+                                toast(values.mode === "copy" ? "已复制" : "已移动", "ok");
+                                pageStorage();
+                              },
+                              "执行"
+                            );
+                          }, "sm ghost")
+                        : null,
                       current.supports_delete
                         ? iconButton("删除", "trash", async () => {
                             if (!confirm("确定删除 " + row.name + "？")) return;
@@ -3642,7 +3911,43 @@
       list.length
         ? "已启用 " + list.length + " 个网盘 · 待转存 " + pendingItems.length + " 条"
         : "尚未启用网盘存储",
-      [saveButton, iconButton("刷新", "refresh", () => pageStorage())]
+      [
+        saveButton,
+        // 网盘 Cookie 会静默过期，提供一键巡检比等任务失败再排查高效得多
+        iconButton("凭据保活巡检", "shield", async () => {
+          try {
+            const result = await api("/pan/keep-alive", { method: "POST" });
+            const rows = result.items || [];
+            panelModal(
+              "网盘凭据保活",
+              "共巡检 " + result.total + " 个网盘，异常 " + result.failed + " 个",
+              el("div", { class: "card flush" }, [
+                table(
+                  [
+                    { title: "网盘", render: (row) => el("span", { text: row.name }) },
+                    { title: "类型", render: (row) => el("span", { class: "tag", text: row.provider }) },
+                    {
+                      title: "状态",
+                      render: (row) =>
+                        el("span", {
+                          class: "tag dot " + (row.skipped ? "" : row.success ? "ok" : "err"),
+                          text: row.skipped ? "跳过" : row.success ? "有效" : "失效",
+                        }),
+                    },
+                    { title: "说明", render: (row) => el("div", { class: "tiny dim", text: row.message || "-" }) },
+                  ],
+                  rows,
+                  "没有已启用的网盘"
+                ),
+              ]),
+              true
+            );
+          } catch (error) {
+            toast(error.message, "err");
+          }
+        }, "ghost"),
+        iconButton("刷新", "refresh", () => pageStorage()),
+      ]
     );
   }
 

@@ -99,6 +99,8 @@ async def overview() -> dict[str, Any]:
                 "display_name": storage.display_name,
                 "supports_save": storage.supports_save,
                 "supports_delete": storage.supports_delete,
+                # v1.7.0：能力位整体下发，前端按能力渲染文件管理按钮
+                "capabilities": storage.capabilities(),
                 "root_path": storage.root_path,
                 "quota": quota.to_dict(),
             }
@@ -292,6 +294,116 @@ async def make_dir(site_id: int, path: str) -> dict[str, Any]:
         return {"success": False, "message": "网盘不存在或未启用"}
     ok = await storage.mkdir(path)
     return {"success": ok, "message": "已创建" if ok else "创建失败"}
+
+
+async def rename_file(
+    site_id: int, path: str, new_name: str, *, file_id: str | None = None
+) -> dict[str, Any]:
+    """重命名网盘文件/目录。"""
+    storage = get_storage(site_id)
+    if not storage:
+        return {"success": False, "message": "网盘不存在或未启用"}
+    if not storage.supports_rename:
+        return {"success": False, "message": f"{storage.site_name} 不支持重命名"}
+    name = str(new_name or "").strip()
+    if not name:
+        return {"success": False, "message": "新名称不能为空"}
+    ok = await storage.rename(path, name, file_id=file_id)
+    return {"success": ok, "message": "已重命名" if ok else "重命名失败（检查权限或同名冲突）"}
+
+
+async def move_file(
+    site_id: int,
+    path: str,
+    target_dir: str,
+    *,
+    file_id: str | None = None,
+    copy: bool = False,
+) -> dict[str, Any]:
+    """移动或复制网盘文件/目录。``copy=True`` 时走复制。"""
+    storage = get_storage(site_id)
+    if not storage:
+        return {"success": False, "message": "网盘不存在或未启用"}
+    if not storage.supports_move:
+        return {"success": False, "message": f"{storage.site_name} 不支持移动/复制"}
+    if not str(target_dir or "").strip():
+        return {"success": False, "message": "目标目录不能为空"}
+    action = "复制" if copy else "移动"
+    ok = await (
+        storage.copy(path, target_dir, file_id=file_id)
+        if copy
+        else storage.move(path, target_dir, file_id=file_id)
+    )
+    return {"success": ok, "message": f"已{action}" if ok else f"{action}失败（检查目标目录是否存在）"}
+
+
+async def search_files(
+    site_id: int, keyword: str, *, limit: int = 50
+) -> dict[str, Any]:
+    """盘内搜索文件。"""
+    storage = get_storage(site_id)
+    if not storage:
+        return {"success": False, "message": "网盘不存在或未启用", "items": []}
+    if not storage.supports_search:
+        return {
+            "success": False,
+            "message": f"{storage.site_name} 不支持盘内搜索",
+            "items": [],
+        }
+    word = str(keyword or "").strip()
+    if not word:
+        return {"success": False, "message": "关键词不能为空", "items": []}
+    files = await storage.search(word, limit=limit)
+    return {
+        "success": True,
+        "name": storage.site_name,
+        "keyword": word,
+        "total": len(files),
+        "items": [item.to_dict() for item in files],
+    }
+
+
+async def keep_alive_all() -> dict[str, Any]:
+    """对全部启用的网盘做一次凭据保活巡检。
+
+    网盘 Cookie 最常见的故障是「静默过期」——任务半夜跑失败了才发现。
+    这里主动轮一遍并把结果写进站点健康表，异常时走通知。
+    """
+    items: list[dict[str, Any]] = []
+    for storage in storages():
+        site_id = storage.config.get("id")
+        if not storage.supports_keepalive:
+            items.append(
+                {
+                    "site_id": site_id,
+                    "name": storage.site_name,
+                    "provider": storage.name,
+                    "skipped": True,
+                    "success": True,
+                    "message": "该网盘无需保活",
+                }
+            )
+            continue
+        try:
+            ok, message = await storage.keep_alive()
+        except Exception as exc:  # 单个盘异常不能影响其它盘
+            ok, message = False, f"保活异常：{exc}"
+        items.append(
+            {
+                "site_id": site_id,
+                "name": storage.site_name,
+                "provider": storage.name,
+                "skipped": False,
+                "success": ok,
+                "message": message,
+            }
+        )
+    failed = [i for i in items if not i["success"]]
+    return {
+        "total": len(items),
+        "failed": len(failed),
+        "items": items,
+    }
 
 
 async def resolve_download_url(

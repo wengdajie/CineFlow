@@ -8,6 +8,7 @@ from app.api.routers import (
     auth,
     chatops,
     downloads,
+    images,
     library,
     media,
     pan,
@@ -31,6 +32,7 @@ api_router = APIRouter()
 api_router.include_router(auth.router)
 api_router.include_router(search.router)
 api_router.include_router(trending.router)
+api_router.include_router(images.router)
 api_router.include_router(subscribes.router)
 api_router.include_router(radar.router)
 api_router.include_router(ranking.router)

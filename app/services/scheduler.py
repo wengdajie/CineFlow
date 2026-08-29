@@ -27,6 +27,7 @@ JOB_LIBRARY = "cineflow.library"
 JOB_RADAR = "cineflow.radar"
 JOB_PAN_TRANSFER = "cineflow.pan_transfer"
 JOB_PAN_SUBSCRIBE = "cineflow.pan_subscribe"
+JOB_PAN_KEEPALIVE = "cineflow.pan_keepalive"
 JOB_STRM_SYNC = "cineflow.strm_sync"
 JOB_SCRAPE = "cineflow.scrape"
 JOB_UPGRADE = "cineflow.upgrade"
@@ -134,6 +135,15 @@ def builtin_specs() -> list[JobSpec]:
             trigger="interval",
             minutes=settings.PAN_SUBSCRIBE_INTERVAL_MINUTES or 60,
             enabled=bool(settings.PAN_SUBSCRIBE_INTERVAL_MINUTES > 0),
+        ),
+        JobSpec(
+            key="pan_keepalive",
+            job_id=JOB_PAN_KEEPALIVE,
+            name="网盘凭据保活",
+            description="定期轻量调用各网盘接口，刷新登录态并在 Cookie 过期时告警",
+            trigger="interval",
+            minutes=settings.PAN_KEEPALIVE_INTERVAL_MINUTES or 360,
+            enabled=bool(settings.PAN_KEEPALIVE_INTERVAL_MINUTES > 0),
         ),
         JobSpec(
             key="strm_sync",
@@ -294,6 +304,7 @@ class SchedulerService:
                 {"limit": settings.PAN_TRANSFER_BATCH},
             ),
             "pan_subscribe": (pan_subscribe_service.check_all, {}),
+            "pan_keepalive": (pan_service.keep_alive_all, {}),
             "strm_sync": (strm_service.sync_all, {}),
             "scrape": (
                 scraper_service.scrape_library,

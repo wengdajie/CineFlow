@@ -210,6 +210,8 @@ class Settings(BaseSettings):
     PAN_AUTO_SAVE: bool = True
     #: 定时转存待处理网盘任务的间隔（分钟），0 表示关闭
     PAN_TRANSFER_INTERVAL_MINUTES: int = 20
+    #: 网盘凭据保活巡检间隔（分钟，0=关闭）。Cookie 静默过期是网盘最常见故障
+    PAN_KEEPALIVE_INTERVAL_MINUTES: int = 360
     #: 单次批量转存的最大任务数
     PAN_TRANSFER_BATCH: int = 20
 

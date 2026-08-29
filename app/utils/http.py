@@ -44,14 +44,23 @@ async def fetch_text(
     json_body: Any = None,
     headers: dict[str, str] | None = None,
     timeout: float | None = None,
+    encoding: str | None = None,
 ) -> str | None:
-    """请求并返回文本，失败返回 ``None``。"""
+    """请求并返回文本，失败返回 ``None``。
+
+    ``encoding``：强制指定响应编码。很多老牌中文资源站是 GB2312/GBK 却
+    不在响应头里声明，httpx 会按 UTF-8 解出乱码，这时必须显式指定。
+    """
     try:
         async with async_client(timeout=timeout, headers=headers) as client:
             response = await client.request(
                 method, url, params=params, data=data, json=json_body
             )
             response.raise_for_status()
+            if encoding:
+                # 用 errors="replace" 而不是抛异常：个别字符解不出来
+                # 也不该让整页解析失败
+                return response.content.decode(encoding, errors="replace")
             return response.text
     except Exception as exc:
         logger.warning("HTTP 文本请求失败 %s: %s", url, exc)
