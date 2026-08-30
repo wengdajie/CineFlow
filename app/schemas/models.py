@@ -385,6 +385,39 @@ class PanSubscribeUpdate(BaseModel):
     reset_history: bool = Field(default=False, description="清空已转存记录，下次巡检会重新转存全部文件")
 
 
+class VideoSubscribeCreate(BaseModel):
+    """新建网页视频订阅：盯住一个 UP 主 / 频道 / 播放列表自动追新。"""
+
+    name: str = Field(min_length=1, description="订阅名称")
+    url: str = Field(min_length=1, description="UP 主空间页 / 频道页 / 播放列表地址")
+    site: str | None = Field(default=None, description="来源标记，留空按地址自动判断")
+    save_path: str | None = Field(default=None, description="下载落地目录，留空用全局下载目录")
+    include_regex: str | None = Field(default=None, description="只下载标题匹配该正则的投稿")
+    exclude_regex: str | None = Field(default=None, description="排除标题匹配该正则的投稿")
+    check_limit: int = Field(default=10, ge=1, le=50, description="每次巡检取列表前多少条")
+    max_per_run: int = Field(default=3, ge=1, le=20, description="单次巡检最多下载几个")
+    max_height: int | None = Field(default=None, ge=144, le=4320, description="画质上限（如 1080），留空自动")
+    skip_existing: bool = Field(default=True, description="首次巡检只记账不补历史（推荐，避免一次投出几十个任务）")
+
+
+class VideoSubscribeUpdate(BaseModel):
+    """更新网页视频订阅，只提交需要改的字段。"""
+
+    name: str | None = None
+    url: str | None = None
+    site: str | None = None
+    save_path: str | None = None
+    include_regex: str | None = None
+    exclude_regex: str | None = None
+    check_limit: int | None = Field(default=None, ge=1, le=50)
+    max_per_run: int | None = Field(default=None, ge=1, le=20)
+    max_height: int | None = Field(default=None, ge=144, le=4320)
+    status: SubscribeStatus | None = None
+    skip_existing: bool | None = None
+    reset_history: bool = Field(default=False, description="清空已处理记录，下次巡检会重新补历史")
+    reset_failures: bool = Field(default=False, description="清零失败计数，被自动暂停的订阅会一并恢复")
+
+
 # ---------------- 刮削与洗版 ----------------
 class ScrapeRequest(BaseModel):
     """批量补刮 NFO 与图片。"""

@@ -41,6 +41,9 @@ ALLOWED_HOSTS: dict[str, str] = {
     "hdslb.com": "https://www.bilibili.com/",
     "biliimg.com": "https://www.bilibili.com/",
     "ytimg.com": "https://www.youtube.com/",
+    # Bangumi 番剧封面图床（放送日历用）。注意它返回的原始地址是 http://，
+    # 已在 metadata/bangumi.py 升级成 https；这里的白名单按主机名匹配，与协议无关。
+    "bgm.tv": "https://bangumi.tv/",
     "themoviedb.org": "https://www.themoviedb.org/",
     "tmdb.org": "https://www.themoviedb.org/",
     # 网盘扫码登录的二维码图：这些接口同样校验 Referer，且二维码是一次性的，

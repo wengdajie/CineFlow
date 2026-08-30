@@ -62,6 +62,9 @@ YAML 里的二级 key 会拍平成 `CF_<父>_<子>`，例如 `tmdb.api_key` → 
 | 下载器换源 | `CF_DOWNLOADER_FAILOVER` | `true` | 投递失败时自动换下一个下载器 |
 | 榜单订阅周期 | `CF_RANKING_INTERVAL_MINUTES` | `720` | 分钟，`0`=关闭 |
 | 榜单单次上限 | `CF_RANKING_MAX_PER_RUN` | `5` | 一次最多自动建几个订阅，防刷爆 |
+| 视频追更周期 | `CF_VIDEO_SUBSCRIBE_INTERVAL_MINUTES` | `120` | 分钟，`0`=关闭。UP 主更新频率远低于剧集，查太勤只增加被风控概率 |
+| 告警去抖窗口 | `CF_NOTIFY_ALERT_COOLDOWN_MINUTES` | `360` | 分钟，`0`=不去抖。同一条告警（站点掉线/网盘失效）的最短重复间隔 |
+| 限速时段周期 | `CF_SPEED_LIMIT_INTERVAL_MINUTES` | `10` | 分钟，`0`=关闭。时段切换只需分钟级精度 |
 
 > 上表中**除密钥、目录、端口外的绝大多数项都能在设置页直接改并立即生效**，
 > 不必改文件重启。
@@ -91,13 +94,13 @@ curl -X POST -H "X-API-Token: your-token" \
      http://127.0.0.1:6060/api/v1/subscribes/run-all
 ```
 
-主要端点分组（共 144 个）：
+主要端点分组（共 155 个端点）：
 
 | 前缀 | 用途 |
 |---|---|
 | `/api/v1/auth` | 登录、当前用户、改密 |
 | `/api/v1/search` | 聚合搜索（GET 快查 / POST 带完整过滤条件） |
-| `/api/v1/trending` | 热度排行：总览、资源榜、实时榜、搜索热词、站点贡献榜、**豆瓣条目查询** |
+| `/api/v1/trending` | 热度排行 / 发现榜：总览、资源榜、实时榜、搜索热词、站点贡献榜、**豆瓣条目查询**、豆瓣四分类、B 站分区、YouTube 地区榜、**Bangumi 放送日历** |
 | `/api/v1/images` | **封面图代理**（绕过豆瓣图床防盗链，带白名单 SSRF 防护，匿名可用） |
 | `/api/v1/subscribes` | 订阅 CRUD、缺集查询、单个/全部巡检 |
 | `/api/v1/downloads` | 任务列表、手动添加、暂停恢复、删除、同步 |
@@ -110,6 +113,8 @@ curl -X POST -H "X-API-Token: your-token" \
 | `/api/v1/site-health` | 站点健康：概览、历史记录、单站/批量探测 |
 | `/api/v1/pan` | 网盘管理：总览（含能力位）、目录浏览、转存、批量转存、建目录、删除、直链、记录、**改名/移动/盘内搜索/凭据保活** |
 | `/api/v1/pan-subscribes` | 网盘分享追更：订阅 CRUD、单个/全部巡检 |
+| `/api/v1/video-subscribes` | **UP 主/频道视频追更**：订阅 CRUD、地址预览（不落库先看能不能解析）、单个/全部巡检、失败计数重置 |
+| `/api/v1/downloaders` | 下载器独立管理（从站点管理搬出）：CRUD、连通性测试、字段 schema、**限速时段读写与立即应用** |
 | `/api/v1/strm` | STRM 同步：概览、记录、手动同步、`play/{id}` 匿名 302 跳转 |
 | `/api/v1/chatops` | 机器人：入站 Webhook、平台清单、配置、指令试跑、解析、审计 |
 | `/api/v1/schedules` | 定时任务：查看、改期（interval/cron）、重置、立即执行 |
@@ -128,22 +133,23 @@ cineflow/
 │   │                  nfo categories rules version
 │   ├── db/            session base models init_db
 │   ├── providers/     base registry + indexer/ pan/ panstorage/ downloader/
-│   │                  mediaserver/ notify/ metadata/
+│   │                  mediaserver/ notify/ metadata/(tmdb douban bangumi)
 │   ├── services/      sites search notify download library subscribe scheduler
 │   │                  radar trending discovery presets settings_store
 │   │                  pan_storage scraper strm_sync pan_subscribe upgrade
 │   │                  config_store site_health ranking rule_groups
+│   │                  video_subscribe speed_limit changelog
 │   │                  chatops/
 │   ├── plugins/       base manager
-│   ├── api/           deps router + routers/(20)
+│   ├── api/           deps router + routers/(23)
 │   ├── schemas/       enums models
 │   ├── utils/         http strings
 │   └── main.py        应用入口（lifespan / CORS / 静态资源）
 ├── web/               index.html + assets/(app.js style.css)  ← 零依赖前端
 ├── plugins/           auto_cleanup pan_transfer daily_digest  ← 示例插件
-├── tests/             38 个测试文件
+├── tests/             42 个测试文件
 ├── scripts/           smoke_test / ui_check / demo_pipeline 验证脚本
-├── docs/              11 篇维护文档（现状/架构/路线图/决策/运维/站点接入/变更日志/竞品对标…）
+├── docs/              16 篇维护文档（现状/架构/路线图/决策/运维/站点接入/变更日志/竞品对标…）
 ├── config/            config.yaml.example
 ├── docker/            entrypoint.sh
 ├── Dockerfile         多阶段构建

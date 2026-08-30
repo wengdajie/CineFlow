@@ -72,6 +72,24 @@ class BaseDownloader(BaseProvider):
         """恢复任务。"""
         return False
 
+    #: 是否支持全局限速。默认 ``False``：**不假装支持**。
+    #: 迅雷的本地 CGI 与 yt-dlp 都没有"运行时改全局限速"的接口，
+    #: 谎报支持只会让用户以为设了限速却毫无效果（沿用 ADR-28 能力位思路）。
+    supports_speed_limit: bool = False
+
+    async def set_speed_limit(
+        self, *, download_kb: int | None = None, upload_kb: int | None = None
+    ) -> bool:
+        """设置全局限速（KB/s）。``0`` 表示不限速，``None`` 表示不改这一项。
+
+        只有 ``supports_speed_limit`` 为真的下载器才需要覆写。
+        """
+        return False
+
+    async def get_speed_limit(self) -> dict[str, int] | None:
+        """读取当前全局限速（KB/s），不支持时返回 ``None``。"""
+        return None
+
     def default_save_path(self) -> str | None:
         """站点配置的默认保存目录。"""
         value = self.option("save_path")

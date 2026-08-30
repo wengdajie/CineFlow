@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 
 from app.providers.indexer import bili_chart, yt_chart
-from app.providers.metadata import douban_chart
+from app.providers.metadata import bangumi, douban_chart
 from app.services import discover
 
 
@@ -239,14 +239,18 @@ def test_bili_partitions_cover_video_kinds():
 
 
 # ---------------- 发现服务 ----------------
-def test_discover_categories_cover_six_tabs():
-    """电影/电视剧/动漫/综艺/Bilibili/YouTube 六个页签。"""
+def test_discover_categories_cover_seven_tabs():
+    """电影/电视剧/动漫/综艺/Bilibili/YouTube/新番 七个页签。
+
+    v1.12.0 新增「新番」（Bangumi 放送日历）。它与「动漫」口径不同：
+    动漫是豆瓣热度榜，新番是放送表——所以是新增页签而不是替换。
+    """
     cats = discover.categories()
     assert [c["key"] for c in cats] == [
-        "movie", "tv", "anime", "show", "bilibili", "youtube",
+        "movie", "tv", "anime", "show", "bilibili", "youtube", "bangumi",
     ]
     assert [c["label"] for c in cats] == [
-        "电影", "电视剧", "动漫", "综艺", "Bilibili", "YouTube",
+        "电影", "电视剧", "动漫", "综艺", "Bilibili", "YouTube", "新番",
     ]
 
 
@@ -336,15 +340,19 @@ def test_discover_overview_returns_all_charts(monkeypatch):
     async def fake_yt(region, *, limit=20, offset=0):
         return [{"title": "YT 视频"}]
 
+    async def fake_bgm(*, limit=30, offset=0):
+        return [{"title": "新番"}]
+
     monkeypatch.setattr(douban_chart, "chart", fake_douban)
     monkeypatch.setattr(bili_chart, "chart", fake_bili)
     monkeypatch.setattr(yt_chart, "chart", fake_yt)
+    monkeypatch.setattr(bangumi, "chart", fake_bgm)
     monkeypatch.setattr(discover, "_local_titles", lambda: {})
     data = run(discover.overview(limit=3))
-    assert len(data["charts"]) == 6
-    assert len(data["categories"]) == 6
+    assert len(data["charts"]) == 7
+    assert len(data["categories"]) == 7
     assert {c["category"] for c in data["charts"]} == {
-        "movie", "tv", "anime", "show", "bilibili", "youtube",
+        "movie", "tv", "anime", "show", "bilibili", "youtube", "bangumi",
     }
 
 
@@ -360,12 +368,16 @@ def test_discover_overview_survives_one_source_failing(monkeypatch):
     async def fake_yt(region, *, limit=20, offset=0):
         return [{"title": "YT 视频"}]
 
+    async def fake_bgm(*, limit=30, offset=0):
+        return [{"title": "新番"}]
+
     monkeypatch.setattr(douban_chart, "chart", boom)
     monkeypatch.setattr(bili_chart, "chart", fake_bili)
     monkeypatch.setattr(yt_chart, "chart", fake_yt)
+    monkeypatch.setattr(bangumi, "chart", fake_bgm)
     monkeypatch.setattr(discover, "_local_titles", lambda: {})
     data = run(discover.overview(limit=3))
-    assert len(data["charts"]) == 6
+    assert len(data["charts"]) == 7
     bili = next(c for c in data["charts"] if c["category"] == "bilibili")
     assert bili["count"] == 1
     # 豆瓣四个榜都失败，但整页仍返回 6 个 chart，失败的给空 items + message

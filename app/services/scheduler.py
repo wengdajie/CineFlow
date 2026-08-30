@@ -27,6 +27,8 @@ JOB_LIBRARY = "cineflow.library"
 JOB_RADAR = "cineflow.radar"
 JOB_PAN_TRANSFER = "cineflow.pan_transfer"
 JOB_PAN_SUBSCRIBE = "cineflow.pan_subscribe"
+JOB_VIDEO_SUBSCRIBE = "cineflow.video_subscribe"
+JOB_SPEED_LIMIT = "cineflow.speed_limit"
 JOB_PAN_KEEPALIVE = "cineflow.pan_keepalive"
 JOB_STRM_SYNC = "cineflow.strm_sync"
 JOB_SCRAPE = "cineflow.scrape"
@@ -137,6 +139,15 @@ def builtin_specs() -> list[JobSpec]:
             enabled=bool(settings.PAN_SUBSCRIBE_INTERVAL_MINUTES > 0),
         ),
         JobSpec(
+            key="video_subscribe",
+            job_id=JOB_VIDEO_SUBSCRIBE,
+            name="视频追更（UP 主/频道更新）",
+            description="用 yt-dlp 列出关注创作者的最新投稿，只下载没下过的（按视频 ID 增量）",
+            trigger="interval",
+            minutes=settings.VIDEO_SUBSCRIBE_INTERVAL_MINUTES or 120,
+            enabled=bool(settings.VIDEO_SUBSCRIBE_INTERVAL_MINUTES > 0),
+        ),
+        JobSpec(
             key="pan_keepalive",
             job_id=JOB_PAN_KEEPALIVE,
             name="网盘凭据保活",
@@ -153,6 +164,15 @@ def builtin_specs() -> list[JobSpec]:
             trigger="interval",
             minutes=settings.STRM_SYNC_INTERVAL_MINUTES or 120,
             enabled=bool(settings.STRM_SYNC_INTERVAL_MINUTES > 0),
+        ),
+        JobSpec(
+            key="speed_limit",
+            job_id=JOB_SPEED_LIMIT,
+            name="下载器限速时段",
+            description="按「白天限速/夜间跑满」的时段把全局限速下发给 qB/TR/aria2",
+            trigger="interval",
+            minutes=settings.SPEED_LIMIT_INTERVAL_MINUTES or 10,
+            enabled=bool(settings.SPEED_LIMIT_INTERVAL_MINUTES > 0),
         ),
         JobSpec(
             key="site_health",
@@ -287,9 +307,11 @@ class SchedulerService:
         from app.services import ranking as ranking_service
         from app.services import scraper as scraper_service
         from app.services import site_health as health_service
+        from app.services import speed_limit as speed_limit_service
         from app.services import strm_sync as strm_service
         from app.services import subscribe as subscribe_service
         from app.services import upgrade as upgrade_service
+        from app.services import video_subscribe as video_subscribe_service
 
         targets: dict[str, tuple[Callable[..., Any], dict[str, Any]]] = {
             "subscribe": (subscribe_service.run_all, {}),
@@ -304,6 +326,7 @@ class SchedulerService:
                 {"limit": settings.PAN_TRANSFER_BATCH},
             ),
             "pan_subscribe": (pan_subscribe_service.check_all, {}),
+            "video_subscribe": (video_subscribe_service.check_all, {}),
             "pan_keepalive": (pan_service.keep_alive_all, {}),
             "strm_sync": (strm_service.sync_all, {}),
             "scrape": (
@@ -312,6 +335,7 @@ class SchedulerService:
             ),
             "upgrade": (upgrade_service.run, {}),
             "site_health": (health_service.check_all, {}),
+            "speed_limit": (speed_limit_service.apply_now, {}),
             "ranking": (ranking_service.run, {}),
         }
         if key not in targets:

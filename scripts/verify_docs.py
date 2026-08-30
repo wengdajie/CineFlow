@@ -58,8 +58,8 @@ for expected in ("api_generic", "html_generic", "mukaku", "pan_generic",
 # ---- 数据库表 ----
 from app.db.models import Base  # noqa: E402
 
-check("19 张表", len(Base.metadata.tables) == 19, f"实际 {len(Base.metadata.tables)}")
-check("README 声明 19 张表", "19 张表" in README)
+check("20 张表", len(Base.metadata.tables) == 20, f"实际 {len(Base.metadata.tables)}")
+check("README 声明 20 张表", "20 张表" in README)
 for table in ("audit_logs", "pan_saves", "pan_subscribes", "strm_records",
               "site_health", "ranking_rules", "filter_rule_groups"):
     check(f"新增表 {table} 存在", table in Base.metadata.tables)
@@ -101,8 +101,8 @@ for key, default in (("RADAR_ENABLED", True), ("RADAR_INTERVAL_MINUTES", 15),
 # ---- 调度任务 ----
 scheduler_src = pathlib.Path("app/services/scheduler.py").read_text(encoding="utf-8")
 job_ids = re.findall(r'^JOB_\w+ = "([^"]+)"', scheduler_src, re.M)
-check("内置调度任务 12 个", len(job_ids) == 12, str(job_ids))
-check("README 声明 12 内置任务", "12 内置任务" in README)
+check("内置调度任务 14 个", len(job_ids) == 14, str(job_ids))
+check("README 声明 14 内置任务", "14 内置任务" in README)
 for job in ("cineflow.radar", "cineflow.pan_transfer", "cineflow.pan_subscribe",
             "cineflow.pan_keepalive",
             "cineflow.strm_sync", "cineflow.scrape", "cineflow.upgrade",
@@ -119,8 +119,8 @@ try:
         for m in methods
         if m.lower() in ("get", "post", "patch", "delete", "put")
     )
-    check("API 端点 144 个", total == 144, f"实际 {total}")
-    check("README 声明 144 个端点", "144 个端点" in README and "共 144 个" in README)
+    check("API 端点 155 个", total == 155, f"实际 {total}")
+    check("README 声明 155 个端点", "155 个端点" in README and "共 155 个" in README)
     paths = set(spec["paths"])
     for path in ("/api/v1/users", "/api/v1/users/{user_id}",
                  "/api/v1/system/settings", "/api/v1/system/settings/reset",
@@ -156,8 +156,8 @@ except Exception as exc:
 # ---- router 数量 ----
 router_src = pathlib.Path("app/api/router.py").read_text(encoding="utf-8")
 router_count = router_src.count("api_router.include_router(")
-check("router 22 个", router_count == 22, f"实际 {router_count}")
-check("README 声明 22 个 router", "22 个 router" in README)
+check("router 23 个", router_count == 23, f"实际 {router_count}")
+check("README 声明 23 个 router", "23 个 router" in README)
 for name in ("trending", "schedules", "pan", "chatops", "strm", "pan_subscribes",
              "users", "site_health", "ranking", "rule_groups"):
     check(f"router {name} 已挂载", f"{name}.router" in router_src)
@@ -166,12 +166,12 @@ for name in ("trending", "schedules", "pan", "chatops", "strm", "pan_subscribes"
 app_js = pathlib.Path("web/assets/app.js").read_text(encoding="utf-8")
 pages_block = app_js[app_js.index("const PAGES"): app_js.index("];", app_js.index("const PAGES"))]
 page_count = pages_block.count("{ key:")
-check("前端页面 21 个", page_count == 21, f"实际 {page_count}")
-check("README 声明点检 21 个页面", "21 个页面" in README)
-check("scripts/README 声明 21 个页面", "21 个前端页面" in SCRIPTS_README)
+check("前端页面 22 个", page_count == 22, f"实际 {page_count}")
+check("README 声明点检 22 个页面", "22 个页面" in README)
+check("scripts/README 声明 22 个页面", "22 个前端页面" in SCRIPTS_README)
 check("前端含热度排行页", '"trending"' in app_js and "pageTrending" in app_js)
 check("前端含定时任务页", '"schedules"' in app_js and "pageSchedules" in app_js)
-check("README 声明 21 个功能页", "21 个功能页" in README)
+check("README 声明 22 个功能页", "22 个功能页" in README)
 check("前端含追新雷达页", '"radar"' in app_js and "pageRadar" in app_js)
 check("前端含站点发现弹窗", "discoverDialog" in app_js)
 check("前端含预设选择器", "presetPicker" in app_js)
@@ -223,8 +223,8 @@ check("README 说明定时任务可改期", "定时任务" in README and "cron" 
 
 # ---- 测试文件 ----
 test_files = sorted(p.name for p in pathlib.Path("tests").glob("test_*.py"))
-check("测试文件 38 个", len(test_files) == 38, str(test_files))
-check("README 声明 38 个测试文件", "38 个测试文件" in README)
+check("测试文件 42 个", len(test_files) == 42, str(test_files))
+check("README 声明 42 个测试文件", "42 个测试文件" in README)
 for name in ("test_custom_sites.py", "test_radar.py", "test_trending.py",
              "test_panstorage.py", "test_chatops.py", "test_nfo.py",
              "test_scraper.py", "test_webdav.py", "test_strm_sync.py",
@@ -239,12 +239,12 @@ for script in ("smoke_test.py", "ui_check.py", "demo_pipeline.py", "live_check.p
     check(f"脚本存在 {script}", pathlib.Path("scripts", script).exists())
     check(f"scripts/README 提及 {script}", script in SCRIPTS_README)
 check("文档声明七个验证脚本", "七个开发期验证工具" in README)
-check("README 测试徽章 835", "tests-835%20passed" in README_ONLY)
-check("README 版本号 1.11.0", "1.11.0" in README_ONLY)
+check("README 测试徽章 994", "tests-994%20passed" in README_ONLY)
+check("README 版本号 1.12.0", "1.12.0" in README_ONLY)
 version_src = pathlib.Path("app/core/version.py").read_text(encoding="utf-8")
-check("代码版本号为 1.11.0", 'APP_VERSION = "1.11.0"' in version_src)
-check("README 声明 274 项接口用例", "274 项真实 HTTP 接口用例" in README)
-check("scripts/README 声明 274 项", "274 项接口用例" in SCRIPTS_README)
+check("代码版本号为 1.12.0", 'APP_VERSION = "1.12.0"' in version_src)
+check("README 声明 275 项接口用例", "275 项真实 HTTP 接口用例" in README)
+check("scripts/README 声明 275 项", "275 项接口用例" in SCRIPTS_README)
 
 # ---- 服务模块 ----
 for module in ("radar", "discovery", "presets", "trending", "settings_store",
@@ -1045,13 +1045,26 @@ check("ADR 说明 multi-column 而非 grid", "multi-column" in adr_text)
 check("ADR 说明豆瓣真分页与 B 站切片差异",
       "page_start" in adr_text and "切片" in adr_text)
 check("ADR 说明为什么保留后端榜单接口", "榜单自动订阅" in adr_text)
+check("ADR 说明 Bangumi 而非自建放送表",
+      "ADR-56" in adr_text and "weekday" in adr_text)
+check("ADR 说明 yt-dlp 扁平提取而非 wbi 签名",
+      "ADR-57" in adr_text and "wbi" in adr_text and "412" in adr_text)
+check("ADR 说明增量判据用视频 ID",
+      "ADR-58" in adr_text and "handled_ids" in adr_text)
+check("ADR 说明通知不配即全收",
+      "ADR-59" in adr_text and "全收" in adr_text)
+check("ADR 说明限速只做全局且三家单位不同",
+      "ADR-60" in adr_text and "1024" in adr_text and "enabled" in adr_text)
+check("ADR 说明宁可没封面也不要错封面",
+      "ADR-61" in adr_text and "sub_title" in adr_text)
 changelog_text = (docs_dir / "08-变更日志.md").read_text(encoding="utf-8")
 check("变更日志含 v1.9.0", "## v1.9.0" in changelog_text)
 check("变更日志含 v1.10.0", "## v1.10.0" in changelog_text)
-check("变更日志含 v1.11.0", "## v1.11.0" in changelog_text)
+check("变更日志含 v1.12.0", "## v1.12.0" in changelog_text)
 check("变更日志记录破坏性变更", "破坏性变更" in changelog_text)
 roadmap_all = (docs_dir / "03-升级路线图.md").read_text(encoding="utf-8")
-for milestone in ("M30", "M31", "M32", "M33", "M34", "M35", "M36"):
+for milestone in ("M30", "M31", "M32", "M33", "M34", "M35", "M36",
+                  "M37", "M38", "M39", "M40", "M41"):
     check(f"路线图含里程碑 {milestone}", f"里程碑 {milestone}" in roadmap_all)
 
 

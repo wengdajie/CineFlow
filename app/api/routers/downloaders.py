@@ -247,3 +247,53 @@ async def test_downloader(
     site.last_check_at = utcnow()
     session.commit()
     return {"success": ok, "message": message}
+# ---------------- 限速时段（v1.12.0） ----------------
+class SpeedLimitPayload(BaseModel):
+    """限速时段配置。时间用 ``HH:MM``，限速值单位 KB/s，``0`` 表示不限速。"""
+
+    enabled: bool | None = Field(default=None, description="总开关")
+    start: str | None = Field(default=None, description="限速开始时间 HH:MM")
+    end: str | None = Field(default=None, description="限速结束时间 HH:MM（可跨午夜）")
+    download_kb: int | None = Field(default=None, ge=0, description="时段内下行限速 KB/s，0=不限")
+    upload_kb: int | None = Field(default=None, ge=0, description="时段内上行限速 KB/s，0=不限")
+    off_peak_download_kb: int | None = Field(
+        default=None, ge=0, description="时段外下行限速 KB/s，0=不限（夜间跑满）"
+    )
+    off_peak_upload_kb: int | None = Field(
+        default=None, ge=0, description="时段外上行限速 KB/s，0=不限"
+    )
+
+
+@router.get("/speed-limit", summary="限速时段配置与当前生效值")
+def get_speed_limit(user: CurrentUser) -> dict[str, Any]:
+    """读取配置，并算出**此刻**应该用哪一组限速。
+
+    返回 ``current.phase``：``peak``（限速时段内）/ ``off_peak``（时段外）/
+    ``disabled``（未启用），让界面能直接显示"现在正在限速吗"。
+    """
+    from app.services import speed_limit
+
+    return {"success": True, "data": speed_limit.describe()}
+
+
+@router.put("/speed-limit", summary="保存限速时段配置")
+def save_speed_limit(payload: SpeedLimitPayload, user: AdminUser) -> dict[str, Any]:
+    """保存配置。非法时间格式/负数会返回 400 而不是静默存下坏值。"""
+    from app.services import speed_limit
+
+    try:
+        config = speed_limit.save_config(payload.model_dump(exclude_unset=True))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"success": True, "data": speed_limit.describe(), "config": config}
+
+
+@router.post("/speed-limit/apply", summary="立即按当前时段下发限速")
+async def apply_speed_limit(user: AdminUser) -> dict[str, Any]:
+    """手动触发一次下发，用于「改完立刻看看生效没」。
+
+    不支持限速的下载器会如实标为 ``skipped``，不假装成功。
+    """
+    from app.services import speed_limit
+
+    return await speed_limit.apply_now()

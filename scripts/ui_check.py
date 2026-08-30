@@ -26,6 +26,7 @@ PAGES = [
     ("library", "媒体库"),
     ("storage", "网盘管理"),
     ("pansub", "分享追更"),
+    ("videosub", "视频追更"),
     ("strm", "STRM 同步"),
     ("sites", "站点管理"),
     ("sitehealth", "站点健康"),
@@ -383,13 +384,22 @@ def main():
             if leftover:
                 errors.append(f"[trending] 已下线的页内搜索 DOM {gone_sel} 仍存在 {leftover} 个")
 
-        # v1.10.0：六个分类页签（豆瓣四类 + Bilibili + YouTube）
-        segs = page.locator(".segment button")
+        # v1.12.0：七个分类页签（豆瓣四类 + Bilibili + YouTube + 新番）
+        #
+        # ⚠️ 必须限定在**第一个** .segment 里。筛选栏其实有三组 segment：
+        # 分类 / 二级分区 / 视图（画板|列表|日历）。早先用 ".segment button"
+        # 全选，等于把「列表」也当成一个分类去点 —— 于是循环结束时视图被切成
+        # 列表，紧接着的「画板必须有卡片」断言就必然失败。
+        # 之前没暴露是因为点到「Bilibili」后二级分区出现、把索引挤走了，
+        # 纯属巧合；分类一加到 7 个这个巧合就不成立了。
+        segs = page.locator(".segment").first.locator("button")
         seg_labels = [segs.nth(i).inner_text().strip() for i in range(segs.count())]
         print(f"   分类切换按钮 {segs.count()} 个：{seg_labels}")
-        for want in ("电影", "电视剧", "动漫", "综艺", "Bilibili", "YouTube"):
+        for want in ("电影", "电视剧", "动漫", "综艺", "Bilibili", "YouTube", "新番"):
             if want not in seg_labels:
                 errors.append(f"[trending] 分类页签缺少「{want}」")
+        if len(seg_labels) != 7:
+            errors.append(f"[trending] 分类页签应为 7 个，实际 {seg_labels}")
         # 逐个点一遍：任何分类都不能把页面点成空白/报错
         for i in range(segs.count()):
             label = segs.nth(i).inner_text().strip()
@@ -430,11 +440,54 @@ def main():
                 print(f"   （「{label}」本次无数据，可能是上游实例不可用，跳过按钮校验）")
 
         print("\n" + "=" * 68)
+        print("6e-1b) 交互测试：新番放送日历（v1.12.0）")
+        print("=" * 68)
+        # 「新番」页签独有的第三种视图：按周一~周日分列，标出今天。
+        # 它与「动漫」页签口径不同（那个是豆瓣热度榜，答不了"周几更新"）。
+        bangumi_tab = page.get_by_role("button", name="新番", exact=True)
+        if bangumi_tab.count():
+            bangumi_tab.first.click()
+            page.wait_for_timeout(4000)
+            cal_btn = page.get_by_role("button", name="日历", exact=True)
+            print(f"   「新番」提供日历视图：{cal_btn.count() > 0}")
+            if not cal_btn.count():
+                errors.append("[trending] 「新番」页签缺少日历视图")
+            else:
+                cal_btn.first.click()
+                page.wait_for_timeout(5000)
+                cols = page.locator(".cal-col").count()
+                items = page.locator(".cal-item").count()
+                today = page.locator(".cal-col.today").count()
+                print(f"   日历列 {cols} 列 / 条目 {items} 个 / 今天高亮 {today} 列")
+                # 上游（Bangumi）不可用时列数为 0 属正常，只在有数据时校验结构
+                if cols:
+                    if cols < 7:
+                        errors.append(f"[trending] 放送日历应有 7 列（含未定可为 8），实际 {cols}")
+                    if today != 1:
+                        errors.append(f"[trending] 放送日历应恰好高亮 1 列「今天」，实际 {today}")
+                    page.screenshot(path=str(SHOTS / "21b-bangumi-calendar.png"), full_page=True)
+                else:
+                    print("   （Bangumi 本次无数据，跳过日历结构校验）")
+                # 切回画板：视图状态跨页签保留，留在日历会影响后续画板断言
+                board_back = page.get_by_role("button", name="画板", exact=True)
+                if board_back.count():
+                    board_back.first.click()
+                    page.wait_for_timeout(1500)
+        else:
+            errors.append("[trending] 找不到「新番」分类页签")
+
+        print("\n" + "=" * 68)
         print("6e-2) 交互测试：发现榜画板模式与封面降级")
         print("=" * 68)
         # 回到第一个分类（上一步循环可能停在被限流而空的分类上）
         segs.nth(0).click()
         page.wait_for_timeout(3000)
+        # 视图状态是跨页签保留的，前面的点检可能把它留在「列表」上。
+        # 画板断言之前显式切回画板，否则断言的是另一个视图。
+        board_reset = page.get_by_role("button", name="画板", exact=True)
+        if board_reset.count():
+            board_reset.first.click()
+            page.wait_for_timeout(2000)
         board_btn = page.get_by_role("button", name="画板", exact=True)
         list_btn = page.get_by_role("button", name="列表", exact=True)
         print(f"   视图切换按钮：画板 {board_btn.count()} 个 / 列表 {list_btn.count()} 个")

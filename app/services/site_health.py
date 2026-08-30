@@ -201,8 +201,15 @@ async def _notify(kind: str, result: dict[str, Any]) -> None:
             "请检查 Cookie / passkey / 站点地址是否仍然有效。",
             level=NotifyLevel.WARNING.value,
             event=EventType.SITE_UNHEALTHY.value,
+            # 去抖：站点一直坏着时，每轮巡检都会命中告警条件。
+            # 按「站点 + 告警类型」做 key，冷却窗口内只推一条。
+            suppress_key=f"site.unhealthy:{result['site']}",
+            suppress_seconds=int(settings.NOTIFY_ALERT_COOLDOWN_MINUTES) * 60,
         )
     else:
+        # 恢复时必须清掉该站的抑制记录：否则「坏→好→又坏」的第二次异常
+        # 会因为还在冷却窗口内而被静默吞掉，用户就再也收不到告警了。
+        notify_service.clear_suppression(f"site.unhealthy:{result['site']}")
         await notify_service.send(
             f"站点已恢复：{result['site']}",
             result["message"],

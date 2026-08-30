@@ -325,6 +325,50 @@ class QbittorrentDownloader(BaseDownloader):
             "resume", external_id
         )
 
+    #: qB 有现成的全局限速接口，能力位如实开启
+    supports_speed_limit = True
+
+    async def set_speed_limit(
+        self, *, download_kb: int | None = None, upload_kb: int | None = None
+    ) -> bool:
+        """设置全局限速。
+
+        ⚠️ **qB 的接口单位是 B/s，不是 KB/s**（``setDownloadLimit`` 的 ``limit``
+        参数）。传 1024 得到的是 1KB/s 而不是 1MB/s——这个单位坑不做换算的话，
+        用户设「10MB/s」会得到 10KB/s，看起来像"限速没生效反而更慢了"。
+        ``0`` 表示不限速。
+        """
+        ok = True
+        if download_kb is not None:
+            response = await self._request(
+                "POST",
+                "/api/v2/transfer/setDownloadLimit",
+                data={"limit": max(0, int(download_kb)) * 1024},
+            )
+            ok = ok and response is not None and response.status_code == 200
+        if upload_kb is not None:
+            response = await self._request(
+                "POST",
+                "/api/v2/transfer/setUploadLimit",
+                data={"limit": max(0, int(upload_kb)) * 1024},
+            )
+            ok = ok and response is not None and response.status_code == 200
+        return ok
+
+    async def get_speed_limit(self) -> dict[str, int] | None:
+        """读回当前全局限速（换算成 KB/s）。"""
+        down = await self._request("GET", "/api/v2/transfer/downloadLimit")
+        up = await self._request("GET", "/api/v2/transfer/uploadLimit")
+        if down is None or up is None:
+            return None
+        try:
+            return {
+                "download_kb": int(down.text.strip() or 0) // 1024,
+                "upload_kb": int(up.text.strip() or 0) // 1024,
+            }
+        except (TypeError, ValueError):
+            return None
+
     async def health_check(self) -> tuple[bool, str]:
         self._last_error = ""
         response = await self._request("GET", "/api/v2/app/version")
