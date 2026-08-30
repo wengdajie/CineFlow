@@ -16,11 +16,10 @@
 services:
   cineflow:
     # 官方预构建镜像（GitHub Actions 自动构建，支持 amd64 / arm64）
-    image: ghcr.io/wengdajie/cineflow:latest
-    # 想自己从源码编译：⚠️ 必须先把上面那行 image 注释掉，再取消下面两行注释。
-    #    两个 image 键同时存在时 YAML 不报错、静默取后一个，很难排查。
-    # image: cineflow:latest
-    # build: .
+    # 想换版本：改这里的 tag，或设环境变量 CINEFLOW_IMAGE
+    image: ${CINEFLOW_IMAGE:-ghcr.io/wengdajie/cineflow:latest}
+    # 想从源码自己编译？不要在这里加 build:，改用 override 文件（需先 git clone）：
+    #   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
     container_name: cineflow
     restart: unless-stopped
     ports:

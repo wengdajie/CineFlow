@@ -233,9 +233,9 @@ for script in ("smoke_test.py", "ui_check.py", "demo_pipeline.py", "live_check.p
     check(f"scripts/README 提及 {script}", script in SCRIPTS_README)
 check("文档声明七个验证脚本", "七个开发期验证工具" in README)
 check("README 测试徽章 778", "tests-778%20passed" in README_ONLY)
-check("README 版本号 1.9.1", "1.9.1" in README_ONLY)
+check("README 版本号 1.9.2", "1.9.2" in README_ONLY)
 version_src = pathlib.Path("app/core/version.py").read_text(encoding="utf-8")
-check("代码版本号为 1.9.1", 'APP_VERSION = "1.9.1"' in version_src)
+check("代码版本号为 1.9.2", 'APP_VERSION = "1.9.2"' in version_src)
 check("README 声明 255 项接口用例", "255 项真实 HTTP 接口用例" in README)
 check("scripts/README 声明 255 项", "255 项接口用例" in SCRIPTS_README)
 

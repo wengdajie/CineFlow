@@ -28,7 +28,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)](#-docker-部署推荐)
 [![Tests](https://img.shields.io/badge/tests-778%20passed-brightgreen)](docs/14-开发指南.md)
-[![Version](https://img.shields.io/badge/version-1.9.1-blue)](docs/08-变更日志.md)
+[![Version](https://img.shields.io/badge/version-1.9.2-blue)](docs/08-变更日志.md)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 </div>
@@ -169,9 +169,13 @@ docker compose -f docker-compose.fnos.yml up -d
 
 ```bash
 git clone https://github.com/wengdajie/CineFlow.git cineflow && cd cineflow
-# 编辑 docker-compose.yml：注释 image 行，取消 build: . 的注释
-docker compose up -d --build
+# 叠加 build override（不要手动往 docker-compose.yml 里加 build:）
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 ```
+
+> ⚠️ 别把 `build: .` 直接写进 `docker-compose.yml`。那样会与已有的 `image`
+> 冲突：compose 静默取后一个 image（裸名 → 去 Docker Hub 拉，超时），
+> 同时 `build` 又在没有源码的目录里找不到 Dockerfile。用 override 文件就不会踩这个坑。
 
 </details>
 

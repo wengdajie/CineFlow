@@ -28,7 +28,8 @@
 services:
   cineflow:
     # 预构建多架构镜像，飞牛无需本地编译
-    image: ghcr.io/wengdajie/cineflow:latest
+    # 想换版本：改这里的 tag，或设环境变量 CINEFLOW_IMAGE
+    image: ${CINEFLOW_IMAGE:-ghcr.io/wengdajie/cineflow:latest}
     container_name: cineflow
     restart: unless-stopped
     ports:

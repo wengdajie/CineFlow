@@ -21,10 +21,13 @@ sys.path.insert(0, ".")
 
 ROOT = pathlib.Path(".")
 COMPOSE_FILES = ["docker-compose.yml", "docker-compose.fnos.yml"]
+#: 源码编译走独立 override，不与部署用 compose 混在一个文件里
+BUILD_OVERRIDE = "docker-compose.build.yml"
 YAML_FILES = [
     ".github/workflows/build-image.yml",
     "config/config.yaml.example",
     *COMPOSE_FILES,
+    BUILD_OVERRIDE,
 ]
 
 checks = []
@@ -203,6 +206,58 @@ for rel in COMPOSE_FILES:
     except yaml.YAMLError as exc:
         check(f"{rel} 启用可选服务后仍可解析", False, str(exc)[:160])
 
+
+# ---- 3.5 镜像来源：真实用户事故的回归防线 ----
+# 背景：早先在 docker-compose.yml 里放注释掉的 `# image: cineflow:latest` +
+# `# build: .`，指引用户「注释掉上面的 image、取消注释下面两行」。
+# 实测用户漏掉第一步 → 两个 image 键同时存在 → compose 不报错、静默取后者
+# （裸名 cineflow:latest）→ 同时爆两个错：
+#   ① 裸名无 registry 前缀，默认去 Docker Hub 拉 → registry-1.docker.io 超时
+#   ② build: . 生效但目录里只有 compose 文件、没有源码 → open Dockerfile: no such file
+# 修法是结构性的：部署用 compose 只保留一个 image 键，编译走独立 override 文件。
+for rel in [*COMPOSE_FILES, BUILD_OVERRIDE]:
+    path = ROOT / rel
+    if not path.exists():
+        continue
+    body = path.read_text(encoding="utf-8")
+    # 只数生效的（非注释）image 行，注释里的示例不算
+    active_img = [ln.strip() for ln in body.split("\n")
+                  if ln.strip().startswith("image:")]
+    check(f"{rel} 只有一个生效的 image 键", len(active_img) <= 1, str(active_img))
+    # 部署用 compose 绝不能带 build：用户只 curl 了 compose 文件，没有源码
+    if rel in COMPOSE_FILES:
+        svc = (yaml.safe_load(body).get("services") or {}).get("cineflow") or {}
+        check(f"{rel} 不含 build（部署路径不该编译）", "build" not in svc)
+        img = svc.get("image", "")
+        # 支持 ${VAR:-default} 写法，取默认值判断
+        default = img.split(":-")[-1].rstrip("}") if ":-" in img else img
+        registry = default.split("/")[0]
+        # 裸镜像名会被 docker 解析成 Docker Hub 官方库 → 国内多半超时
+        check(f"{rel} 默认镜像带 registry 前缀（不误连 Docker Hub）",
+              "." in registry, default)
+        check(f"{rel} 默认镜像指向 ghcr.io", registry == "ghcr.io", registry)
+
+# 编译 override 必须真能提供 Dockerfile 所需的上下文
+if (ROOT / BUILD_OVERRIDE).exists():
+    ov = yaml.safe_load((ROOT / BUILD_OVERRIDE).read_text(encoding="utf-8"))
+    ov_cf = (ov.get("services") or {}).get("cineflow") or {}
+    check(f"{BUILD_OVERRIDE} 提供 build 配置", bool(ov_cf.get("build")))
+    bld = ov_cf.get("build") or {}
+    if isinstance(bld, dict):
+        check(f"{BUILD_OVERRIDE} 指定的 dockerfile 存在",
+              (ROOT / bld.get("dockerfile", "Dockerfile")).exists())
+    # build 与 image 并存是合法的（image 表示构建产物的 tag），但不能是远端地址，
+    # 否则会让人误以为还会去拉取
+    ov_img = ov_cf.get("image", "")
+    check(f"{BUILD_OVERRIDE} 的 image 是本地 tag",
+          bool(ov_img) and "/" not in ov_img, ov_img)
+    # 合并后必须 build 生效、且不再指向 ghcr
+    merged = {**((yaml.safe_load(
+        (ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
+        .get("services") or {}).get("cineflow") or {}), **ov_cf}
+    check("override 合并后 build 生效", bool(merged.get("build")))
+    check("override 合并后 image 不再指向 ghcr",
+          not str(merged.get("image", "")).startswith("ghcr.io"))
 
 # ---- 4. 配置模板不能被 bind mount 遮蔽 ----
 m = re.search(r"COPY config/config\.yaml\.example (\S+)", dockerfile)

@@ -118,7 +118,8 @@ sudo chown -R $(id -u):$(id -g) /vol1/downloads /vol1/media
 
 #### 源码方式（想自己改代码时才用）
 
-CineFlow 目前是**源码构建**（compose 里 `build: .`），所以 NAS 上需要有代码。
+CineFlow 默认**拉取预构建镜像**，不需要 NAS 上有代码。
+只有你想改代码自行编译时才需要下面这些步骤（编译要用 `docker-compose.build.yml`，见 [§5.3](#53-从源码自行编译)）。
 
 **方式 1 · git clone（NAS 能联外网时最省事）**
 
@@ -168,8 +169,8 @@ cd /vol1/docker/cineflow
 cat > docker-compose.fnos.yml <<'YAML'
 services:
   cineflow:
-    image: cineflow:latest
-    build: .
+    # 预构建多架构镜像，飞牛无需本地编译
+    image: ghcr.io/wengdajie/cineflow:latest
     container_name: cineflow
     restart: unless-stopped
     ports:
@@ -220,7 +221,8 @@ docker compose -f docker-compose.fnos.yml up -d
 ```
 
 用预构建镜像时首次启动约 **1~3 分钟**（取决于下载速度），无需编译。
-若你改了源码想自行编译，加 `--build`（约 3~8 分钟）。
+若你改了源码想自行编译，见 [§5.3](#53-从源码自行编译)（约 3~8 分钟）。
+**不要直接往 `docker-compose.fnos.yml` 里加 `build: .`** —— 那样会与 `image` 冲突，详见 [ADR-47](04-决策记录.md)。
 若卡在 `pip install` 不动，是网络问题，见 [§4.1](#41-构建阶段卡住或拉不到依赖)。
 
 ### ⑧ 验证
@@ -255,8 +257,8 @@ curl http://127.0.0.1:6060/api/health
 5. 点 **构建并启动**，等状态变成 **运行中 / healthy**
 6. 浏览器开 `http://<NAS内网IP>:6060`
 
-> 图形界面**仍需要代码在 `/vol1/docker/cineflow`**（因为 `build: .`）。
-> 先用 fnOS「文件管理器」把项目文件夹上传上去，再做上面的步骤。
+> 用预构建镜像时**不需要把代码上传到 NAS**，只要那个 compose 文件就够了。
+> （只有 §5.3 的源码编译方式才需要完整代码。）
 
 ---
 
@@ -319,16 +321,33 @@ fnOS 的远程穿透默认只代理它自己的后台。想用 `https://bigjie.f
 
 ## 4. 飞牛专属排障
 
-### 4.1 构建阶段卡住或拉不到依赖
+### 4.1 拉镜像卡住 / 构建阶段卡住
 
-现象：`docker compose up --build` 长时间停在 `pip install` 或 `FROM python:3.12-slim`。
+**情况 A（最常见）：拉预构建镜像慢或超时。**
 
 ```bash
-# 单独重试构建，看具体卡在哪一层
-docker compose -f docker-compose.fnos.yml build --progress=plain
+docker pull ghcr.io/wengdajie/cineflow:latest
 ```
 
-多数是国内网络访问 Docker Hub / PyPI 慢。在 fnOS Docker 设置里配置**镜像加速器**后重试。
+镜像在 **ghcr.io**（GitHub Container Registry），国内访问可能慢。
+在 fnOS Docker 设置里配置**镜像加速器**后重试。
+
+> ⚠️ 日志里出现 `registry-1.docker.io ... context deadline exceeded`，
+> 说明它去的是 **Docker Hub 而不是 ghcr.io** —— 检查 compose 里的 `image`
+> 是不是被改成了不带 `ghcr.io/` 前缀的裸名（如 `cineflow:latest`）。
+> 裸名会被 docker 当成 Docker Hub 官方镜像去拉，而那里并没有这个镜像。
+
+> ⚠️ 同时还报 `failed to read dockerfile: open Dockerfile: no such file or directory`，
+> 说明 compose 里混进了 `build:` 而当前目录没有源码。
+> 部署路径**不应该有 `build:`**，删掉即可；确实要编译请走 [§5.3](#53-从源码自行编译)。
+
+**情况 B：自行编译时停在 `pip install` 或 `FROM python:3.12-slim`。**
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.build.yml build --progress=plain
+```
+
+多数是国内网络访问 Docker Hub / PyPI 慢，同样配镜像加速器。
 
 ### 4.2 容器起来了但网页打不开
 
@@ -397,7 +416,8 @@ $C ps                      # 状态
 $C logs -f --tail=100      # 实时日志（Ctrl+C 退出）
 $C restart                 # 重启
 $C down                    # 停止并删容器（数据在 ./data，不会丢）
-$C up -d --build            # 改完代码/配置后重建
+$C up -d                   # 改完 compose/配置后重建
+$C pull && $C up -d        # 升级到最新镜像
 docker stats cineflow      # 看 CPU/内存占用
 ```
 
@@ -405,10 +425,10 @@ docker stats cineflow      # 看 CPU/内存占用
 
 ```bash
 cd /vol1/docker/cineflow
-cp -r data "data.bak.$(date +%F)"     # 先备份数据库
-git pull                              # 或重新上传代码
-docker compose -f docker-compose.fnos.yml up -d --build
-curl http://127.0.0.1:6060/api/health # 确认 version 变了
+cp -r data "data.bak.$(date +%F)"                # 先备份数据库
+docker compose -f docker-compose.fnos.yml pull   # 拉最新镜像
+docker compose -f docker-compose.fnos.yml up -d
+curl http://127.0.0.1:6060/api/health            # 确认 version 变了
 ```
 
 ### 5.2 备份（只需这两个目录）
@@ -420,6 +440,36 @@ tar -czf /vol1/backup/cineflow-$(date +%F).tar.gz \
 
 `data/` 是 SQLite 数据库（站点、订阅、下载记录、用户），`config/` 是 `config.yaml`。
 **媒体文件不用备份进这里**，它们在 `/vol1/media`。
+
+### 5.3 从源码自行编译
+
+**绝大多数人不需要这一节** —— 官方镜像已是 amd64 + arm64 双架构，直接 `pull` 即可。
+只有你改了代码、或想用自己 fork 的版本时才需要编译。
+
+飞牛多为低功耗机型，编译约 **3~8 分钟**，且期间要访问 Docker Hub 与 PyPI，
+国内网络下失败率不低。**先确认你真的需要**。
+
+```bash
+# 必须有完整源码：编译需要 Dockerfile 与 app/ web/ 等目录
+cd /vol1/docker
+git clone https://github.com/wengdajie/CineFlow.git cineflow
+cd cineflow
+
+# 两个文件叠加：前者给配置，后者把 image 换成本地构建
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+```
+
+> ⚠️ **不要直接往 `docker-compose.yml` 或 `docker-compose.fnos.yml` 里加 `build: .`**。
+> 那两个文件是「拉现成镜像」的部署配置，混进 `build` 会同时引发两个错：
+> 镜像名若变成裸名会去 Docker Hub 超时，而 `build` 又会在没有源码的目录里
+> 找不到 Dockerfile。编译走独立的 override 文件，两种模式互不干扰。
+> 原因详见 [ADR-47](04-决策记录.md)。
+
+编译产物 tag 是 `cineflow:local`，与官方镜像不冲突，可以随时切回：
+
+```bash
+docker compose -f docker-compose.fnos.yml up -d   # 切回官方镜像
+```
 
 ---
 

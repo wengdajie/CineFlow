@@ -1,0 +1,26 @@
+# ============================================================
+# CineFlow —— 源码编译 override（可选，需要先 git clone 拿到源码）
+#
+# 为什么单独一个文件：早先的写法是在 docker-compose.yml 里放一行注释掉的
+# `build: .`，让用户「注释掉 image、取消注释 build」。实测用户会漏掉第一步，
+# 结果两个 image 键同时存在 —— compose 不报错、静默取后一个裸名 `cineflow:latest`，
+# 于是同时出两个错：去 Docker Hub 找不存在的镜像超时，
+# 且 build 生效却找不到 Dockerfile（只 curl 了 compose 文件的目录里没有源码）。
+# 拆成 override 文件后，两种模式在结构上不可能互相污染。
+#
+# 用法（必须在 git clone 出来的仓库根目录执行，那里才有 Dockerfile）：
+#   git clone https://github.com/wengdajie/CineFlow.git cineflow
+#   cd cineflow
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+#
+# 只想用官方现成镜像（绝大多数人）就别管这个文件，直接：
+#   docker compose up -d
+# ============================================================
+services:
+  cineflow:
+    # build 与 image 并存是合法的：image 此时表示「构建产物打成这个 tag」，
+    # 不会再去 registry 拉取。这和「两个 image 键」是完全不同的事。
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: cineflow:local
