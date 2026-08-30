@@ -239,7 +239,7 @@ for script in ("smoke_test.py", "ui_check.py", "demo_pipeline.py", "live_check.p
     check(f"脚本存在 {script}", pathlib.Path("scripts", script).exists())
     check(f"scripts/README 提及 {script}", script in SCRIPTS_README)
 check("文档声明七个验证脚本", "七个开发期验证工具" in README)
-check("README 测试徽章 1014", "tests-1014%20passed" in README_ONLY)
+check("README 测试徽章 1016", "tests-1016%20passed" in README_ONLY)
 check("README 版本号 1.12.1", "1.12.1" in README_ONLY)
 version_src = pathlib.Path("app/core/version.py").read_text(encoding="utf-8")
 check("代码版本号为 1.12.1", 'APP_VERSION = "1.12.1"' in version_src)
