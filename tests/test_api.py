@@ -3,6 +3,33 @@
 from __future__ import annotations
 
 
+def test_static_assets_forbid_heuristic_cache(client):
+    """静态资源必须显式带 Cache-Control: no-cache。
+
+    Starlette 的 StaticFiles 默认**只给 ETag/Last-Modified，不给 Cache-Control**，
+    此时浏览器可按 RFC 7234 自行推算新鲜期（常见是「距上次修改时间的 10%」）
+    直接用本地副本、**根本不回源**。后果是容器升级后 `/api/health` 已是新版本号，
+    界面却还是旧的 app.js —— 极易被误判成「镜像没更新成功」。
+    这条用例钉住修复，防止日后有人换掉 mount 又把它丢了。
+    """
+    for path in ("/assets/app.js", "/assets/style.css", "/"):
+        response = client.get(path)
+        assert response.status_code == 200, path
+        assert response.headers.get("cache-control") == "no-cache", path
+
+
+def test_static_assets_keep_etag_revalidation(client):
+    """no-cache 不等于不缓存：ETag 协商必须仍然生效，未变更时回 304。
+
+    否则每次刷新都要重传 260KB 的 app.js，对 NAS 与移动端都是浪费。
+    """
+    first = client.get("/assets/app.js")
+    etag = first.headers.get("etag")
+    assert etag, "静态资源应带 ETag 以支持协商缓存"
+    again = client.get("/assets/app.js", headers={"If-None-Match": etag})
+    assert again.status_code == 304
+
+
 def test_health_no_auth(client):
     """健康检查无需认证。"""
     response = client.get("/api/health")

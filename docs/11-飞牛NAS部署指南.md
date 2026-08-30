@@ -427,8 +427,29 @@ docker stats cineflow      # 看 CPU/内存占用
 cd /vol1/docker/cineflow
 cp -r data "data.bak.$(date +%F)"                # 先备份数据库
 docker compose -f docker-compose.fnos.yml pull   # 拉最新镜像
-docker compose -f docker-compose.fnos.yml up -d
+# --force-recreate 是关键：pull 只更新镜像，不会自动重建已在跑的容器
+docker compose -f docker-compose.fnos.yml up -d --force-recreate
 curl http://127.0.0.1:6060/api/health            # 确认 version 变了
+```
+
+**升级后 `version` 没变**，按这三步查（详见 [07 运维手册 §⑨-1](07-运维手册.md)）：
+
+```bash
+# 容器实际用的镜像 vs 本地 latest 的 Id，不一致就是容器没重建
+docker inspect --format '{{.Image}}' cineflow
+docker image inspect ghcr.io/wengdajie/cineflow:latest --format '{{.Id}}'
+# 直接看镜像里的代码版本，绕过一切标签歧义
+docker exec cineflow cat /app/app/core/version.py
+```
+
+**`version` 已经变了但界面还是旧的** = 浏览器缓存了 `app.js`，按 `Ctrl+F5` 强刷。
+（v1.10.1 起服务端已强制 `Cache-Control: no-cache`，正常不会再遇到。）
+
+想**锁定**某个版本而不是追 `latest`（回滚也用这招）：
+
+```bash
+CINEFLOW_IMAGE=ghcr.io/wengdajie/cineflow:sha-9ea71f4 \
+    docker compose -f docker-compose.fnos.yml up -d --force-recreate
 ```
 
 ### 5.2 备份（只需这两个目录）
