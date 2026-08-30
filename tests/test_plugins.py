@@ -198,6 +198,54 @@ def test_daily_digest_builds_report(plugin_env):
     asyncio.run(plugin_env.disable("daily_digest"))
 
 
+def test_run_action_emits_plugin_action_event(plugin_env):
+    """执行插件动作必须广播 ``plugin.action``。
+
+    开发指南把它列为可订阅事件，但之前**零触发点** —— 插件想靠它联动
+    另一个插件的动作，订阅后永远收不到回调，而且没有任何报错。
+    只走事件总线，不发用户通知（点一下按钮就弹条推送太吵）。
+    """
+    from app.schemas.enums import EventType
+
+    received: list[dict] = []
+
+    async def _handler(payload):
+        received.append(payload)
+
+    notify_service.subscribe_event(EventType.PLUGIN_ACTION.value, _handler)
+    asyncio.run(plugin_env.enable("auto_cleanup", {"enabled": True}))
+    try:
+        asyncio.run(
+            plugin_env.run_action("auto_cleanup", "prune_missing_library_files", {})
+        )
+        assert len(received) == 1, "plugin.action 必须真的被广播出来"
+        assert received[0]["plugin_id"] == "auto_cleanup"
+        assert received[0]["action"] == "prune_missing_library_files"
+    finally:
+        notify_service.unsubscribe_event(EventType.PLUGIN_ACTION.value, _handler)
+        asyncio.run(plugin_env.disable("auto_cleanup"))
+
+
+def test_failed_action_does_not_emit_event(plugin_env):
+    """动作抛错时不该广播成功事件。"""
+    from app.schemas.enums import EventType
+
+    received: list[dict] = []
+
+    async def _handler(payload):
+        received.append(payload)
+
+    notify_service.subscribe_event(EventType.PLUGIN_ACTION.value, _handler)
+    asyncio.run(plugin_env.enable("auto_cleanup", {"enabled": True}))
+    try:
+        with pytest.raises(ValueError):
+            asyncio.run(plugin_env.run_action("auto_cleanup", "not-exists", {}))
+        assert received == []
+    finally:
+        notify_service.unsubscribe_event(EventType.PLUGIN_ACTION.value, _handler)
+        asyncio.run(plugin_env.disable("auto_cleanup"))
+
+
 def test_unknown_action_raises(plugin_env):
     """请求不存在的动作应抛出明确错误。"""
     asyncio.run(plugin_env.enable("auto_cleanup", {"enabled": True}))

@@ -101,7 +101,8 @@ def channel_accepts(
     * ``min_level``：级别下限，如 ``warning`` 表示只要 warning/error。
 
     白名单与黑名单同时配置时**白名单优先**（更明确的意图）。
-    事件名支持前缀通配：``site.`` 可匹配 ``site.unhealthy``。
+    事件名支持前缀通配，``site.*`` / ``site.`` / ``site`` 三种写法等价，
+    都能匹配 ``site.unhealthy`` 与 ``site.recovered``。
     """
     config = options or {}
     if not isinstance(config, dict):
@@ -123,11 +124,24 @@ def channel_accepts(
         return [item.strip() for item in items if str(item).strip()]
 
     def _matches(name: str, patterns: list[str]) -> bool:
-        # 前缀通配：配 "site." 就能一次覆盖 site.unhealthy / site.recovered
-        return any(
-            name == pattern or (pattern.endswith(".") and name.startswith(pattern))
-            for pattern in patterns
-        )
+        """前缀通配。``site.*`` 与 ``site.`` 两种写法都认。
+
+        必须同时支持是因为 ``*`` 是绝大多数人对通配的第一直觉（文档也是这么
+        写的），而只认 ``site.`` 会让按文档配好的白名单**一条都匹配不上** ——
+        表现是「这个渠道彻底没声音」且没有任何报错，属于最难自查的一类故障。
+        黑名单方向同理，只是反过来变成「以为屏蔽了其实照收」。
+        """
+        for pattern in patterns:
+            if name == pattern:
+                return True
+            # "site.*" -> 前缀 "site."；"site." -> 前缀本身
+            prefix = pattern[:-1] if pattern.endswith("*") else pattern
+            if prefix.endswith(".") and name.startswith(prefix):
+                return True
+            # 允许 "site" 这种不带点的裸前缀，等价于 "site.*"
+            if pattern and "." not in pattern and name.startswith(pattern + "."):
+                return True
+        return False
 
     allow = _listed(config.get("events"))
     if allow:

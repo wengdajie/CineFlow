@@ -15,6 +15,7 @@ from app.db.base import utcnow
 from app.db.models import PluginState
 from app.db.session import session_scope
 from app.plugins.base import PluginBase
+from app.schemas.enums import EventType
 from app.services import notify as notify_service
 
 logger = get_logger(__name__)
@@ -271,6 +272,13 @@ class PluginManager:
         if inspect.isawaitable(result):
             result = await result
 
+        # 广播 plugin.action：开发指南把它列为可订阅事件，之前零触发点，
+        # 插件想「联动另一个插件的动作」根本收不到回调。
+        # 仅走事件总线不发用户通知 —— 点一下按钮就弹一条推送太吵。
+        await notify_service.emit(
+            EventType.PLUGIN_ACTION.value,
+            {"plugin_id": plugin_id, "action": action, "params": params or {}},
+        )
 
         with session_scope() as session:
             record = (

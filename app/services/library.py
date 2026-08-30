@@ -42,6 +42,8 @@ def _task_content_path(task: DownloadTask) -> Path | None:
 async def transfer_completed_tasks() -> dict[str, int]:
     """把所有已完成但未整理的任务转移进媒体库。"""
     stats = {"tasks": 0, "files": 0, "failed": 0}
+    #: 整理失败的文件明细，全部任务处理完后统一推一条
+    failures: list[dict[str, str]] = []
     with session_scope() as session:
         tasks = list(
             session.execute(
@@ -120,6 +122,13 @@ async def transfer_completed_tasks() -> dict[str, int]:
                     )
                 elif not result.success:
                     stats["failed"] += 1
+                    failures.append(
+                        {
+                            "title": snapshot["title"],
+                            "source": str(result.source),
+                            "message": result.message or "",
+                        }
+                    )
 
             task = session.get(DownloadTask, snapshot["id"])
             if task and success_files:
@@ -184,6 +193,25 @@ async def transfer_completed_tasks() -> dict[str, int]:
             await refresh_media_servers(
                 str(results[0].target) if results[0].target else None
             )
+
+    # 整理失败必须告知：下载成功但入库失败是最容易被忽略的中间态 ——
+    # 「下载任务」页显示已完成，媒体库里却没有，用户往往过很久才发现。
+    # 硬链接跨盘（Invalid cross-device link）与权限问题都会走到这里。
+    if failures:
+        lines = [
+            f"· {truncate(item['title'], 40)}"
+            + (f"：{truncate(item['message'], 50)}" if item["message"] else "")
+            for item in failures[:10]
+        ]
+        if len(failures) > 10:
+            lines.append(f"…另有 {len(failures) - 10} 个")
+        await notify_service.send(
+            f"入库失败：{len(failures)} 个文件",
+            "\n".join(lines),
+            level=NotifyLevel.ERROR.value,
+            event=EventType.TRANSFER_FAILED.value,
+            payload={"failed": len(failures)},
+        )
     return stats
 
 
