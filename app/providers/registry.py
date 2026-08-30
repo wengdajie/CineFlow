@@ -84,6 +84,7 @@ def load_builtin_providers() -> None:
         "app.providers.downloader.qbittorrent",
         "app.providers.downloader.transmission",
         "app.providers.downloader.aria2",
+        "app.providers.downloader.xunlei",
         "app.providers.downloader.ytdlp",
         "app.providers.mediaserver.emby",
         "app.providers.mediaserver.jellyfin",

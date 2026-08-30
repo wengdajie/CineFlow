@@ -104,6 +104,7 @@
     layers: '<path d="M12 3.5 3.5 8 12 12.5 20.5 8z"/><path d="m3.5 12.5 8.5 4.5 8.5-4.5"/><path d="m3.5 16.5 8.5 4.5 8.5-4.5"/>',
     qr: '<rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><path d="M13.5 13.5h3v3h-3zM17.5 17.5h3v3h-3z"/>',
     key: '<circle cx="8" cy="12" r="4"/><path d="M12 12h9"/><path d="M17 12v3.5M20 12v2.5"/>',
+    history: '<path d="M12 7.5V12l3.5 2"/><path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1"/><path d="M3.5 4v4.5H8"/>',
     back: '<path d="M20 12H4.5"/><path d="M10.5 6 4.5 12l6 6"/>',
     user: '<circle cx="12" cy="8" r="4"/><path d="M4.5 20.5c0-4 3.4-6.5 7.5-6.5s7.5 2.5 7.5 6.5"/>',
   };
@@ -562,6 +563,7 @@
     { key: "plugins", label: "插件", icon: "plugin", group: "系统" },
     { key: "users", label: "用户权限", icon: "users", group: "系统", role: "admin" },
     { key: "logs", label: "运行日志", icon: "logs", group: "系统" },
+    { key: "changelog", label: "更新日志", icon: "history", group: "系统" },
     { key: "settings", label: "设置", icon: "settings", group: "系统" },
   ];
 
@@ -699,22 +701,27 @@
     const badge = (ok, okText, badText) =>
       el("span", { class: "tag dot " + (ok ? "ok" : "warn"), text: ok ? okText : badText });
 
-    const kv = (label, node) =>
-      el("div", { class: "kv-item" }, [el("div", { class: "kv-label", text: label }), node]);
+    // 状态项横排成一条，而不是竖着堆成一张高卡片（见 .status-strip 的注释）
+    const statusItem = (label, node) =>
+      el("div", { class: "status-item" }, [
+        el("span", { class: "status-label", text: label }),
+        node,
+      ]);
 
-    const health = el("div", { class: "card" }, [
-      el("h3", {}, [icon("server", "sm"), el("span", { text: "运行状态" })]),
-      el("div", { class: "kv" }, [
-        kv("调度器", badge(info.scheduler_running, "运行中", "已停止")),
-        kv("TMDB 刮削", badge(info.tmdb_enabled, "已启用", "未配置")),
-        kv("整理模式", el("span", { class: "tag brand", text: info.transfer_mode })),
-        kv("版本", el("span", { class: "tag", text: "v" + info.version })),
-      ]),
-      el("div", { class: "divider" }),
-      el("div", { class: "dim tiny mono" }, [
-        "媒体库：" + info.directories.library,
-        el("br"),
-        "下载目录：" + info.directories.downloads,
+    const health = el("div", { class: "card compact" }, [
+      el("div", { class: "status-strip" }, [
+        el("div", { class: "status-title" }, [
+          icon("server", "sm"),
+          el("span", { text: "运行状态" }),
+        ]),
+        statusItem("调度器", badge(info.scheduler_running, "运行中", "已停止")),
+        statusItem("TMDB 刮削", badge(info.tmdb_enabled, "已启用", "未配置")),
+        statusItem("整理模式", el("span", { class: "tag brand", text: info.transfer_mode })),
+        statusItem("版本", el("span", { class: "tag", text: "v" + info.version })),
+        el("div", { class: "status-paths dim tiny mono" }, [
+          el("div", { class: "truncate", title: info.directories.library, text: "媒体库：" + info.directories.library }),
+          el("div", { class: "truncate", title: info.directories.downloads, text: "下载目录：" + info.directories.downloads }),
+        ]),
       ]),
     ]);
 
@@ -824,8 +831,11 @@
     shell(
       el("div", { class: "grid" }, [
         stats,
-        el("div", { class: "grid cols-2" }, [health, jobCard]),
-        el("div", { class: "grid cols-2" }, [hotCard, recent]),
+        // 状态条铺满整行：它内容少，和高表格并排只会被撑出大片空白
+        health,
+        // 「定时任务」与「热度排行」都是表格，等高拉伸不浪费空间
+        el("div", { class: "grid cols-2 fit" }, [jobCard, hotCard]),
+        recent,
       ]),
       "仪表盘",
       "系统概览 · 定时任务 · 热度排行",
@@ -3386,6 +3396,156 @@
 
   // ---------------- 运行日志 ----------------
   const logState = { level: "" };
+
+  // ---------------- 更新日志 ----------------
+  //: 展开的版本号集合。默认只展开最新一版——历史版本内容很长，
+  //: 全展开会让页面几千像素高，找不到重点。
+  const changelogState = { open: null, filter: "" };
+
+  //: 分组名 → 标签配色，让「新增/修复」一眼可分。
+  const CHANGE_TONES = {
+    新增: "ok",
+    变更: "brand",
+    修复: "warn",
+    文档: "",
+    门禁数字: "",
+    更新内容: "brand",
+  };
+
+  async function pageChangelog() {
+    shell(loading(), "更新日志", "每个版本改了什么");
+    const data = await api("/system/changelog");
+    const items = data.items || [];
+    if (changelogState.open === null && items.length) {
+      changelogState.open = items[0].version;
+    }
+
+    const keyword = changelogState.filter.trim().toLowerCase();
+    const matched = keyword
+      ? items.filter((row) => JSON.stringify(row).toLowerCase().indexOf(keyword) >= 0)
+      : items;
+
+    const sectionBlock = (section) =>
+      el("div", { class: "chg-section" }, [
+        el("div", { class: "chg-section-head" }, [
+          el("span", {
+            class: "tag " + (CHANGE_TONES[section.name] || ""),
+            text: section.name,
+          }),
+          el("span", { class: "dim tiny", text: section.items.length + " 项" }),
+        ]),
+        el(
+          "ul",
+          { class: "chg-list" },
+          section.items.map((item) =>
+            el("li", {}, [
+              el("div", { class: "chg-item-title", text: item.title }),
+              item.points.length
+                ? el(
+                    "ul",
+                    { class: "chg-points" },
+                    item.points.map((point) => el("li", { text: point }))
+                  )
+                : null,
+            ])
+          )
+        ),
+        section.notes.length
+          ? el("div", { class: "chg-notes mono tiny dim" }, section.notes.map((line) =>
+              el("div", { text: line })
+            ))
+          : null,
+      ]);
+
+    const releaseCard = (row) => {
+      const isCurrent = row.version === data.current;
+      const open = changelogState.open === row.version;
+      const head = el("div", { class: "chg-head" }, [
+        el("div", { class: "chg-head-main" }, [
+          el("span", { class: "chg-version", text: "v" + row.version }),
+          isCurrent ? el("span", { class: "tag dot ok", text: "当前版本" }) : null,
+          el("span", { class: "chg-title", text: row.title }),
+        ]),
+        el("div", { class: "row tight center" }, [
+          el("span", { class: "dim tiny", text: row.date }),
+          el("span", { class: "dim tiny", text: row.item_count + " 项改动" }),
+          icon(open ? "close" : "plus", "sm"),
+        ]),
+      ]);
+      head.addEventListener("click", () => {
+        changelogState.open = open ? "" : row.version;
+        pageChangelog();
+      });
+
+      return el("div", { class: "card chg-card" + (open ? " open" : "") }, [
+        head,
+        open
+          ? el("div", { class: "chg-body" }, [
+              row.summary
+                ? el("div", { class: "chg-summary dim", text: row.summary })
+                : null,
+              ...row.sections.map(sectionBlock),
+            ])
+          : null,
+      ]);
+    };
+
+    const search = el("input", {
+      class: "input",
+      placeholder: "搜索改动内容…",
+      value: changelogState.filter,
+    });
+    search.addEventListener("input", () => {
+      changelogState.filter = search.value;
+      // 搜索时全部展开，否则命中内容藏在折叠里看不见
+      changelogState.open = search.value.trim() ? "*" : changelogState.open;
+      pageChangelog();
+    });
+
+    // filter=="*" 表示"全部展开"
+    const cards = matched.map((row) =>
+      changelogState.open === "*"
+        ? (function () {
+            const saved = changelogState.open;
+            changelogState.open = row.version;
+            const node = releaseCard(row);
+            changelogState.open = saved;
+            return node;
+          })()
+        : releaseCard(row)
+    );
+
+    shell(
+      el("div", { class: "grid" }, [
+        el("div", { class: "card compact" }, [
+          el("div", { class: "status-strip" }, [
+            el("div", { class: "status-title" }, [
+              icon("history", "sm"),
+              el("span", { text: "版本历史" }),
+            ]),
+            el("div", { class: "status-item" }, [
+              el("span", { class: "status-label", text: "当前" }),
+              el("span", { class: "tag dot ok", text: "v" + data.current }),
+            ]),
+            el("div", { class: "status-item" }, [
+              el("span", { class: "status-label", text: "累计版本" }),
+              el("span", { class: "tag", text: String(data.total) }),
+            ]),
+            el("div", { class: "chg-search" }, [search]),
+          ]),
+        ]),
+        cards.length
+          ? el("div", { class: "grid" }, cards)
+          : emptyBox("没有匹配「" + changelogState.filter + "」的改动", "history"),
+      ]),
+      "更新日志",
+      data.total + " 个版本 · 数据来自 docs/08-变更日志.md",
+      [iconButton("全部展开", "layers", () => {
+        changelogState.open = changelogState.open === "*" ? "" : "*";
+        pageChangelog();
+      })]
+    );
+  }
 
   async function pageLogs() {
     shell(loading(), "运行日志", "调度任务与最近日志");
@@ -6504,6 +6664,7 @@
     users: pageUsers,
     plugins: pagePlugins,
     logs: pageLogs,
+    changelog: pageChangelog,
     storage: pageStorage,
     pansub: pagePanSub,
     strm: pageStrm,

@@ -33,6 +33,7 @@ PAGES = [
     ("plugins", "插件"),
     ("users", "用户权限"),
     ("logs", "运行日志"),
+    ("changelog", "更新日志"),
     ("settings", "设置"),
 ]
 
@@ -671,6 +672,95 @@ def main():
             if close.count():
                 close.click()
                 page.wait_for_timeout(300)
+
+        print("\n" + "=" * 68)
+        print("6j-1) 交互测试：更新日志页（v1.11.0 需求 3）")
+        print("=" * 68)
+        page.goto(f"{BASE}/#changelog", wait_until="networkidle")
+        page.wait_for_timeout(1800)
+        cards = page.locator(".chg-card").count()
+        opened = page.locator(".chg-card.open").count()
+        print(f"   版本卡 {cards} 张，默认展开 {opened} 张")
+        if cards < 10:
+            errors.append(f"[changelog] 只解析出 {cards} 个版本，疑似解析失效")
+        # 默认只展开最新一版，否则页面会长到没法用
+        if opened != 1:
+            errors.append(f"[changelog] 默认应只展开 1 张，实际 {opened} 张")
+        if not page.locator(".chg-head .tag.dot.ok").count():
+            errors.append("[changelog] 没有标出「当前版本」")
+        # 分组标签里不能残留 emoji（早期日志用 🆕，正则漏了就会漏出来）
+        dirty = page.evaluate(
+            "() => [...document.querySelectorAll('.chg-section-head .tag')]"
+            ".map(e => e.textContent)"
+            # 前缀 r：这里的 \u{...} 是 JS 正则语法，不能让 Python 先解析掉
+            r".filter(x => /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(x))"
+        )
+        print(f"   分组标签残留 emoji：{dirty}")
+        if dirty:
+            errors.append(f"[changelog] 分组标签残留 emoji：{dirty}")
+        # 全部展开后条目数必须显著增加
+        page.get_by_text("全部展开", exact=True).last.click()
+        page.wait_for_timeout(1800)
+        all_open = page.locator(".chg-card.open").count()
+        items = page.locator(".chg-item-title").count()
+        print(f"   全部展开后 {all_open} 张 / 改动条目 {items} 条")
+        if all_open != cards:
+            errors.append(f"[changelog] 全部展开失效（{all_open}/{cards}）")
+        if items < 50:
+            errors.append(f"[changelog] 改动条目只有 {items} 条，疑似解析不全")
+        # 搜索过滤
+        page.locator(".chg-search input").fill("qBittorrent")
+        page.wait_for_timeout(1200)
+        hit = page.locator(".chg-card").count()
+        print(f"   搜索「qBittorrent」命中 {hit} 个版本")
+        if not hit:
+            errors.append("[changelog] 搜索 qBittorrent 无命中")
+        page.locator(".chg-search input").fill("绝不存在的关键词zzz")
+        page.wait_for_timeout(1200)
+        if not page.locator(".empty").count():
+            errors.append("[changelog] 搜索无结果时没有空态提示")
+        page.locator(".chg-search input").fill("")
+        page.wait_for_timeout(1000)
+        page.screenshot(path=str(SHOTS / "30b-changelog.png"), full_page=True)
+
+        print("\n" + "=" * 68)
+        print("6j-2) 交互测试：仪表盘运行状态条不得留大片空白（v1.11.0 需求 2）")
+        print("=" * 68)
+        page.goto(f"{BASE}/#dashboard", wait_until="networkidle")
+        page.wait_for_timeout(1800)
+        strip = page.locator(".status-strip")
+        print(f"   状态条存在：{strip.count() > 0}")
+        if not strip.count():
+            errors.append("[dashboard] 缺少 .status-strip 横向状态条")
+        else:
+            metrics = page.evaluate(
+                """() => {
+                  const s = document.querySelector('.status-strip');
+                  const c = s.closest('.card');
+                  const cr = c.getBoundingClientRect();
+                  let bottom = 0;
+                  c.querySelectorAll(':scope > *').forEach(ch => {
+                    const r = ch.getBoundingClientRect();
+                    if (r.bottom > bottom) bottom = r.bottom;
+                  });
+                  return {height: Math.round(cr.height),
+                          blank: Math.round(cr.bottom - bottom),
+                          items: document.querySelectorAll('.status-item').length};
+                }"""
+            )
+            print(f"   状态卡高 {metrics['height']}px，底部空白 {metrics['blank']}px，"
+                  f"状态项 {metrics['items']} 个")
+            # 改造前是 711px / 空白 477px；这里留足余量防误报
+            if metrics["height"] > 220:
+                errors.append(
+                    f"[dashboard] 运行状态卡片过高（{metrics['height']}px），空白又回来了"
+                )
+            if metrics["blank"] > 60:
+                errors.append(
+                    f"[dashboard] 运行状态卡片底部空白 {metrics['blank']}px 过大"
+                )
+            if metrics["items"] < 4:
+                errors.append(f"[dashboard] 状态项只有 {metrics['items']} 个")
 
         print("\n" + "=" * 68)
         print("6j) 交互测试：STRM 同步页（概览卡 / 链接模式 / 同步弹窗）")

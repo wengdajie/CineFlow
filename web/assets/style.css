@@ -343,6 +343,10 @@ h1, h2, h3, h4 { margin: 0; font-weight: 650; letter-spacing: -0.01em; }
 .grid.cols-4 { grid-template-columns: repeat(auto-fit, minmax(212px, 1fr)); }
 .grid.cols-3 { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
 .grid.cols-2 { grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); }
+/* 让同一行的卡片各自贴合内容高度，而不是被最高的那张拉齐。
+   grid 默认 align-items: stretch，两张行数差很多的表格并排时，
+   矮的那张底部会白出一大片（仪表盘上实测 297px）。 */
+.grid.fit { align-items: start; }
 
 .card {
   background: var(--surface-1);
@@ -702,6 +706,37 @@ tbody tr:last-child td { border-bottom: 0; }
 
 .kv { display: grid; gap: var(--sp-3); grid-template-columns: repeat(auto-fit, minmax(126px, 1fr)); }
 .kv-item .kv-label { color: var(--text-3); font-size: var(--fs-xs); margin-bottom: 4px; }
+
+/* 仪表盘「运行状态」条。
+   原先这张卡和「定时任务」并排放在 .grid.cols-2 里，而 grid 默认把同一行的
+   卡片拉成等高——右边的任务表有 700+px，左边只有 230px 内容，
+   于是卡片底部白出 477px（v1.11.0 实测值）。这是"空白过多"的真正成因，
+   不是内边距太大。改成整行铺开的横向状态条：高度由内容决定，
+   不再受邻居影响，同时把纵向省下的空间让给下面的表格。 */
+.card.compact { padding: var(--sp-4) var(--sp-5); }
+.status-strip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-3) var(--sp-5);
+}
+.status-title {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-lg);
+  font-weight: 600;
+}
+.status-item { display: flex; align-items: center; gap: var(--sp-2); }
+.status-label { color: var(--text-3); font-size: var(--fs-xs); white-space: nowrap; }
+/* 路径靠右且限宽：NAS 上的路径可能很长，不能让它把状态项挤换行 */
+.status-paths { margin-left: auto; text-align: right; min-width: 0; }
+.status-paths .truncate { max-width: 340px; }
+@media (max-width: 900px) {
+  /* 窄屏下靠右会挤成一条竖线，改成整行另起 */
+  .status-paths { margin-left: 0; text-align: left; flex-basis: 100%; }
+  .status-paths .truncate { max-width: 100%; }
+}
 
 /* ---------------- 弹窗 ---------------- */
 .modal-mask {
@@ -1198,6 +1233,97 @@ select.input.sm {
 }
 @media (max-width: 1240px) {
   .grid.cols-settings { column-count: 1; }
+}
+
+/* ---------------- 更新日志 ---------------- */
+/* 折叠式版本卡：默认只展开最新一版。历史版本合起来有上万字，
+   全展开会让页面高到没法用，所以标题行整体可点。 */
+.chg-card { padding: 0; overflow: hidden; }
+.chg-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: var(--sp-4) var(--sp-5);
+  cursor: pointer;
+  flex-wrap: wrap;
+  transition: background 0.15s var(--ease);
+}
+.chg-head:hover { background: var(--surface-2); }
+.chg-head-main {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.chg-version {
+  font-family: var(--font-mono);
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  color: var(--brand);
+}
+.chg-title { color: var(--text-2); font-size: var(--fs-md); }
+.chg-body {
+  padding: 0 var(--sp-5) var(--sp-5);
+  border-top: 1px solid var(--border-soft);
+  padding-top: var(--sp-4);
+}
+.chg-summary {
+  font-size: var(--fs-sm);
+  line-height: 1.7;
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--surface-2);
+  border-radius: var(--r-md);
+  border-left: 2px solid var(--border-strong);
+  margin-bottom: var(--sp-4);
+}
+.chg-section + .chg-section { margin-top: var(--sp-4); }
+.chg-section-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-2);
+}
+.chg-list { list-style: none; display: flex; flex-direction: column; gap: var(--sp-3); }
+.chg-item-title { font-size: var(--fs-md); font-weight: 500; line-height: 1.6; }
+.chg-points {
+  list-style: none;
+  margin-top: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+/* 用伪元素画项目符号：原生 disc 在中文行高下位置偏上 */
+.chg-points li {
+  position: relative;
+  padding-left: var(--sp-4);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  line-height: 1.7;
+}
+.chg-points li::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 9px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--border-strong);
+}
+.chg-notes {
+  margin-top: var(--sp-3);
+  padding: var(--sp-3);
+  background: var(--surface-2);
+  border-radius: var(--r-md);
+  overflow-x: auto;
+  white-space: pre;
+}
+.chg-search { margin-left: auto; min-width: 200px; }
+.chg-search .input { width: 100%; }
+@media (max-width: 900px) {
+  .chg-search { margin-left: 0; flex-basis: 100%; }
 }
 
 /* 加载更多按钮区 */

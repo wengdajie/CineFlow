@@ -12,6 +12,31 @@ from app.core.logger import get_logger
 logger = get_logger(__name__)
 
 
+def normalize_endpoint(raw: str | None, *, default: str = "", scheme: str = "http") -> str:
+    """把用户填的下载器/服务地址整理成 httpx 能用的绝对 URL。
+
+    **为什么需要它**：实测三个下载器（qB/TR/aria2）都直接把
+    ``config["url"]`` 拼进请求，于是用户两种极常见的输入会让调用必然失败：
+
+    * 漏掉协议 —— ``127.0.0.1:8080`` → httpx 抛
+      "Request URL is missing an 'http://' or 'https://' protocol"，
+      日志里只留一句"连接失败"，用户完全看不出是自己少打了 7 个字符；
+    * 从别处复制带上首尾空格 —— ``" http://x:8080 "`` 同样报缺协议
+      （空格让 httpx 认不出 scheme），这个更隐蔽，因为界面上"看着是对的"。
+
+    统一在这里兜住：去空白（含中文全角空格）、补协议、去尾部斜杠。
+    ``//host:port`` 这种省略协议的写法也一并补全。
+    """
+    text = str(raw or "").strip().strip("\u3000")
+    if not text:
+        return default
+    if text.startswith("//"):  # 协议相对写法，补成 http
+        text = f"{scheme}:{text}"
+    if "://" not in text:
+        text = f"{scheme}://{text}"
+    return text.rstrip("/")
+
+
 def build_headers(extra: dict[str, str] | None = None) -> dict[str, str]:
     """默认请求头。"""
     headers = {"User-Agent": settings.USER_AGENT, "Accept": "*/*"}

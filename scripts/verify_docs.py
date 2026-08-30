@@ -44,8 +44,8 @@ from app.providers.registry import list_providers, load_builtin_providers  # noq
 load_builtin_providers()
 providers = list_providers()
 names = {p["name"] for p in providers}
-check("Provider 总数 28", len(providers) == 28, f"实际 {len(providers)}")
-check("README 声明 28 个 Provider", "28 个注册 Provider" in README)
+check("Provider 总数 29", len(providers) == 29, f"实际 {len(providers)}")
+check("README 声明 29 个 Provider", "29 个注册 Provider" in README)
 for expected in ("api_generic", "html_generic", "mukaku", "pan_generic",
                  "torznab", "rss", "nyaa", "pansou",
                  # v1.7.0 新增：两个视频站搜索 + 两个资源站
@@ -119,8 +119,8 @@ try:
         for m in methods
         if m.lower() in ("get", "post", "patch", "delete", "put")
     )
-    check("API 端点 143 个", total == 143, f"实际 {total}")
-    check("README 声明 143 个端点", "143 个端点" in README and "共 143 个" in README)
+    check("API 端点 144 个", total == 144, f"实际 {total}")
+    check("README 声明 144 个端点", "144 个端点" in README and "共 144 个" in README)
     paths = set(spec["paths"])
     for path in ("/api/v1/users", "/api/v1/users/{user_id}",
                  "/api/v1/system/settings", "/api/v1/system/settings/reset",
@@ -146,7 +146,9 @@ try:
                  "/api/v1/trending/youtube/{region}",
                  "/api/v1/downloaders", "/api/v1/downloaders/schema",
                  "/api/v1/downloaders/{site_id}",
-                 "/api/v1/downloaders/{site_id}/test"):
+                 "/api/v1/downloaders/{site_id}/test",
+                 # v1.11.0：更新日志（解析 docs/08 变更日志）
+                 "/api/v1/system/changelog"):
         check(f"端点存在 {path}", path in paths)
 except Exception as exc:
     check("API 端点校验（需先起服务）", False, str(exc)[:80])
@@ -164,12 +166,12 @@ for name in ("trending", "schedules", "pan", "chatops", "strm", "pan_subscribes"
 app_js = pathlib.Path("web/assets/app.js").read_text(encoding="utf-8")
 pages_block = app_js[app_js.index("const PAGES"): app_js.index("];", app_js.index("const PAGES"))]
 page_count = pages_block.count("{ key:")
-check("前端页面 20 个", page_count == 20, f"实际 {page_count}")
-check("README 声明点检 20 个页面", "20 个页面" in README)
-check("scripts/README 声明 20 个页面", "20 个前端页面" in SCRIPTS_README)
+check("前端页面 21 个", page_count == 21, f"实际 {page_count}")
+check("README 声明点检 21 个页面", "21 个页面" in README)
+check("scripts/README 声明 21 个页面", "21 个前端页面" in SCRIPTS_README)
 check("前端含热度排行页", '"trending"' in app_js and "pageTrending" in app_js)
 check("前端含定时任务页", '"schedules"' in app_js and "pageSchedules" in app_js)
-check("README 声明 20 个功能页", "20 个功能页" in README)
+check("README 声明 21 个功能页", "21 个功能页" in README)
 check("前端含追新雷达页", '"radar"' in app_js and "pageRadar" in app_js)
 check("前端含站点发现弹窗", "discoverDialog" in app_js)
 check("前端含预设选择器", "presetPicker" in app_js)
@@ -221,8 +223,8 @@ check("README 说明定时任务可改期", "定时任务" in README and "cron" 
 
 # ---- 测试文件 ----
 test_files = sorted(p.name for p in pathlib.Path("tests").glob("test_*.py"))
-check("测试文件 36 个", len(test_files) == 36, str(test_files))
-check("README 声明 36 个测试文件", "36 个测试文件" in README)
+check("测试文件 38 个", len(test_files) == 38, str(test_files))
+check("README 声明 38 个测试文件", "38 个测试文件" in README)
 for name in ("test_custom_sites.py", "test_radar.py", "test_trending.py",
              "test_panstorage.py", "test_chatops.py", "test_nfo.py",
              "test_scraper.py", "test_webdav.py", "test_strm_sync.py",
@@ -237,10 +239,10 @@ for script in ("smoke_test.py", "ui_check.py", "demo_pipeline.py", "live_check.p
     check(f"脚本存在 {script}", pathlib.Path("scripts", script).exists())
     check(f"scripts/README 提及 {script}", script in SCRIPTS_README)
 check("文档声明七个验证脚本", "七个开发期验证工具" in README)
-check("README 测试徽章 793", "tests-793%20passed" in README_ONLY)
-check("README 版本号 1.10.1", "1.10.1" in README_ONLY)
+check("README 测试徽章 835", "tests-835%20passed" in README_ONLY)
+check("README 版本号 1.11.0", "1.11.0" in README_ONLY)
 version_src = pathlib.Path("app/core/version.py").read_text(encoding="utf-8")
-check("代码版本号为 1.10.1", 'APP_VERSION = "1.10.1"' in version_src)
+check("代码版本号为 1.11.0", 'APP_VERSION = "1.11.0"' in version_src)
 check("README 声明 274 项接口用例", "274 项真实 HTTP 接口用例" in README)
 check("scripts/README 声明 274 项", "274 项接口用例" in SCRIPTS_README)
 
@@ -1046,7 +1048,7 @@ check("ADR 说明为什么保留后端榜单接口", "榜单自动订阅" in adr
 changelog_text = (docs_dir / "08-变更日志.md").read_text(encoding="utf-8")
 check("变更日志含 v1.9.0", "## v1.9.0" in changelog_text)
 check("变更日志含 v1.10.0", "## v1.10.0" in changelog_text)
-check("变更日志含 v1.10.1", "## v1.10.1" in changelog_text)
+check("变更日志含 v1.11.0", "## v1.11.0" in changelog_text)
 check("变更日志记录破坏性变更", "破坏性变更" in changelog_text)
 roadmap_all = (docs_dir / "03-升级路线图.md").read_text(encoding="utf-8")
 for milestone in ("M30", "M31", "M32", "M33", "M34", "M35", "M36"):
