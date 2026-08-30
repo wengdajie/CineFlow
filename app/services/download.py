@@ -248,6 +248,10 @@ async def sync_tasks() -> dict[str, int]:
     from app.services import library as library_service
 
     stats = {"checked": 0, "completed": 0, "failed": 0}
+    #: 本轮新翻转为失败的任务，循环结束后统一推一条通知
+    failures: list[dict[str, Any]] = []
+    #: 本轮新完成的任务，循环结束后广播 download.completed 给插件
+    completed: list[dict[str, Any]] = []
     downloaders = {item.site_name: item for item in site_service.downloaders()}
     if not downloaders:
         return stats
@@ -303,16 +307,64 @@ async def sync_tasks() -> dict[str, int]:
                 task.error = state.error
 
             if state.finished and task.status != TaskStatus.TRANSFERRED.value:
+                # 同样只在**状态翻转**时记事件，避免每轮巡检重复广播同一个任务
+                if task.status != TaskStatus.COMPLETED.value:
+                    completed.append(
+                        {
+                            "task_id": task.id,
+                            "title": task.title,
+                            "kind": task.kind,
+                            "size": state.size or task.size or 0,
+                            "content_path": state.content_path or state.save_path,
+                            "subscribe_id": task.subscribe_id,
+                        }
+                    )
                 task.status = TaskStatus.COMPLETED.value
                 task.completed_at = utcnow()
                 content_path = state.content_path or state.save_path
                 task.meta = {**(task.meta or {}), "content_path": content_path}
                 stats["completed"] += 1
             elif state.status == TaskStatus.FAILED.value:
+                # 只在**状态翻转**时收集，否则每 5 分钟一轮会把同一个死种反复推送
+                if task.status != TaskStatus.FAILED.value:
+                    failures.append(
+                        {
+                            "id": task.id,
+                            "title": task.title,
+                            "error": state.error or task.error or "",
+                        }
+                    )
                 task.status = TaskStatus.FAILED.value
                 stats["failed"] += 1
             else:
                 task.status = state.status
+
+    # 下载失败必须主动告知：用户不会去盯「下载任务」页，
+    # 而失败恰恰是最需要人介入的状态（换资源 / 清磁盘 / 修下载器）。
+    # 合成一条而不是每个任务一条，避免一次批量失败刷屏。
+    if failures:
+        lines = [
+            f"· {truncate(item['title'], 50)}"
+            + (f"（{truncate(item['error'], 40)}）" if item["error"] else "")
+            for item in failures[:10]
+        ]
+        if len(failures) > 10:
+            lines.append(f"…另有 {len(failures) - 10} 个")
+        await notify_service.send(
+            f"下载失败：{len(failures)} 个任务",
+            "\n".join(lines),
+            level=NotifyLevel.ERROR.value,
+            event=EventType.DOWNLOAD_FAILED.value,
+            payload={"failed": len(failures),
+                     "task_ids": [item["id"] for item in failures]},
+        )
+
+    # 广播 download.completed。**只走事件总线、不发用户通知**：
+    # 紧接着的入库完成已经会推一条，两条挨着发就是刷屏。
+    # 但插件侧必须能收到 —— 开发指南把它列为可订阅事件，
+    # 之前却没有任何触发点，插件订阅后永远收不到回调。
+    for item in completed:
+        await notify_service.emit(EventType.DOWNLOAD_COMPLETED.value, item)
 
     # 对已完成任务执行整理
     if stats["completed"]:

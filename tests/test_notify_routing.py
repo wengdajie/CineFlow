@@ -54,12 +54,38 @@ def test_allow_list_accepts_plain_string():
     assert accepts(options, event="other.event") is False
 
 
-def test_allow_list_prefix_wildcard():
-    """前缀通配：配 "site." 一次覆盖 site.* 全家。"""
-    options = {"events": ["site."]}
+@pytest.mark.parametrize("pattern", ["site.*", "site.", "site"])
+def test_allow_list_prefix_wildcard(pattern):
+    """前缀通配的三种写法必须**完全等价**。
+
+    这条测试原先只用了 ``"site."``（尾点），于是它一直是绿的，
+    而文档教用户写的 ``"site.*"`` 实际上一条都匹配不上 —— 白名单配了
+    等于这个渠道彻底静默，且没有任何报错。教训：测试要锁**文档承诺的
+    契约**，不能只锁实现恰好支持的那一种写法。
+    """
+    options = {"events": [pattern]}
     assert accepts(options, event="site.unhealthy") is True
     assert accepts(options, event="site.recovered") is True
     assert accepts(options, event="download.added") is False
+
+
+@pytest.mark.parametrize("pattern", ["download.*", "download.", "download"])
+def test_prefix_wildcard_does_not_leak_across_names(pattern):
+    """``download.*`` 不能顺手匹配 ``downloader.xxx``。
+
+    纯字符串 startswith 会把 "downloader.speed_limit" 也算进 "download"，
+    通配必须以**点**为边界。
+    """
+    options = {"events": [pattern]}
+    assert accepts(options, event="download.added") is True
+    assert accepts(options, event="downloader.speed_limit") is False
+
+
+def test_exact_event_name_stays_exact():
+    """不带通配的精确名不能被当成前缀用。"""
+    options = {"events": ["site.unhealthy"]}
+    assert accepts(options, event="site.unhealthy") is True
+    assert accepts(options, event="site.recovered") is False
 
 
 def test_allow_list_passes_eventless_notification():
@@ -84,8 +110,14 @@ def test_deny_list_blocks_listed():
     assert accepts(options, event="site.unhealthy") is True
 
 
-def test_deny_list_prefix_wildcard():
-    options = {"events_exclude": ["site."]}
+@pytest.mark.parametrize("pattern", ["site.*", "site.", "site"])
+def test_deny_list_prefix_wildcard(pattern):
+    """黑名单三种写法同样等价。
+
+    这个方向的失效更阴险：以为屏蔽了，其实照收，用户只会觉得
+    「过滤功能没用」而不会怀疑是语法问题。
+    """
+    options = {"events_exclude": [pattern]}
     assert accepts(options, event="site.unhealthy") is False
     assert accepts(options, event="download.added") is True
 

@@ -101,6 +101,10 @@ class EventType(StrEnum):
     RESOURCE_MATCHED = "resource.matched"
     DOWNLOAD_ADDED = "download.added"
     DOWNLOAD_COMPLETED = "download.completed"
+    #: 下载器把任务标成失败（种子死了、磁盘满、鉴权掉线…）。
+    #: 这是「只把失败推到手机」这类过滤规则最主要的消费对象，
+    #: 之前 sync_tasks() 只把失败数记进 stats 就丢掉了，用户毫不知情。
+    DOWNLOAD_FAILED = "download.failed"
     TRANSFER_COMPLETED = "transfer.completed"
     TRANSFER_FAILED = "transfer.failed"
     LIBRARY_REFRESHED = "library.refreshed"

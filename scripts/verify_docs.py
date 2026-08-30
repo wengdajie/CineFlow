@@ -223,8 +223,8 @@ check("README 说明定时任务可改期", "定时任务" in README and "cron" 
 
 # ---- 测试文件 ----
 test_files = sorted(p.name for p in pathlib.Path("tests").glob("test_*.py"))
-check("测试文件 42 个", len(test_files) == 42, str(test_files))
-check("README 声明 42 个测试文件", "42 个测试文件" in README)
+check("测试文件 43 个", len(test_files) == 43, str(test_files))
+check("README 声明 43 个测试文件", "43 个测试文件" in README)
 for name in ("test_custom_sites.py", "test_radar.py", "test_trending.py",
              "test_panstorage.py", "test_chatops.py", "test_nfo.py",
              "test_scraper.py", "test_webdav.py", "test_strm_sync.py",
@@ -239,10 +239,10 @@ for script in ("smoke_test.py", "ui_check.py", "demo_pipeline.py", "live_check.p
     check(f"脚本存在 {script}", pathlib.Path("scripts", script).exists())
     check(f"scripts/README 提及 {script}", script in SCRIPTS_README)
 check("文档声明七个验证脚本", "七个开发期验证工具" in README)
-check("README 测试徽章 994", "tests-994%20passed" in README_ONLY)
-check("README 版本号 1.12.0", "1.12.0" in README_ONLY)
+check("README 测试徽章 1011", "tests-1011%20passed" in README_ONLY)
+check("README 版本号 1.12.1", "1.12.1" in README_ONLY)
 version_src = pathlib.Path("app/core/version.py").read_text(encoding="utf-8")
-check("代码版本号为 1.12.0", 'APP_VERSION = "1.12.0"' in version_src)
+check("代码版本号为 1.12.1", 'APP_VERSION = "1.12.1"' in version_src)
 check("README 声明 275 项接口用例", "275 项真实 HTTP 接口用例" in README)
 check("scripts/README 声明 275 项", "275 项接口用例" in SCRIPTS_README)
 
@@ -1061,6 +1061,7 @@ changelog_text = (docs_dir / "08-变更日志.md").read_text(encoding="utf-8")
 check("变更日志含 v1.9.0", "## v1.9.0" in changelog_text)
 check("变更日志含 v1.10.0", "## v1.10.0" in changelog_text)
 check("变更日志含 v1.12.0", "## v1.12.0" in changelog_text)
+check("变更日志含 v1.12.1", "## v1.12.1" in changelog_text)
 check("变更日志记录破坏性变更", "破坏性变更" in changelog_text)
 roadmap_all = (docs_dir / "03-升级路线图.md").read_text(encoding="utf-8")
 for milestone in ("M30", "M31", "M32", "M33", "M34", "M35", "M36",
