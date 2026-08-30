@@ -237,10 +237,10 @@ for script in ("smoke_test.py", "ui_check.py", "demo_pipeline.py", "live_check.p
     check(f"脚本存在 {script}", pathlib.Path("scripts", script).exists())
     check(f"scripts/README 提及 {script}", script in SCRIPTS_README)
 check("文档声明七个验证脚本", "七个开发期验证工具" in README)
-check("README 测试徽章 791", "tests-791%20passed" in README_ONLY)
-check("README 版本号 1.10.0", "1.10.0" in README_ONLY)
+check("README 测试徽章 793", "tests-793%20passed" in README_ONLY)
+check("README 版本号 1.10.1", "1.10.1" in README_ONLY)
 version_src = pathlib.Path("app/core/version.py").read_text(encoding="utf-8")
-check("代码版本号为 1.10.0", 'APP_VERSION = "1.10.0"' in version_src)
+check("代码版本号为 1.10.1", 'APP_VERSION = "1.10.1"' in version_src)
 check("README 声明 274 项接口用例", "274 项真实 HTTP 接口用例" in README)
 check("scripts/README 声明 274 项", "274 项接口用例" in SCRIPTS_README)
 
@@ -1046,6 +1046,7 @@ check("ADR 说明为什么保留后端榜单接口", "榜单自动订阅" in adr
 changelog_text = (docs_dir / "08-变更日志.md").read_text(encoding="utf-8")
 check("变更日志含 v1.9.0", "## v1.9.0" in changelog_text)
 check("变更日志含 v1.10.0", "## v1.10.0" in changelog_text)
+check("变更日志含 v1.10.1", "## v1.10.1" in changelog_text)
 check("变更日志记录破坏性变更", "破坏性变更" in changelog_text)
 roadmap_all = (docs_dir / "03-升级路线图.md").read_text(encoding="utf-8")
 for milestone in ("M30", "M31", "M32", "M33", "M34", "M35", "M36"):
