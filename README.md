@@ -27,8 +27,8 @@
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)](#-docker-部署推荐)
-[![Tests](https://img.shields.io/badge/tests-835%20passed-brightgreen)](docs/14-开发指南.md)
-[![Version](https://img.shields.io/badge/version-1.11.0-blue)](docs/08-变更日志.md)
+[![Tests](https://img.shields.io/badge/tests-994%20passed-brightgreen)](docs/14-开发指南.md)
+[![Version](https://img.shields.io/badge/version-1.12.0-blue)](docs/08-变更日志.md)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 </div>
@@ -103,15 +103,17 @@ CineFlow 是一个**从零实现**的 NAS 影视自动化项目，设计上参�
 | 能力 | 一句话 |
 |---|---|
 | 🔍 **聚合搜索** | BT 索引器（Jackett/Prowlarr/torznab）+ 网盘盘搜 + 自定义站点 + B站/YouTube，一次并发查全部 |
-| 🔥 **当前最热** | 豆瓣电影/电视剧/动漫/综艺 + **Bilibili 分区** + **YouTube 地区**共六个榜，画板式封面墙，首屏 30 条下拉加载；B 站/YouTube 条目**直接选画质下载**，影视条目跳搜资源并**记住回来的位置** |
+| 🔥 **当前最热** | 豆瓣电影/电视剧/动漫/综艺 + **Bilibili 分区** + **YouTube 地区** + **新番放送日历**共七个榜，画板式封面墙，首屏 30 条下拉加载；B 站/YouTube 条目**直接选画质下载**，影视条目跳搜资源并**记住回来的位置** |
 | 🎯 **智能择优** | 硬过滤（枪版/做种不足/错剧）+ 加权打分（分辨率/字幕/季包/站点权重）+ 分层规则组 |
 | 🔁 **自动追新** | 定时巡检、多级关键词降级、缺集收敛、洗版替换、榜单自动订阅 |
+| 📺 **追番日历** | Bangumi 放送表：这周**哪天更新第几话**，今天那一列高亮（热度榜答不了这个问题） |
+| 🎥 **视频追更** | 盯住 B 站 UP 主 / YouTube 频道 / 播放列表，有新投稿就自动下载（可限画质、限每轮条数） |
 | ☁️ **网盘管理** | 115/百度/夸克/AList/WebDAV，**扫码登录 + Cookie 保活**、转存、在线浏览、分享追更 |
 | 📁 **整理入库** | 资源名解析 → 硬链接 → 规范命名 → NFO 刮削 → 通知 Emby/Jellyfin/Plex 刷新 |
 | 🎬 **免下载播放** | STRM 同步 + 302 直链，网盘里的片子不落地也能播 |
 | 🤖 **ChatOps** | 飞书 / 钉钉 / Telegram 发一句话完成搜索与下载 |
 | 🧩 **可扩展** | 插件系统 + 事件订阅 + 不写代码接入任意站点（`api_generic` / `html_generic`） |
-| 🎨 **界面** | 暗色 / 浅色一键切换，设置页**多列布局**（51 项在线可改、改完即生效；14 项需重启的收进折叠卡片），**下载器在设置页按真实表单配置**，多用户三档权限 |
+| 🎨 **界面** | 暗色 / 浅色一键切换，设置页**多列布局**（51 项在线可改、改完即生效；14 项需重启的收进折叠卡片），**下载器在设置页按真实表单配置**（含**限速时段**：白天限速、夜里跑满），多用户三档权限 |
 
 > 📖 **每一项的完整说明、字段解释与实现细节** → **[docs/12-功能特性详解.md](docs/12-功能特性详解.md)**
 

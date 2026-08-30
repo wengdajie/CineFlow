@@ -25,7 +25,7 @@ from app.core.meta import parse
 from app.db.models import ResourceRecord
 from app.db.session import session_scope
 from app.providers.indexer import bili_chart, yt_chart
-from app.providers.metadata import douban_chart
+from app.providers.metadata import bangumi, douban_chart
 from app.services.trending import _canonical_title
 
 logger = get_logger(__name__)
@@ -46,6 +46,12 @@ CATEGORIES: dict[str, dict[str, Any]] = {
     },
     "youtube": {
         "label": "YouTube", "source": "youtube", "region": "US", "kind": "video",
+    },
+    # 新番放送日历：与「动漫」页签**口径不同**——动漫榜是豆瓣热度
+    # （现在大家在看什么），这里是 Bangumi 放送表（这周哪天更新第几话）。
+    # 追番真正需要的是后者，热度榜给不出"周几更新"。
+    "bangumi": {
+        "label": "新番", "source": "bangumi", "kind": "media",
     },
 }
 
@@ -136,6 +142,14 @@ async def chart(
                 if douban_chart.is_rate_limited()
                 else "豆瓣榜单暂无数据（可能是网络不通）"
             )
+    elif meta["source"] == "bangumi":
+        items = await bangumi.chart(limit=limit, offset=offset)
+        if not items and offset == 0:
+            message = (
+                "Bangumi 日历接口退避中，请稍后重试"
+                if bangumi.is_rate_limited()
+                else "Bangumi 放送日历暂无数据（可能是网络不通）"
+            )
     elif meta["source"] == "youtube":
         items = await yt_chart.chart(str(meta["region"]), limit=limit, offset=offset)
         if not items and offset == 0:
@@ -196,6 +210,35 @@ async def overview(*, limit: int = 12) -> dict[str, Any]:
         else:
             charts.append(result)
     return {"charts": charts, "categories": categories()}
+
+
+async def bangumi_calendar() -> dict[str, Any]:
+    """整周放送日历（周一→周日七个桶），并标注今天是哪一天。
+
+    与 ``chart("bangumi")`` 的区别：那个把日历**摊平成一条榜单**（从今天起排），
+    适合复用现有榜单卡片；这个保留**按天分组**的结构，前端才能画出
+    "周一 | 周二 | …"的日历视图。两者共用同一份缓存，不会多打请求。
+    """
+    days = await bangumi.calendar()
+    today = bangumi.today_index()
+    for day in days:
+        day["items"] = _annotate_local(list(day.get("items") or []))
+        day["is_today"] = day.get("weekday") == today
+    total = sum(int(day.get("count") or 0) for day in days)
+    return {
+        "source": "bangumi",
+        "today": today,
+        "today_label": bangumi.WEEKDAY_NAMES[today],
+        "days": days,
+        "total": total,
+        "message": ""
+        if total
+        else (
+            "Bangumi 日历接口退避中，请稍后重试"
+            if bangumi.is_rate_limited()
+            else "Bangumi 放送日历暂无数据（可能是网络不通）"
+        ),
+    }
 
 
 def categories() -> list[dict[str, str]]:

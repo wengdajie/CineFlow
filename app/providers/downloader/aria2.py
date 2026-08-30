@@ -133,6 +133,46 @@ class Aria2Downloader(BaseDownloader):
     async def resume(self, external_id: str) -> bool:
         return await self._call("aria2.unpause", [external_id]) is not None
 
+    #: aria2 的 changeGlobalOption 支持运行时改限速
+    supports_speed_limit = True
+
+    async def set_speed_limit(
+        self, *, download_kb: int | None = None, upload_kb: int | None = None
+    ) -> bool:
+        """设置全局限速。
+
+        aria2 的 ``max-overall-download-limit`` 接受带单位的字符串（如 ``"5M"``），
+        **但值必须是字符串**——传整数会被 aria2 拒绝并回 JSON-RPC 错误。
+        这里统一格式成 ``"<n>K"``；``0`` 按 aria2 约定表示不限速。
+        """
+        options: dict[str, str] = {}
+        if download_kb is not None:
+            value = max(0, int(download_kb))
+            options["max-overall-download-limit"] = f"{value}K" if value else "0"
+        if upload_kb is not None:
+            value = max(0, int(upload_kb))
+            options["max-overall-upload-limit"] = f"{value}K" if value else "0"
+        if not options:
+            return False
+        return await self._call("aria2.changeGlobalOption", [options]) is not None
+
+    async def get_speed_limit(self) -> dict[str, int] | None:
+        """读回当前全局限速（aria2 回的是 B/s 字符串，换算成 KB/s）。"""
+        result = await self._call("aria2.getGlobalOption")
+        if not isinstance(result, dict):
+            return None
+
+        def _kb(raw: object) -> int:
+            try:
+                return int(str(raw or "0").strip() or 0) // 1024
+            except (TypeError, ValueError):
+                return 0
+
+        return {
+            "download_kb": _kb(result.get("max-overall-download-limit")),
+            "upload_kb": _kb(result.get("max-overall-upload-limit")),
+        }
+
     async def health_check(self) -> tuple[bool, str]:
         result = await self._call("aria2.getVersion")
         if not result:

@@ -246,15 +246,18 @@ cats = call("GET", "/trending/discover/categories", token=token)
 cat_data = cats.get("data") or {}
 cat_keys = [c.get("key") for c in (cat_data.get("categories") or [])]
 print(f"       分类 {len(cat_keys)} 个：{cat_keys}")
-assert len(cat_keys) == 6, f"发现榜应有 6 个分类，实际 {cat_keys}"
+assert len(cat_keys) == 7, f"发现榜应有 7 个分类，实际 {cat_keys}"
 assert "bilibili" in cat_keys, "缺少 Bilibili 分类"
 assert "youtube" in cat_keys, "缺少 YouTube 分类"
+assert "bangumi" in cat_keys, "缺少「新番」分类（Bangumi 放送日历，v1.12.0）"
 # kind 决定前端给「搜资源」还是「直接下载」，漏了会让 B 站/YouTube 卡片
 # 错误显示成搜资源（v1.10.0 实测踩过这个坑），所以这里逐个钉死。
 kinds = {c.get("key"): c.get("kind") for c in (cat_data.get("categories") or [])}
 assert kinds == {
     "movie": "media", "tv": "media", "anime": "media", "show": "media",
     "bilibili": "video", "youtube": "video",
+    # 新番是影视作品（要搜资源/订阅），不是单个视频，所以是 media
+    "bangumi": "media",
 }, f"分类 kind 不符预期：{kinds}"
 parts = cat_data.get("bili_partitions") or []
 print(f"       B 站二级分区 {len(parts)} 个：{[p.get('key') for p in parts]}")
@@ -274,7 +277,7 @@ for chart in charts:
 
 # 逐个分类单拉（切页签的路径）。外部榜单可能限流/被风控，
 # 所以只断言 HTTP 200 + 结构正确，不断言一定有数据——否则门禁会随外网状态飘。
-for category in ("movie", "tv", "anime", "show", "bilibili", "youtube"):
+for category in ("movie", "tv", "anime", "show", "bilibili", "youtube", "bangumi"):
     one = call("GET", f"/trending/discover/{category}?limit=6", token=token)
     body = one.get("data") or {}
     rows = items_of(body)

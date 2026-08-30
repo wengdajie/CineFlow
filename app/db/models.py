@@ -477,6 +477,53 @@ class RankingRule(IdMixin, TimestampMixin, Base):
     created_count: Mapped[int] = mapped_column(Integer, default=0)
 
 
+class VideoSubscribe(IdMixin, TimestampMixin, Base):
+    """网页视频订阅（UP 主 / YouTube 频道 / 播放列表 更新自动下载）。
+
+    **补的是哪个洞**：v1.6.0 起能用 yt-dlp **下载**单个视频，v1.7.0 起能**搜到**
+    B 站/YouTube 的视频，但一直不能"**追**"——用户关注的 UP 主更新了，
+    仍要自己去看、自己贴链接。这是 ``subscribes``（按片名去各站搜）和
+    ``pan_subscribes``（盯死一个分享链接）都覆盖不到的第三种追更形态。
+
+    与另两张订阅表的关键区别是**增量的判定依据**：
+    ``pan_subscribes`` 用文件名，``subscribes`` 用集号，
+    而这里必须用**视频 ID**（B 站 BV 号 / YouTube videoId）——因为 yt-dlp 的
+    扁平提取对 B 站**不返回标题也不返回上传日期**（实测 title/upload_date 均为
+    None），只有 ID 是稳定可得的。用标题去重会把所有条目当成同一个。
+    """
+
+    __tablename__ = "video_subscribes"
+
+    name: Mapped[str] = mapped_column(String(255), index=True)
+    #: UP 主空间页 / 频道页 / 播放列表地址，交给 yt-dlp 做扁平提取
+    url: Mapped[str] = mapped_column(Text)
+    #: 展示用的来源标记（bilibili / youtube / …），由地址推断
+    site: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    #: 落地目录，为空则用全局下载目录
+    save_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: 标题包含/排除正则（只追某个系列时很有用）
+    include_regex: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    exclude_regex: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    #: 每次巡检最多取列表里前多少个（UP 主主页动辄上千投稿，不能全量拉）
+    check_limit: Mapped[int] = mapped_column(Integer, default=10)
+    #: 单次巡检最多下载几个，防止首次订阅就一口气下几十个
+    max_per_run: Mapped[int] = mapped_column(Integer, default=3)
+    #: 指定画质上限（如 1080），为空按下载器配置自动挑
+    max_height: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(16), default=SubscribeStatus.ACTIVE.value, index=True
+    )
+    #: 已处理过的视频 ID（增量判据，见类文档）
+    handled_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    #: 首次订阅时是否跳过历史投稿（只追之后的新作），默认跳过：
+    #: 否则加一个十年老 UP 会瞬间投出几十个下载任务
+    skip_existing: Mapped[bool] = mapped_column(Boolean, default=True)
+    failure_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    total_downloaded: Mapped[int] = mapped_column(Integer, default=0)
+
+
 class FilterRuleGroup(IdMixin, TimestampMixin, Base):
     """自定义过滤规则组（优先级规则）。
 

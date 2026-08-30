@@ -10,6 +10,7 @@ from typing import Any
 
 from sqlalchemy import select
 
+from app.core.config import settings
 from app.core.logger import get_logger
 from app.db.base import utcnow
 from app.db.models import DownloadTask, PanSaveRecord, SiteConfig
@@ -363,11 +364,19 @@ async def search_files(
     }
 
 
-async def keep_alive_all() -> dict[str, Any]:
+async def keep_alive_all(*, notify: bool = True) -> dict[str, Any]:
     """对全部启用的网盘做一次凭据保活巡检。
 
     网盘 Cookie 最常见的故障是「静默过期」——任务半夜跑失败了才发现。
-    这里主动轮一遍并把结果写进站点健康表，异常时走通知。
+    这里主动轮一遍，**失效时主动推通知**（v1.12.0 补上）。
+
+    ⚠️ 本函数原先的文档写着"异常时走通知"，但代码里**根本没有发通知**：
+    保活发现 Cookie 失效后只改了状态，用户得自己想起来去页面看。
+    这正是路线图里「网盘登录态失效主动通知」那一条要解决的问题。
+
+    通知按「站点名」去抖（``settings.NOTIFY_ALERT_COOLDOWN_MINUTES``），
+    否则每 6 小时一轮保活会把同一条失效告警反复推出去。
+    ``notify=False`` 供用户在界面手点巡检时使用——他正看着结果，再推一条是噪音。
     """
     items: list[dict[str, Any]] = []
     for storage in storages():
@@ -399,6 +408,25 @@ async def keep_alive_all() -> dict[str, Any]:
             }
         )
     failed = [i for i in items if not i["success"]]
+
+    if notify and failed:
+        for item in failed:
+            await notify_service.send(
+                f"网盘登录已失效：{item['name']}",
+                f"{item['message']}\n"
+                "请到「网盘管理」页重新扫码登录或更新 Cookie，"
+                "否则自动转存与 STRM 同步都会失败。",
+                level=NotifyLevel.WARNING.value,
+                event=EventType.SITE_UNHEALTHY.value,
+                suppress_key=f"pan.keepalive:{item['name']}",
+                suppress_seconds=int(settings.NOTIFY_ALERT_COOLDOWN_MINUTES) * 60,
+            )
+    if notify:
+        # 恢复即清抑制，保证"失效→修好→又失效"能再次收到告警
+        for item in items:
+            if item["success"]:
+                notify_service.clear_suppression(f"pan.keepalive:{item['name']}")
+
     return {
         "total": len(items),
         "failed": len(failed),

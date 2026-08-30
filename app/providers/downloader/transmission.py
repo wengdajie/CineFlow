@@ -163,6 +163,58 @@ class TransmissionDownloader(BaseDownloader):
     async def resume(self, external_id: str) -> bool:
         return await self._call("torrent-start", {"ids": [external_id]}) is not None
 
+    #: TR 的 session-set 支持限速（飞牛 fnOS 自带下载器就是 TR，因此它也一并受益）
+    supports_speed_limit = True
+
+    async def set_speed_limit(
+        self, *, download_kb: int | None = None, upload_kb: int | None = None
+    ) -> bool:
+        """设置全局限速。
+
+        TR 的单位**本来就是 KB/s**（与 qB 的 B/s 不同，别顺手乘 1024），
+        但必须**同时**下发 ``speed-limit-down-enabled``：只设数值不开开关的话
+        TR 会存下数值却继续满速跑，表现为"限速填了但没用"。
+        传 ``0`` 表示不限速 —— 此时要把开关关掉而不是限到 0（限到 0 会彻底断流）。
+        """
+        payload: dict[str, object] = {}
+        if download_kb is not None:
+            value = max(0, int(download_kb))
+            payload["speed-limit-down-enabled"] = value > 0
+            if value > 0:
+                payload["speed-limit-down"] = value
+        if upload_kb is not None:
+            value = max(0, int(upload_kb))
+            payload["speed-limit-up-enabled"] = value > 0
+            if value > 0:
+                payload["speed-limit-up"] = value
+        if not payload:
+            return False
+        return await self._call("session-set", payload) is not None
+
+    async def get_speed_limit(self) -> dict[str, int] | None:
+        """读回当前全局限速（开关关闭时报 0 = 不限速）。"""
+        result = await self._call(
+            "session-get",
+            {
+                "fields": [
+                    "speed-limit-down",
+                    "speed-limit-down-enabled",
+                    "speed-limit-up",
+                    "speed-limit-up-enabled",
+                ]
+            },
+        )
+        if not isinstance(result, dict):
+            return None
+        return {
+            "download_kb": int(result.get("speed-limit-down") or 0)
+            if result.get("speed-limit-down-enabled")
+            else 0,
+            "upload_kb": int(result.get("speed-limit-up") or 0)
+            if result.get("speed-limit-up-enabled")
+            else 0,
+        }
+
     async def health_check(self) -> tuple[bool, str]:
         result = await self._call("session-get", {})
         if result is None:

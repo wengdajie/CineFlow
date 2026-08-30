@@ -145,6 +145,16 @@ async def discover_chart(
     }
 
 
+@router.get("/bangumi/calendar", summary="新番放送日历（按周一~周日分组）")
+async def bangumi_calendar(user: CurrentUser) -> dict[str, Any]:
+    """追番用：这周哪天更新什么，并标出今天。
+
+    数据来自 Bangumi 公开日历接口（免 Key）。与「动漫」页签口径不同：
+    那个是豆瓣热度榜，这个是放送表——热度榜给不出"周几更新"。
+    """
+    return {"success": True, "data": await discover_service.bangumi_calendar()}
+
+
 @router.get("/youtube/{region}", summary="YouTube 地区热门榜（美国/日本/韩国…）")
 async def yt_region_chart(
     region: str,

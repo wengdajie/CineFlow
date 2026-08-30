@@ -446,6 +446,9 @@ async def enrich_posters(
             return
         item["poster"] = found.get("poster")
         item["poster_source"] = "douban"
+        # 把匹配置信度带给前端：medium 的封面可能是同名作品，界面可加提示
+        if found.get("match_confidence"):
+            item["poster_confidence"] = found["match_confidence"]
         item.setdefault("douban_url", found.get("douban_url"))
         # 顺手补齐空字段：年份/集数对画板卡片的信息密度很有用
         if not item.get("year") and found.get("year"):

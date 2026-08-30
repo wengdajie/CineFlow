@@ -556,6 +556,7 @@
     { key: "library", label: "媒体库", icon: "library", group: "入库" },
     { key: "storage", label: "网盘管理", icon: "cloud", group: "入库" },
     { key: "pansub", label: "分享追更", icon: "link", group: "入库" },
+    { key: "videosub", label: "视频追更", icon: "video", group: "入库" },
     { key: "strm", label: "STRM 同步", icon: "film", group: "入库" },
     { key: "sites", label: "站点管理", icon: "server", group: "系统" },
     { key: "sitehealth", label: "站点健康", icon: "pulse", group: "系统" },
@@ -1237,6 +1238,15 @@
   // ---------------- 热度排行 ----------------
   // 热度排行只保留「发现榜」一种口径（原资源热榜/实时热榜/搜索热词/站点贡献已下线，
   // 它们的数据在「资源搜索」页与「站点管理」页各自有更合适的入口）。
+  //: 榜单来源 → 展示名。新增数据源只要在这里加一行，
+  //: 卡片副标题、页头徽标、统计行三处会同时跟上，不会漂移。
+  const SOURCE_LABEL = {
+    douban: "豆瓣",
+    bilibili: "Bilibili",
+    youtube: "YouTube",
+    bangumi: "Bangumi",
+  };
+
   const trendingState = {
     view: "board",
     // 发现榜当前分类（电影/电视剧/动漫/综艺/Bilibili/YouTube）与两个视频站的二级分区
@@ -1252,6 +1262,9 @@
     source: "",
     message: "",
     kind: "media",
+    //: 新番日历（按周一~周日分组）的数据；只有「新番」页签的日历视图用得到。
+    //: 与摊平榜单共用后端同一份缓存，切视图不会多打请求。
+    calendar: null,
     //: 跳去资源搜索页前记下的滚动位置与已加载条数。
     //: 榜单可能已经下拉加载了好几页，切回来时必须把这些页**先恢复出来**
     //: 再滚回去，否则内容高度不够，scrollTo 会落空（ADR-48）。
@@ -1505,9 +1518,7 @@
     // 视频站（B 站/YouTube）与影视榜（豆瓣）的副标题字段不同：
     // 前者有 UP 主/时长/播放量，后者有类型/更新进度/评分。
     const isVideo = (data.kind || "media") === "video";
-    const sourceLabel =
-      data.source === "bilibili" ? "Bilibili"
-        : data.source === "youtube" ? "YouTube" : "豆瓣";
+    const sourceLabel = SOURCE_LABEL[data.source] || "豆瓣";
     return el(
       "div",
       { class: "board" },
@@ -1565,6 +1576,78 @@
     );
   }
 
+  /** 新番放送日历：按周一~周日分列，标出今天。
+
+      与「动漫」页签的区别值得说清楚：动漫是**豆瓣热度榜**（大家在看什么），
+      这里是**放送表**（这周哪天更新第几话）。追番真正需要后者，
+      而热度榜永远给不出来——它的排序维度不是时间。
+
+      「今天」那一列高亮并排在最前：用户九成的诉求是"今天有什么更新"。
+  */
+  function bangumiCalendar(data, onSearch) {
+    const days = (data || {}).days || [];
+    if (!days.length) {
+      return el("div", { class: "pad" }, [
+        emptyBox((data || {}).message || "暂无放送数据", "clock"),
+      ]);
+    }
+    const todayIndex = (data || {}).today;
+    // 从今天开始排。"未定"桶（weekday=null）不参与轮转，永远垫最后。
+    const dated = days.filter((day) => day.weekday !== null && day.weekday !== undefined);
+    const undated = days.filter((day) => day.weekday === null || day.weekday === undefined);
+    const ordered = [];
+    for (let step = 0; step < dated.length; step += 1) {
+      ordered.push(dated[(todayIndex + step) % dated.length]);
+    }
+    ordered.push(...undated);
+
+    return el(
+      "div",
+      { class: "cal" },
+      ordered.map((day) => {
+        const items = day.items || [];
+        const isToday = Boolean(day.is_today);
+        return el("div", { class: "cal-col" + (isToday ? " today" : "") }, [
+          el("div", { class: "cal-head" }, [
+            el("span", { class: "cal-day", text: day.label }),
+            isToday ? el("span", { class: "tag brand tiny", text: "今天" }) : null,
+            el("span", { class: "dim tiny", text: items.length + " 部" }),
+          ]),
+          items.length
+            ? el("div", { class: "cal-list" }, items.map((row) => {
+                const hasLocal = (row.local_count || 0) > 0;
+                const card = el("div", { class: "cal-item", tabindex: "0", role: "button" }, [
+                  el("div", { class: "cal-thumb" }, [posterBox(row)]),
+                  el("div", { class: "cal-body" }, [
+                    el("div", { class: "cal-title", title: row.title, text: row.title }),
+                    el("div", { class: "cal-sub", text:
+                      [
+                        row.rating ? row.rating + " 分" : "暂无评分",
+                        row.total_episodes ? row.total_episodes + " 话" : null,
+                      ].filter(Boolean).join(" · ") }),
+                    hasLocal
+                      ? el("span", { class: "tag brand tiny", text: "已有 " + row.local_count + " 条" })
+                      : null,
+                  ]),
+                ]);
+                // 点条目复用发现榜的详情面板，行为与画板/列表视图一致
+                const open = () =>
+                  discoverDetail(row, { kind: "media", source: "bangumi" }, onSearch);
+                card.addEventListener("click", open);
+                card.addEventListener("keydown", (event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    open();
+                  }
+                });
+                return card;
+              }))
+            : el("div", { class: "cal-empty dim tiny", text: "这天没有新番" }),
+        ]);
+      })
+    );
+  }
+
   /** 发现榜列表视图。 */
   function discoverTable(data, onSearch) {
     const isVideo = (data.kind || "media") === "video";
@@ -1615,7 +1698,7 @@
   function discoverDetail(row, data, onSearch) {
     const isVideo = (data.kind || "media") === "video";
     const isYt = data.source === "youtube";
-    const srcName = isYt ? "YouTube" : data.source === "bilibili" ? "Bilibili" : "豆瓣";
+    const srcName = SOURCE_LABEL[data.source] || "豆瓣";
     const info = (label, value) =>
       el("div", { class: "kv-item" }, [
         el("div", { class: "kv-label", text: label }),
@@ -1711,6 +1794,7 @@
           { key: "show", label: "综艺", kind: "media" },
           { key: "bilibili", label: "Bilibili", kind: "video" },
           { key: "youtube", label: "YouTube", kind: "video" },
+          { key: "bangumi", label: "新番", kind: "media" },
         ];
         store.biliPartitions = [{ key: "all", label: "全站" }];
         store.ytRegions = [{ key: "US", label: "美国" }];
@@ -1751,6 +1835,12 @@
         message: trendingState.message,
         count: trendingState.items.length,
       };
+      if (trendingState.view === "calendar") {
+        listBox.replaceChildren(bangumiCalendar(trendingState.calendar, goSearch));
+        // 日历是"整周一次给全"，没有分页概念，别在下面挂一个永远点不动的加载更多
+        moreBox.replaceChildren();
+        return;
+      }
       listBox.replaceChildren(
         trendingState.view === "board"
           ? discoverBoard(data, goSearch)
@@ -1792,9 +1882,7 @@
     };
 
     const updateMeta = () => {
-      const srcName =
-        trendingState.source === "bilibili" ? "Bilibili"
-          : trendingState.source === "youtube" ? "YouTube" : "豆瓣";
+      const srcName = SOURCE_LABEL[trendingState.source] || "豆瓣";
       const isVideo = trendingState.kind === "video";
       const hit = trendingState.items.filter((r) => (r.local_count || 0) > 0).length;
       meta.textContent =
@@ -1826,6 +1914,28 @@
         trendingState.loading = false;
         updateMeta();
         renderList();
+      }
+    };
+
+    /** 拉整周放送日历（新番页签的日历视图）。
+
+        与摊平榜单走的是同一份后端缓存，切来切去不会重复打 Bangumi。
+    */
+    const loadCalendar = async () => {
+      listBox.replaceChildren(loading());
+      moreBox.replaceChildren();
+      try {
+        const response = await api("/trending/bangumi/calendar");
+        trendingState.calendar = response.data || null;
+        const total = (trendingState.calendar || {}).total || 0;
+        meta.textContent =
+          "Bangumi 放送日历 · 本周在播 " + total + " 部 · 今天是 " +
+          ((trendingState.calendar || {}).today_label || "-") +
+          (((trendingState.calendar || {}).message) ? " · " + trendingState.calendar.message : "");
+        renderList();
+      } catch (error) {
+        trendingState.calendar = null;
+        listBox.replaceChildren(el("div", { class: "pad" }, [emptyBox(error.message, "alert")]));
       }
     };
 
@@ -1887,14 +1997,27 @@
       });
     };
 
+    // 只有「新番」页签才有日历视图——其他来源是热度榜，没有"周几更新"这个维度
+    const viewOptions = [
+      { value: "board", label: "画板" },
+      { value: "list", label: "列表" },
+    ];
+    if (trendingState.discoverCat === "bangumi") {
+      viewOptions.push({ value: "calendar", label: "日历" });
+    }
     const views = segment(
-      [
-        { value: "board", label: "画板" },
-        { value: "list", label: "列表" },
-      ],
-      trendingState.view,
+      viewOptions,
+      // 从新番切到别的页签时，日历视图不存在了，得退回画板，
+      // 否则 renderList 会走进一个当前页签根本渲染不出来的分支，页面变空白
+      trendingState.view === "calendar" && trendingState.discoverCat !== "bangumi"
+        ? "board"
+        : trendingState.view,
       (value) => {
         trendingState.view = value;
+        if (value === "calendar") {
+          loadCalendar();
+          return;
+        }
         renderList();
       }
     );
@@ -1902,6 +2025,8 @@
     const cat = trendingState.discoverCat;
     const isBili = cat === "bilibili";
     const isYt = cat === "youtube";
+    //: 新番页签多一个「日历」视图（这周哪天更新），另两个视图与其他页签一致
+    const isBangumi = cat === "bangumi";
 
     // 二级切换：B 站按分区、YouTube 按地区，两者互斥
     const subBar = isBili
@@ -1946,7 +2071,8 @@
       meta,
     ]);
 
-    const srcTag = isYt ? "YouTube" : isBili ? "Bilibili" : "豆瓣";
+    const srcTag = SOURCE_LABEL[trendingState.source] ||
+      (isYt ? "YouTube" : isBili ? "Bilibili" : isBangumi ? "Bangumi" : "豆瓣");
     const board = el("div", { class: "card flush" }, [
       el("div", { class: "card-head" }, [
         el("h3", {}, [
@@ -1965,9 +2091,20 @@
       isBili || isYt
         ? srcTag + " 当前最热视频，可直接下载"
         : "豆瓣当前最热，可创建订阅或跳转资源搜索",
-      [iconButton("刷新", "refresh", () => load())]
+      [
+        iconButton("刷新", "refresh", () =>
+          trendingState.view === "calendar" ? loadCalendar() : load()
+        ),
+      ]
     );
-    load();
+    if (trendingState.view === "calendar" && isBangumi) {
+      loadCalendar();
+    } else {
+      // 切走新番页签后日历视图不再存在，状态里也要跟着回退，
+      // 否则下次再进新番会显示"日历"高亮但内容是画板
+      if (trendingState.view === "calendar") trendingState.view = "board";
+      load();
+    }
   }
 
   // ---------------- 订阅追新 ----------------
@@ -4997,6 +5134,333 @@
     );
   }
 
+  // ---------------- 视频追更（UP 主 / 频道） ----------------
+  //: 视频订阅来源站点的展示名。后端 guess_site() 只给英文 key，
+  //: 这里翻成中文标签；未收录的 key 原样显示，不至于变空白。
+  const VIDEO_SITE_LABEL = {
+    bilibili: "B 站",
+    youtube: "YouTube",
+    douyin: "抖音",
+    acfun: "AcFun",
+    other: "其他",
+  };
+
+  /** 新建/编辑视频订阅。row 为空表示新建。
+
+      与「分享追更」的区别：那个盯网盘分享链接做增量转存，
+      这个盯一个**会持续发新作的创作者页面**（B 站空间 / YouTube 频道 / 播放列表），
+      新投稿出现就交给 yt-dlp 下载。
+  */
+  function videoSubForm(row, onDone) {
+    const current = row || {};
+    modal(
+      row ? "编辑视频追更 · " + row.name : "新建视频追更",
+      [
+        { key: "name", label: "订阅名称", value: current.name || "", placeholder: "如：影视飓风（B 站）" },
+        {
+          key: "url",
+          label: "空间页 / 频道页 / 播放列表地址",
+          value: current.url || "",
+          placeholder: "https://space.bilibili.com/946974",
+          hint: "要贴**列表页**而不是单个视频页；填好后可先点「预览」看能不能列出投稿",
+        },
+        { key: "save_path", label: "保存目录（留空用默认下载目录）", value: current.save_path || "" },
+        {
+          key: "max_height",
+          label: "画质上限",
+          type: "select",
+          value: current.max_height ? String(current.max_height) : "",
+          options: [
+            { value: "", label: "自动（最佳画质）" },
+            { value: "2160", label: "4K（2160p）" },
+            { value: "1080", label: "1080p" },
+            { value: "720", label: "720p" },
+            { value: "480", label: "480p" },
+          ],
+        },
+        {
+          key: "include_regex",
+          label: "只要匹配（正则）",
+          value: current.include_regex || "",
+          placeholder: "第\\d+期|测评",
+          hint: "作用在标题上。B 站列表页不返回标题，标题缺失时一律放行，不会因此漏下",
+        },
+        { key: "exclude_regex", label: "排除匹配（正则）", value: current.exclude_regex || "", placeholder: "直播回放|预告" },
+        {
+          key: "check_limit",
+          label: "每轮读取列表前 N 条",
+          type: "number",
+          value: current.check_limit || 10,
+          hint: "1~50。UP 主更新越频繁就调大一点，太大会变慢也更容易触发风控",
+        },
+        {
+          key: "max_per_run",
+          label: "单轮最多下载几个",
+          type: "number",
+          value: current.max_per_run || 3,
+          hint: "1~20。防止一次把下载器打满",
+        },
+        {
+          key: "skip_existing",
+          label: "首次巡检只记账不补历史",
+          type: "checkbox",
+          value: row ? !!current.skip_existing : true,
+          hint: "建议保持勾选：不勾会把该 UP 主最近 N 个投稿全部下一遍",
+        },
+        row ? { key: "reset_failures", label: "清除失败计数", type: "checkbox", value: false, hint: "被自动暂停的订阅会一并恢复运行" } : null,
+        row ? { key: "reset_history", label: "清空已处理记录", type: "checkbox", value: false, hint: "下次巡检会把列表里的投稿重新当成新的" } : null,
+      ].filter(Boolean),
+      async (values) => {
+        const payload = {
+          name: values.name,
+          url: values.url,
+          save_path: values.save_path || null,
+          include_regex: values.include_regex || null,
+          exclude_regex: values.exclude_regex || null,
+          check_limit: Number(values.check_limit) || 10,
+          max_per_run: Number(values.max_per_run) || 3,
+          max_height: values.max_height ? Number(values.max_height) : null,
+          skip_existing: !!values.skip_existing,
+        };
+        if (row) {
+          payload.reset_failures = !!values.reset_failures;
+          payload.reset_history = !!values.reset_history;
+          await api("/video-subscribes/" + row.id, { method: "PATCH", body: payload });
+          toast("已保存", "ok");
+        } else {
+          if (!payload.name || !payload.url) throw new Error("订阅名称与地址必填");
+          await api("/video-subscribes", { method: "POST", body: payload });
+          toast("视频追更已创建", "ok");
+        }
+        if (onDone) onDone();
+      },
+      row ? "保存" : "创建",
+      {
+        wide: true,
+        lead: "关注的 UP 主/频道更新就自动下载。地址填 B 站空间页、YouTube 频道页或播放列表页均可。",
+      }
+    );
+  }
+
+  /** 预览一个地址能列出哪些投稿。
+
+      「地址贴错了」是这类订阅最常见的失败（贴了单个视频页而不是空间页），
+      建订阅前先预览一次能立刻发现，不用等定时任务跑完才知道白等一轮。
+  */
+  async function videoSubPreview(defaultUrl) {
+    modal(
+      "预览可追更的投稿",
+      [
+        { key: "url", label: "空间页 / 频道页 / 播放列表地址", value: defaultUrl || "", placeholder: "https://space.bilibili.com/946974" },
+        { key: "limit", label: "取前几条", type: "number", value: 10 },
+      ],
+      async (values) => {
+        if (!values.url) throw new Error("请填地址");
+        const result = await api(
+          "/video-subscribes/preview?url=" + encodeURIComponent(values.url) +
+            "&limit=" + (Number(values.limit) || 10),
+          { method: "POST" }
+        );
+        const items = result.items || [];
+        panelModal(
+          "预览结果",
+          (result.site || "未知来源") + " · 列出 " + items.length + " 条",
+          el("div", {}, [
+            result.message ? el("div", { class: "pad" }, [emptyBox(result.message, "alert")]) : null,
+            items.length
+              ? el("div", { class: "list" }, items.map((item, index) =>
+                  el("div", { class: "list-row" }, [
+                    el("span", {}, [
+                      // 标题可能为 null（B 站扁平提取实测不返回标题），
+                      // 这时显示视频 ID 而不是空白，用户才知道确实列到了东西
+                      el("div", { text: item.title || "（列表页未提供标题）" }),
+                      el("div", { class: "cell-sub mono tiny", text: item.id || "-" }),
+                    ]),
+                    el("span", { class: "dim tiny", text: "#" + (index + 1) }),
+                  ])
+                ))
+              : null,
+          ].filter(Boolean)),
+          true
+        );
+      },
+      "预览",
+      { lead: "先确认地址能列出投稿，再建订阅。列不出来多半是贴了单个视频页。" }
+    );
+  }
+
+  async function pageVideoSub() {
+    shell(loading(), "视频追更", "关注的 UP 主 / 频道更新就自动下载");
+    const [data, schedules] = await Promise.all([
+      api("/video-subscribes"),
+      api("/schedules").catch(() => ({ items: [] })),
+    ]);
+    const list = data.items || [];
+    const job = (schedules.items || []).find((item) => item.key === "video_subscribe");
+
+    const active = list.filter((item) => item.status === "active").length;
+    const totalDownloaded = list.reduce((sum, item) => sum + (item.total_downloaded || 0), 0);
+
+    const stats = el("div", { class: "grid cols-4" }, [
+      statCard("视频订阅", String(list.length), "盯住的创作者页面数", "video"),
+      statCard("运行中", String(active), "会被定时巡检的订阅", "play"),
+      statCard("已暂停", String(list.length - active), "连续失败 5 次会自动暂停", "pause"),
+      statCard("累计下载", String(totalDownloaded), "历史新增的视频数", "download"),
+    ]);
+
+    const jobCard = el("div", { class: "card" }, [
+      el("div", { class: "card-head" }, [
+        el("h3", {}, [icon("clock", "sm"), el("span", { text: "巡检节奏" })]),
+        job && job.enabled
+          ? el("span", { class: "tag dot ok", text: "已启用" })
+          : el("span", { class: "tag dot warn", text: job ? "已关闭" : "未注册" }),
+      ]),
+      job
+        ? el("div", { class: "kv" }, [
+            el("div", { class: "kv-item" }, [
+              el("div", { class: "kv-label", text: "当前规则" }),
+              el("div", { class: "mono", text: job.trigger === "cron" ? job.cron : "每 " + job.minutes + " 分钟" }),
+            ]),
+            el("div", { class: "kv-item" }, [
+              el("div", { class: "kv-label", text: "下次执行" }),
+              el("div", {}, [
+                el("div", { text: fmtRelative(job.next_run_time) }),
+                el("div", { class: "cell-sub", text: fmtTime(job.next_run_time) }),
+              ]),
+            ]),
+          ])
+        : emptyBox("调度器未运行，订阅只能手动巡检", "clock"),
+      job
+        ? el("div", { class: "row tight", style: "margin-top:16px" }, [
+            iconButton("修改周期", "edit", () => scheduleForm(job, pageVideoSub), "sm primary"),
+            iconButton("立即执行", "play", () => runSchedule(job, pageVideoSub), "sm"),
+          ])
+        : null,
+    ]);
+
+    const listCard = el("div", { class: "card flush" }, [
+      el("div", { class: "card-head" }, [
+        el("h3", {}, [icon("inbox", "sm"), el("span", { text: "视频订阅（" + list.length + "）" })]),
+        el("div", { class: "row tight center" }, [
+          iconButton("立即巡检全部", "play", async () => {
+            try {
+              const result = await api("/video-subscribes/check-all", { method: "POST" });
+              toast("巡检完成：新增下载 " + (result.downloaded || 0) + " 个", "ok");
+              pageVideoSub();
+            } catch (error) {
+              toast(error.message, "err");
+            }
+          }, "sm"),
+          iconButton("预览地址", "search", () => videoSubPreview(""), "sm ghost"),
+          iconButton("新建", "plus", () => videoSubForm(null, pageVideoSub), "sm primary"),
+        ]),
+      ]),
+      table(
+        [
+          {
+            title: "订阅",
+            render: (row) =>
+              el("div", {}, [
+                el("div", { class: "row tight center" }, [
+                  el("span", { text: row.name }),
+                  el("span", { class: "tag tiny", text: VIDEO_SITE_LABEL[row.site] || row.site }),
+                  row.status !== "active"
+                    ? el("span", { class: "tag warn tiny", text: "已暂停" })
+                    : null,
+                ]),
+                el("div", { class: "cell-sub mono tiny truncate", title: row.url, text: row.url }),
+              ]),
+          },
+          {
+            title: "过滤 / 画质",
+            render: (row) =>
+              el("div", { class: "stack tiny" }, [
+                row.include_regex ? el("div", { class: "mono dim", text: "只要 " + row.include_regex }) : null,
+                row.exclude_regex ? el("div", { class: "mono dim", text: "排除 " + row.exclude_regex }) : null,
+                el("div", { class: "dim", text: row.max_height ? "最高 " + row.max_height + "p" : "自动最佳画质" }),
+              ].filter(Boolean)),
+          },
+          {
+            title: "每轮",
+            class: "num",
+            render: (row) =>
+              el("div", {}, [
+                el("div", { text: "读 " + row.check_limit + " 条" }),
+                el("div", { class: "cell-sub", text: "最多下 " + row.max_per_run + " 个" }),
+              ]),
+          },
+          {
+            title: "已下载",
+            class: "num",
+            render: (row) =>
+              el("div", {}, [
+                el("div", { text: String(row.total_downloaded || 0) }),
+                el("div", { class: "cell-sub", text: "已记 " + (row.handled_count || 0) + " 个 ID" }),
+              ]),
+          },
+          {
+            title: "最近巡检",
+            render: (row) =>
+              el("div", {}, [
+                el("div", { text: fmtRelative(row.last_checked_at) }),
+                row.last_message
+                  ? el("div", { class: "cell-sub truncate", title: row.last_message, text: row.last_message })
+                  : null,
+              ]),
+          },
+          {
+            title: "失败",
+            class: "num",
+            render: (row) =>
+              row.failure_count
+                ? el("span", { class: "tag warn", text: String(row.failure_count) })
+                : el("span", { class: "dim", text: "0" }),
+          },
+          {
+            title: "操作",
+            render: (row) =>
+              el("div", { class: "row tight" }, [
+                iconButton("巡检", "play", async () => {
+                  try {
+                    const result = await api("/video-subscribes/" + row.id + "/check", { method: "POST" });
+                    toast(result.message || "巡检完成", result.success ? "ok" : "err");
+                    pageVideoSub();
+                  } catch (error) {
+                    toast(error.message, "err");
+                  }
+                }, "sm"),
+                iconButton("编辑", "edit", () => videoSubForm(row, pageVideoSub), "sm ghost"),
+                iconButton("删除", "trash", async () => {
+                  if (!confirm("确定删除视频订阅「" + row.name + "」？")) return;
+                  try {
+                    await api("/video-subscribes/" + row.id, { method: "DELETE" });
+                    toast("已删除", "ok");
+                    pageVideoSub();
+                  } catch (error) {
+                    toast(error.message, "err");
+                  }
+                }, "sm danger"),
+              ]),
+          },
+        ],
+        list,
+        "还没有视频订阅。点「新建」贴一个 B 站空间页或 YouTube 频道页，新投稿出现就自动下载"
+      ),
+    ]);
+
+    shell(
+      el("div", { class: "grid" }, [stats, jobCard, listCard]),
+      "视频追更",
+      list.length
+        ? "共 " + list.length + " 条订阅 · 累计下载 " + totalDownloaded + " 个视频"
+        : "盯住 UP 主 / 频道，新投稿自动下载",
+      [
+        iconButton("新建订阅", "plus", () => videoSubForm(null, pageVideoSub), "primary"),
+        iconButton("刷新", "refresh", () => pageVideoSub()),
+      ]
+    );
+  }
+
   // ---------------- ChatOps 机器人 ----------------
   function copyText(text) {
     const value = String(text || "");
@@ -6259,6 +6723,133 @@
     open();
   }
 
+  //: 限速时段的 phase → 展示文案。后端只给英文枚举，中文留在前端。
+  const SPEED_PHASE = {
+    peak: { label: "限速时段内", cls: "warn" },
+    off_peak: { label: "限速时段外", cls: "ok" },
+    disabled: { label: "未启用", cls: "" },
+  };
+
+  /** 设置页里的「下载器限速时段」卡片。
+
+      解决的场景：白天要留带宽给家里其他人，夜里希望跑满。
+      **只有下载器自己支持运行时限速时才有效**，迅雷 CGI / yt-dlp 不支持，
+      下发结果里会如实标成「跳过」而不是假装成功。
+  */
+  function speedLimitCard(info, isAdmin) {
+    const config = (info && info.config) || {};
+    const current = (info && info.current) || {};
+    const phase = SPEED_PHASE[current.phase] || SPEED_PHASE.disabled;
+    // 0 在这里是「不限速」而不是「限到 0」——直接显示 0 会让人以为断流
+    const kbText = (value) => (!value ? "不限速" : value + " KB/s");
+
+    const body = el("div", {}, [
+      el("div", { class: "kv" }, [
+        el("div", { class: "kv-item" }, [
+          el("div", { class: "kv-label", text: "当前状态" }),
+          el("div", {}, [
+            el("span", { class: "tag " + phase.cls + " tiny", text: phase.label }),
+          ]),
+        ]),
+        el("div", { class: "kv-item" }, [
+          el("div", { class: "kv-label", text: "此刻生效" }),
+          el("div", { class: "tiny", text:
+            "下行 " + kbText(current.download_kb) + " · 上行 " + kbText(current.upload_kb) }),
+        ]),
+        el("div", { class: "kv-item" }, [
+          el("div", { class: "kv-label", text: "限速时段" }),
+          el("div", { class: "mono tiny", text: (config.start || "-") + " ~ " + (config.end || "-") }),
+        ]),
+        el("div", { class: "kv-item" }, [
+          el("div", { class: "kv-label", text: "下发周期" }),
+          el("div", { class: "tiny", text: "每 " + (info.interval_minutes || 10) + " 分钟" }),
+        ]),
+      ]),
+      el("div", { class: "divider" }),
+      el("div", { class: "stack tiny" }, [
+        el("div", { class: "dim", text:
+          "时段内：下行 " + kbText(config.download_kb) + " · 上行 " + kbText(config.upload_kb) }),
+        el("div", { class: "dim", text:
+          "时段外：下行 " + kbText(config.off_peak_download_kb) +
+          " · 上行 " + kbText(config.off_peak_upload_kb) }),
+        el("div", { class: "dim", text: "时段可跨午夜，如 23:00 ~ 07:00 表示整个夜间" }),
+      ]),
+      isAdmin
+        ? el("div", { class: "row tight", style: "margin-top:14px" }, [
+            iconButton("配置时段", "edit", () => speedLimitForm(config), "sm primary"),
+            iconButton("立即下发", "play", async () => {
+              try {
+                const result = await api("/downloaders/speed-limit/apply", { method: "POST" });
+                toast(result.message || "已下发", "ok");
+                pageSettings();
+              } catch (error) {
+                toast(error.message, "err");
+              }
+            }, "sm"),
+          ])
+        : null,
+    ]);
+
+    return el("div", { class: "card" }, [
+      el("div", { class: "card-head" }, [
+        el("h3", {}, [icon("clock", "sm"), el("span", { text: "下载器限速时段" })]),
+        config.enabled
+          ? el("span", { class: "tag dot ok", text: "已启用" })
+          : el("span", { class: "tag dot", text: "已关闭" }),
+      ]),
+      body,
+    ]);
+  }
+
+  /** 限速时段配置弹窗。 */
+  function speedLimitForm(config) {
+    modal(
+      "配置下载器限速时段",
+      [
+        { key: "enabled", label: "启用限速时段", type: "checkbox", value: !!config.enabled },
+        { key: "start", label: "限速开始时间", value: config.start || "08:00", placeholder: "08:00" },
+        {
+          key: "end",
+          label: "限速结束时间",
+          value: config.end || "23:00",
+          placeholder: "23:00",
+          hint: "可跨午夜：填 23:00 ~ 07:00 表示夜间限速、白天放开",
+        },
+        { key: "download_kb", label: "时段内下行限速（KB/s，0=不限）", type: "number", value: config.download_kb || 0 },
+        { key: "upload_kb", label: "时段内上行限速（KB/s，0=不限）", type: "number", value: config.upload_kb || 0 },
+        {
+          key: "off_peak_download_kb",
+          label: "时段外下行限速（KB/s，0=不限）",
+          type: "number",
+          value: config.off_peak_download_kb || 0,
+          hint: "通常留 0：夜间跑满",
+        },
+        { key: "off_peak_upload_kb", label: "时段外上行限速（KB/s，0=不限）", type: "number", value: config.off_peak_upload_kb || 0 },
+      ],
+      async (values) => {
+        await api("/downloaders/speed-limit", {
+          method: "PUT",
+          body: {
+            enabled: !!values.enabled,
+            start: values.start,
+            end: values.end,
+            download_kb: Number(values.download_kb) || 0,
+            upload_kb: Number(values.upload_kb) || 0,
+            off_peak_download_kb: Number(values.off_peak_download_kb) || 0,
+            off_peak_upload_kb: Number(values.off_peak_upload_kb) || 0,
+          },
+        });
+        toast("已保存，下一轮会自动下发（也可点「立即下发」）", "ok");
+        pageSettings();
+      },
+      "保存",
+      {
+        wide: true,
+        lead: "单位统一是 KB/s——各下载器内部单位不同（qB 用 B/s、TR 用 KB/s），换算由服务端完成。",
+      }
+    );
+  }
+
   /** 设置页里的「下载器」卡片。 */
   function downloaderCard(list, schemaItems, isAdmin) {
     const rows = list || [];
@@ -6368,12 +6959,14 @@
     shell(loading(), "设置", "在线修改配置并立即生效");
     // 下载器数据拉不到不该让整个设置页白屏（比如老版本后端没这个接口），
     // 所以两个下载器请求都做降级：失败就当没有下载器，其余设置照常显示。
-    const [data, info, me, dlList, dlSchema] = await Promise.all([
+    const [data, info, me, dlList, dlSchema, speedInfo] = await Promise.all([
       api("/system/settings"),
       api("/system/info"),
       api("/auth/me").catch(() => null),
       api("/downloaders").catch(() => ({ items: [] })),
       api("/downloaders/schema").catch(() => ({ items: [] })),
+      // 限速时段同样降级：老后端没这个接口时当作"未配置"，不让设置页整页失败
+      api("/downloaders/speed-limit").catch(() => ({ data: null })),
     ]);
     const isAdmin = canDo("admin");
     const controls = {};
@@ -6634,6 +7227,8 @@
         // 下载器放在保存栏之前：它是独立的增删改，不受「保存并生效」影响，
         // 摆在最上面也符合"配置下载器"是新装机第一件事的使用顺序。
         downloaderCard(dlList.items || [], dlSchema.items || [], isAdmin),
+        // 限速时段紧跟下载器：它配的就是下载器的行为，挨在一起才好理解
+        speedInfo && speedInfo.data ? speedLimitCard(speedInfo.data, isAdmin) : null,
         saveBar,
         // 可改的配置组用多列瀑布流：原先单列纵向排 13 张卡片，页面极长
         // 需要一直滚（本轮需求 3）。cols-settings 在宽屏给 2~3 列。
@@ -6667,6 +7262,7 @@
     changelog: pageChangelog,
     storage: pageStorage,
     pansub: pagePanSub,
+    videosub: pageVideoSub,
     strm: pageStrm,
     chatops: pageChatops,
     settings: pageSettings,

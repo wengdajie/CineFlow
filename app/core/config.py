@@ -175,6 +175,11 @@ class Settings(BaseSettings):
     #: 连续多少次转存失败后自动标记分享失效并停止重试
     PAN_SUBSCRIBE_MAX_FAILURES: int = 5
 
+    # ---------- 网页视频订阅（UP 主/频道追更） ----------
+    #: 视频追更巡检间隔（分钟），0 表示关闭。默认 120：UP 主更新频率远低于剧集，
+    #: 查太勤只是白白增加被风控的概率
+    VIDEO_SUBSCRIBE_INTERVAL_MINUTES: int = 120
+
     # ---------- 洗版 ----------
     #: 是否启用洗版（发现明显更优的版本时替换已入库文件）
     UPGRADE_ENABLED: bool = False
@@ -193,11 +198,19 @@ class Settings(BaseSettings):
     #: 达到告警阈值后是否自动停用该站点（默认不停用，只告警）
     SITE_AUTO_DISABLE: bool = False
 
+    # ---------- 通知去抖 ----------
+    #: 同一条告警（站点掉线、网盘登录失效等）的最短重复间隔（分钟），0=不去抖。
+    #: 默认 6 小时：站点坏着不动时，每轮巡检都推一条会让用户学会忽略告警
+    NOTIFY_ALERT_COOLDOWN_MINUTES: int = 360
+
     # ---------- 下载器调度 ----------
     #: 多下载器时的选择策略：priority（按站点优先级）/ least_tasks（最少任务）/ round_robin（轮询）
     DOWNLOADER_STRATEGY: str = "priority"
     #: 投递失败时是否自动换下一个健康的下载器重试
     DOWNLOADER_FAILOVER: bool = True
+    #: 限速时段巡检间隔（分钟），0 表示关闭。默认 10 分钟：
+    #: 时段切换只需分钟级精度，查太勤没有意义
+    SPEED_LIMIT_INTERVAL_MINUTES: int = 10
 
     # ---------- 榜单订阅 ----------
     #: 榜单自动订阅巡检间隔（分钟），0 表示关闭
