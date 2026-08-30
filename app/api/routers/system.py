@@ -23,6 +23,7 @@ from app.db.session import session_scope
 from app.providers.metadata.tmdb import tmdb
 from app.schemas.enums import SubscribeStatus, TaskStatus
 from app.schemas.models import Message, SettingsReset, SettingsUpdate
+from app.services import changelog as changelog_service
 from app.services import config_store
 from app.services import library as library_service
 from app.services import notify as notify_service
@@ -327,6 +328,25 @@ def reset_settings(payload: SettingsReset, user: AdminUser) -> dict[str, Any]:
         "success": True,
         "message": f"已重置 {len(keys)} 项" if keys else "没有需要重置的项",
         "keys": keys,
+    }
+
+
+@router.get("/changelog", summary="更新日志（解析 docs/08-变更日志.md）")
+def changelog(
+    user: CurrentUser,
+    limit: int = Query(0, ge=0, le=100, description="只取最近 N 个版本，0 表示全部"),
+) -> dict[str, Any]:
+    """结构化的历次更新内容。
+
+    数据来自仓库里的变更日志文档，不额外维护——避免"文档写了接口没同步"。
+    文档缺失时返回空列表而不是 500（见 changelog 服务的说明）。
+    """
+    items = changelog_service.releases()
+    return {
+        "success": True,
+        "current": APP_VERSION,
+        "total": len(items),
+        "items": items[:limit] if limit else items,
     }
 
 

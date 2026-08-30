@@ -99,6 +99,22 @@ PROVIDER_FIELDS: dict[str, list[dict[str, Any]]] = {
             "hint": "对应 aria2.conf 里的 rpc-secret，留空表示未设密钥",
         },
     ],
+    "xunlei": [
+        {
+            "key": "device_name",
+            "target": "option",
+            "label": "设备名称",
+            "type": "str",
+            "hint": "同一迅雷账号绑了多台 NAS 时用来指定；留空用第一台。名称见迅雷 App",
+        },
+        {
+            "key": "download_root_dir",
+            "target": "option",
+            "label": "下载根目录名",
+            "type": "str",
+            "hint": "迅雷页面上的目录名（如「迅雷下载」），留空用第一个",
+        },
+    ],
     "ytdlp": [
         {
             "key": "max_height",
@@ -215,8 +231,9 @@ PROVIDER_FIELDS: dict[str, list[dict[str, Any]]] = {
 #: 下载器的界面说明：告诉用户这个下载器**能下什么**，避免配错。
 PROVIDER_NOTES: dict[str, str] = {
     "qbittorrent": "处理 BT 种子与磁力，最常用。需要在 qB 里开启 WebUI。",
-    "transmission": "处理 BT 种子与磁力，轻量，群晖/飞牛自带的多是这个。",
+    "transmission": "处理 BT 种子与磁力，轻量。**飞牛 fnOS / 群晖自带的下载器就是它**，默认端点 http://NAS地址:9091。",
     "aria2": "处理 HTTP/FTP 直链（网盘直链下载），不处理磁力。",
+    "xunlei": "把 NAS 上的迅雷套件当下载器用，处理磁力。需先在 NAS 的迅雷页面扫码登录自己的账号；不支持迅雷云端离线。",
     "ytdlp": "处理 B 站 / YouTube / 抖音等视频网页，榜单里的「下载」按钮走的就是它。",
 }
 
@@ -225,10 +242,14 @@ PROVIDER_NOTES: dict[str, str] = {
 #:
 #: * aria2 用 RPC Secret（api_key 列）认证，没有用户名的概念；
 #: * yt-dlp 是**本地进程**，不连远程服务——地址/用户名/密码全都不读，
-#:   它要登录时用的是 ``cookie_file``。
+#:   它要登录时用的是 ``cookie_file``；
+#: * 迅雷（NAS 本地）的鉴权是套件自己发的本地 JWT，从 Web 页面自动抠取，
+#:   不需要填账号密码；它也不能指定任意保存路径，只能选它自己管的下载目录，
+#:   所以 ``save_path`` 也排掉（子目录由投递时的分类目录名自动带上）。
 EXCLUDED_COMMON: dict[str, tuple[str, ...]] = {
     "aria2": ("username",),
     "ytdlp": ("url", "username", "password"),
+    "xunlei": ("username", "password", "save_path"),
 }
 
 

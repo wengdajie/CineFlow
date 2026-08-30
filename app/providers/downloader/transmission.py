@@ -11,7 +11,7 @@ from app.core.logger import get_logger
 from app.providers.downloader.base import BaseDownloader, TorrentState
 from app.providers.registry import register
 from app.schemas.enums import TaskStatus
-from app.utils.http import build_headers
+from app.utils.http import build_headers, normalize_endpoint
 
 logger = get_logger(__name__)
 
@@ -54,7 +54,8 @@ class TransmissionDownloader(BaseDownloader):
 
     @property
     def base_url(self) -> str:
-        url = str(self.config.get("url") or "http://127.0.0.1:9091").rstrip("/")
+        # 飞牛 fnOS 自带的下载器就是 Transmission，默认端点即下面这个
+        url = normalize_endpoint(self.config.get("url"), default="http://127.0.0.1:9091")
         return url if url.endswith("/rpc") else f"{url}/transmission/rpc"
 
     async def _call(self, method: str, arguments: dict[str, Any]) -> dict[str, Any] | None:

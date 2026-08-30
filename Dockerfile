@@ -42,6 +42,9 @@ WORKDIR /app
 COPY app/ ./app/
 COPY web/ ./web/
 COPY plugins/ ./plugins/
+# docs 必须进镜像：「更新日志」页是解析 docs/08-变更日志.md 得来的，
+# 不拷进来的话本地能看、Docker 里是空白（最难发现的一类环境差异）。
+COPY docs/ ./docs/
 # 模板放在 /app 下而非 /app/config 下：compose 会把宿主目录 bind mount 到
 # /app/config，那是整体替换，放在里面的文件一定被遮蔽 → entrypoint 取不到模板。
 COPY config/config.yaml.example /app/config.yaml.example

@@ -9,7 +9,7 @@ from app.core.logger import get_logger
 from app.providers.downloader.base import BaseDownloader, TorrentState
 from app.providers.registry import register
 from app.schemas.enums import TaskStatus
-from app.utils.http import fetch_json
+from app.utils.http import fetch_json, normalize_endpoint
 
 logger = get_logger(__name__)
 
@@ -32,7 +32,8 @@ class Aria2Downloader(BaseDownloader):
 
     @property
     def base_url(self) -> str:
-        url = str(self.config.get("url") or "http://127.0.0.1:6800").rstrip("/")
+        # 先规范化再拼路径：否则 "127.0.0.1:6800" 会拼成没有协议的地址
+        url = normalize_endpoint(self.config.get("url"), default="http://127.0.0.1:6800")
         return url if url.endswith("/jsonrpc") else f"{url}/jsonrpc"
 
     async def _call(self, method: str, params: list[Any] | None = None) -> Any:
