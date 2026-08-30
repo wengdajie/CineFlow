@@ -12,6 +12,15 @@
 注意 ``type`` 只有 ``movie`` / ``tv`` 两种，**动漫与综艺是靠 tv 的 tag 区分的**
 （``tag=日本动画`` / ``tag=综艺``），这一点接口文档里没有，是实测得出的。
 
+``sort`` 参数同样是实测得出的（文档未载），三种取值口径完全不同：
+
+* ``recommend``（缺省值）——按**当前热度**排，就是"现在大家都在看什么"；
+* ``time``——按上映/开播时间排，会把冷门新片顶到前面；
+* ``rank``——按评分排，结果基本是经典老片，与"最热"无关。
+
+榜单页要的是"当前最热"，因此这里**显式传 ``sort=recommend``**：虽然它恰好
+是缺省值，但写出来才能保证豆瓣哪天改了默认值不会让口径悄悄漂移。
+
 反爬自保与 ``metadata/douban.py`` 同策略：缓存 + 命中限流后退避，
 任何失败都返回空列表而不抛异常（榜单为空好过整页 500）。
 """
@@ -28,6 +37,10 @@ from app.utils.http import fetch_json
 logger = get_logger(__name__)
 
 SUBJECTS_URL = "https://movie.douban.com/j/search_subjects"
+
+#: 排序口径：recommend=当前热度（榜单页要的就是这个），
+#: time=按时间、rank=按评分——后两者都不是"最热"，别改这里。
+SORT_HOT = "recommend"
 
 #: 榜单缓存 30 分钟。豆瓣热门榜本身按天级变化，30 分钟足够新，
 #: 又能挡住用户反复切页签带来的请求。
@@ -141,7 +154,7 @@ async def chart(
 
     url = (
         f"{SUBJECTS_URL}?type={meta['type']}&tag={quote(meta['tag'])}"
-        f"&page_limit={limit}&page_start={offset}"
+        f"&sort={SORT_HOT}&page_limit={limit}&page_start={offset}"
     )
     payload = await fetch_json(url, headers=_headers(), timeout=15)
     if not isinstance(payload, dict):

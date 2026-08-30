@@ -53,8 +53,13 @@ async def add_download(
     downloader_name: str | None = None,
     save_path: str | None = None,
     notify: bool = True,
+    video_format: str | None = None,
 ) -> DownloadTask | None:
-    """添加下载任务。"""
+    """添加下载任务。
+
+    ``video_format`` 只对 ``kind=webvideo`` 有意义：界面上用户选定的画质
+    （yt-dlp 的 format_id）。其它 kind 会忽略它——BT/网盘没有"选画质"这回事。
+    """
     title = str(resource.get("title") or "")
     link = str(resource.get("link") or "")
     if not link:
@@ -115,7 +120,9 @@ async def add_download(
         # 其他下载器拿到网页地址只会下到一个 HTML 文件
         downloader = site_service.default_downloader(downloader_name or "ytdlp")
         if downloader and downloader.name == "ytdlp":
-            external_id = await downloader.add(link, save_path=target_path)
+            external_id = await downloader.add(
+                link, save_path=target_path, video_format=video_format
+            )
             if external_id:
                 status = TaskStatus.DOWNLOADING.value
             else:
@@ -169,6 +176,7 @@ async def add_download(
                 "resolution": meta.get("resolution"),
                 "quality": meta.get("quality"),
                 "pan_type": (resource.get("extra") or {}).get("pan_type"),
+                "video_format": video_format or None,
                 **(
                     {
                         "pan_storage": pan_saved.get("storage"),

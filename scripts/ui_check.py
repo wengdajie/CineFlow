@@ -1,5 +1,6 @@
 """用真实浏览器逐页点检 CineFlow 前端，捕获任何 JS 报错。"""
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -231,6 +232,21 @@ def main():
         page.goto(f"{BASE}/#sites", wait_until="networkidle")
         page.wait_for_timeout(1000)
 
+        # v1.10.0 需求 2：下载器已搬到设置页，站点管理页不该再有它的卡片，
+        # 且要提供跳转入口（否则老用户会以为下载器配置丢了）。
+        sites_body = page.inner_text("body")
+        dl_group = re.search(r"下载器（\d+）", sites_body)
+        print(f"   站点管理页仍有下载器分组：{bool(dl_group)}（期望 False）")
+        if dl_group:
+            errors.append("[sites] 下载器已搬到设置页，站点管理页不该再列出下载器分组")
+        print(f"   含跳转提示「下载器请到「设置」页配置」：{'下载器请到' in sites_body}")
+        if "下载器请到" not in sites_body:
+            errors.append("[sites] 缺少「下载器请到设置页配置」的引导文案")
+        jump = page.get_by_role("button", name="下载器设置")
+        print(f"   「下载器设置」跳转按钮：{jump.count() > 0}")
+        if not jump.count():
+            errors.append("[sites] 缺少「下载器设置」跳转按钮")
+
         tpl = page.get_by_text("从模板添加", exact=False).first
         if tpl.count():
             tpl.click()
@@ -346,7 +362,7 @@ def main():
             print("   未找到主题切换控件")
 
         print("\n" + "=" * 68)
-        print("6e) 交互测试：热度排行（发现榜分类切换 + 右侧搜索面板）")
+        print("6e) 交互测试：热度排行（六分类切换 / 视频类直接下载）")
         print("=" * 68)
         page.goto(f"{BASE}/#trending", wait_until="networkidle")
         # 发现榜要打真实外部接口（豆瓣/B站），首屏比其他页慢
@@ -358,27 +374,59 @@ def main():
             if gone in body:
                 errors.append(f"[trending] 已下线的页签「{gone}」仍出现在页面上")
             print(f"   已移除「{gone}」：{gone not in body}")
-        # v1.9.0：搜索并入榜单页，且必须在榜单右侧（窄屏才允许堆叠）
-        split = page.locator(".trending-split")
-        side = page.locator(".side-panel")
-        print(f"   双栏容器 {split.count()} 个 / 右侧搜索面板 {side.count()} 个")
-        if not split.count() or not side.count():
-            errors.append("[trending] 榜单页缺少双栏布局或右侧搜索面板")
-        else:
-            bb = page.locator(".board-card").first.bounding_box() or {}
-            sb = side.first.bounding_box() or {}
-            if bb and sb and sb.get("x", 0) <= bb.get("x", 0):
-                errors.append("[trending] 搜索面板未位于榜单右侧")
-            print(f"   面板 x={sb.get('x')} / 榜单卡片 x={bb.get('x')}")
+        # v1.10.0：页内搜索卡片已整体下线（改为点「搜资源」跳资源搜索页），
+        # 所以这里反过来断言旧 DOM 必须彻底消失，避免样式残留或回退。
+        for gone_sel in (".trending-split", ".side-panel", ".side-item"):
+            leftover = page.locator(gone_sel).count()
+            print(f"   已移除 {gone_sel}：{leftover == 0}")
+            if leftover:
+                errors.append(f"[trending] 已下线的页内搜索 DOM {gone_sel} 仍存在 {leftover} 个")
+
+        # v1.10.0：六个分类页签（豆瓣四类 + Bilibili + YouTube）
         segs = page.locator(".segment button")
-        print(f"   分类切换按钮 {segs.count()} 个")
-        for i in range(min(segs.count(), 4)):
-            label = segs.nth(i).inner_text()
+        seg_labels = [segs.nth(i).inner_text().strip() for i in range(segs.count())]
+        print(f"   分类切换按钮 {segs.count()} 个：{seg_labels}")
+        for want in ("电影", "电视剧", "动漫", "综艺", "Bilibili", "YouTube"):
+            if want not in seg_labels:
+                errors.append(f"[trending] 分类页签缺少「{want}」")
+        # 逐个点一遍：任何分类都不能把页面点成空白/报错
+        for i in range(segs.count()):
+            label = segs.nth(i).inner_text().strip()
             segs.nth(i).click()
             page.wait_for_timeout(2500)
             text = page.inner_text("body")
             print(f"     切到「{label}」-> 文本长度 {len(text)}")
+            if len(text) < 200:
+                errors.append(f"[trending] 切到「{label}」后页面几乎空白")
         page.screenshot(path=str(SHOTS / "21-trending.png"), full_page=True)
+
+        print("\n" + "=" * 68)
+        print("6e-1) 交互测试：视频类分类（Bilibili/YouTube）直接给下载按钮")
+        print("=" * 68)
+        # kind=video 的分类不该出现「搜资源」——它们本身就有播放地址，
+        # 直接交给 yt-dlp，多一步搜资源是无意义的绕路。
+        for label, sub_label in (("Bilibili", "分区"), ("YouTube", "地区")):
+            tab = page.get_by_role("button", name=label, exact=True)
+            if not tab.count():
+                continue
+            tab.first.click()
+            page.wait_for_timeout(3500)
+            body_v = page.inner_text("body")
+            has_sub = sub_label in body_v
+            print(f"   「{label}」二级切换（{sub_label}）：{has_sub}")
+            if not has_sub:
+                errors.append(f"[trending] 「{label}」缺少{sub_label}二级切换")
+            cards_v = page.locator(".board-card").count()
+            dl_btn = page.locator(".board-card").locator("text=下载").count()
+            search_btn = page.locator(".board-card").locator("text=搜资源").count()
+            print(f"   卡片 {cards_v} 张 / 下载按钮 {dl_btn} 个 / 搜资源按钮 {search_btn} 个")
+            if cards_v and search_btn:
+                errors.append(f"[trending] 「{label}」是视频类，卡片不该出现「搜资源」按钮")
+            if cards_v and not dl_btn:
+                errors.append(f"[trending] 「{label}」卡片缺少「下载」按钮")
+            if not cards_v:
+                # YouTube 依赖公开 Piped 实例，实例挂了属正常，只提示不算失败
+                print(f"   （「{label}」本次无数据，可能是上游实例不可用，跳过按钮校验）")
 
         print("\n" + "=" * 68)
         print("6e-2) 交互测试：发现榜画板模式与封面降级")
@@ -568,8 +616,50 @@ def main():
         print(f"   设置页含「设置」：{'设置' in body}")
         for name in ("网盘管理", "ChatOps 机器人", "调度", "刮削与分类", "STRM 同步", "分享追更与洗版"):
             print(f"   配置分组「{name}」显示：{name in body}")
-        print(f"   含 CF_ 环境变量名：{'CF_PORT' in body}")
         print(f"   敏感项已脱敏：{'已设置' in body or 'SECRET_KEY' in body}")
+
+        # v1.10.0 需求 3：只读项（服务/目录/安全）收进折叠卡片，默认收起。
+        # 所以 CF_PORT 这类只读环境变量名默认不该出现在正文里，展开后才出现。
+        ro_card = page.get_by_text("只读配置（需重启生效）", exact=True)
+        print(f"   只读配置折叠卡片：{ro_card.count() > 0}")
+        if not ro_card.count():
+            errors.append("[settings] 缺少「只读配置（需重启生效）」折叠卡片")
+        else:
+            if "CF_PORT" in body:
+                errors.append("[settings] 只读配置默认应收起，CF_PORT 不该直接出现")
+            print(f"   默认收起（正文无 CF_PORT）：{'CF_PORT' not in body}")
+            expand = page.get_by_role("button", name="展开查看")
+            if expand.count():
+                expand.first.click()
+                page.wait_for_timeout(600)
+                body_ro = page.inner_text("body")
+                print(f"   展开后可见 CF_PORT：{'CF_PORT' in body_ro}")
+                if "CF_PORT" not in body_ro:
+                    errors.append("[settings] 展开只读配置后仍看不到 CF_PORT")
+                page.get_by_role("button", name="收起").first.click()
+                page.wait_for_timeout(400)
+            else:
+                errors.append("[settings] 只读配置卡片没有「展开查看」按钮")
+
+        # v1.10.0 需求 2：下载器从站点管理搬到设置页
+        dl_card = page.get_by_text("下载器", exact=True)
+        print(f"   设置页含「下载器」卡片：{dl_card.count() > 0}")
+        if not dl_card.count():
+            errors.append("[settings] 设置页缺少「下载器」卡片（v1.10.0 已从站点管理搬来）")
+
+        # v1.10.0 需求 3：可改配置组走多列布局，宽屏下不能再是单列长条
+        cols = page.locator(".grid.cols-settings")
+        print(f"   多列容器 {cols.count()} 个")
+        if not cols.count():
+            errors.append("[settings] 可编辑配置组未使用多列布局容器 .cols-settings")
+        else:
+            col_count = page.evaluate(
+                "getComputedStyle(document.querySelector('.grid.cols-settings'))"
+                ".getPropertyValue('column-count')"
+            )
+            print(f"   计算后 column-count = {col_count}（视口 {page.viewport_size})")
+            if col_count in ("", "auto", "1"):
+                errors.append(f"[settings] 多列布局未生效（column-count={col_count}）")
         page.screenshot(path=str(SHOTS / "30-settings.png"), full_page=True)
 
         pwd = page.get_by_text("修改密码", exact=True).first

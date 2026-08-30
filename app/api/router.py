@@ -7,6 +7,7 @@ from fastapi import APIRouter
 from app.api.routers import (
     auth,
     chatops,
+    downloaders,
     downloads,
     images,
     library,
@@ -38,6 +39,7 @@ api_router.include_router(radar.router)
 api_router.include_router(ranking.router)
 api_router.include_router(rule_groups.router)
 api_router.include_router(downloads.router)
+api_router.include_router(downloaders.router)
 api_router.include_router(library.router)
 api_router.include_router(media.router)
 api_router.include_router(sites.router)

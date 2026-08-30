@@ -83,8 +83,16 @@ async def add_webvideo(
     url: str = Query(min_length=4),
     title: str | None = None,
     save_path: str | None = None,
+    video_format: str | None = Query(
+        None,
+        description="画质 format_id（取自 /webvideo/probe 的 formats），留空自动选最佳",
+    ),
 ) -> dict[str, Any]:
-    """把一个公开视频页面加入下载队列（由 yt-dlp 解析）。"""
+    """把一个公开视频页面加入下载队列（由 yt-dlp 解析）。
+
+    ``video_format`` 让界面「先解析看画质、再挑一档下载」这条链路真正生效，
+    而不是给一个选了没用的下拉框。
+    """
     task = await download_service.add_download(
         {
             "title": title or url,
@@ -94,6 +102,7 @@ async def add_webvideo(
             "page_url": url,
         },
         save_path=save_path,
+        video_format=video_format,
     )
     if not task:
         raise HTTPException(status_code=400, detail="添加失败，请检查 yt-dlp 下载器是否启用")

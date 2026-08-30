@@ -1229,9 +1229,10 @@
   // 它们的数据在「资源搜索」页与「站点管理」页各自有更合适的入口）。
   const trendingState = {
     view: "board",
-    // 发现榜当前分类（电影/电视剧/动漫/综艺/Bilibili）与 B 站二级分区
+    // 发现榜当前分类（电影/电视剧/动漫/综艺/Bilibili/YouTube）与两个视频站的二级分区
     discoverCat: "movie",
     biliPartition: "all",
+    ytRegion: "US",
     // 下拉加载：已加载的条目、下一页偏移、是否还有更多、是否正在加载
     items: [],
     offset: 0,
@@ -1240,6 +1241,11 @@
     label: "",
     source: "",
     message: "",
+    kind: "media",
+    //: 跳去资源搜索页前记下的滚动位置与已加载条数。
+    //: 榜单可能已经下拉加载了好几页，切回来时必须把这些页**先恢复出来**
+    //: 再滚回去，否则内容高度不够，scrollTo 会落空（ADR-48）。
+    restore: null,
   };
   //: 每页条数。默认首屏 30 条，下拉再追加 30 条。
   const TRENDING_PAGE_SIZE = 30;
@@ -1345,7 +1351,135 @@
     return API + "/images/proxy?url=" + encodeURIComponent(normalized);
   }
 
-  /** 发现榜画板：来源是豆瓣/B 站，字段与本地资源榜不同，单独渲染。
+  /** 视频榜（Bilibili / YouTube）的「下载」按钮。
+
+      这两类榜单的条目**本身就带确切播放地址**，不需要再去 BT/网盘搜资源——
+      直接把地址交给后端 yt-dlp 即可。所以它们的卡片不显示「搜资源」，
+      而是显示「下载」（本轮需求 1）。
+
+      下载前先 probe 一次拿到真实标题与可用画质：既能让用户下之前看清楚，
+      也能挡住会员专享内容（后端会拒绝并给出可读原因），
+      而不是让任务默默失败。
+  */
+  /** 把 yt-dlp 的 format 项拼成一行可读画质名。
+
+      后端下发的字段是 ``height`` / ``ext`` / ``note`` / ``filesize``，
+      没有现成的显示名，这里统一拼装：``1080p · mp4 · 高码率（124.5 MB）``。
+  */
+  function formatLabel(f) {
+    const parts = [];
+    if (f.height) parts.push(f.height + "p");
+    if (f.ext) parts.push(f.ext);
+    if (f.note) parts.push(f.note);
+    if (!parts.length) parts.push(f.format_id || "未知画质");
+    return parts.join(" · ") + (f.filesize ? "（" + fmtSize(f.filesize) + "）" : "");
+  }
+
+  function videoDownloadButton(row) {
+    const url = row.url || row.douban_url || "";
+    const btn = el("button", { class: "btn sm primary" }, [
+      icon("download", "sm"),
+      el("span", { text: "下载" }),
+    ]);
+    btn.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      if (!url) {
+        toast("这条榜单数据没有播放地址，无法下载", "err");
+        return;
+      }
+      const span = btn.querySelector("span");
+      btn.disabled = true;
+      span.textContent = "解析中…";
+      try {
+        // 先解析：拿到真实标题/时长/画质，也顺带验证这条内容能不能下
+        const probe = await api("/downloads/webvideo/probe?url=" + encodeURIComponent(url), {
+          method: "POST",
+        });
+        const info = probe.data || {};
+        const formats = info.formats || [];
+        modal(
+          "下载：" + (info.title || row.title),
+          [
+            {
+              key: "title",
+              label: "保存标题",
+              value: info.title || row.title,
+              hint: info.uploader ? "作者：" + info.uploader : "",
+            },
+            formats.length
+              ? {
+                  key: "format",
+                  label: "画质",
+                  type: "select",
+                  value: "",
+                  options: [{ value: "", label: "自动（最佳）" }].concat(
+                    formats.map((f) => ({
+                      value: f.format_id || "",
+                      label: formatLabel(f),
+                    }))
+                  ),
+                }
+              : null,
+            { key: "save_path", label: "保存目录（留空用默认下载目录）", value: "" },
+          ].filter(Boolean),
+          async (values) => {
+            let query =
+              "/downloads/webvideo?url=" + encodeURIComponent(url) +
+              "&title=" + encodeURIComponent(values.title || row.title);
+            if (values.save_path) {
+              query += "&save_path=" + encodeURIComponent(values.save_path);
+            }
+            if (values.format) {
+              query += "&video_format=" + encodeURIComponent(values.format);
+            }
+            await api(query, { method: "POST" });
+            toast("已加入下载队列，可在「下载任务」查看进度", "ok");
+          },
+          "开始下载",
+          {
+            lead:
+              (info.duration ? "时长 " + fmtDuration(info.duration) + " · " : "") +
+              (info.site || "") +
+              (formats.length ? " · " + formats.length + " 种画质可选" : ""),
+          }
+        );
+      } catch (error) {
+        toast(error.message, "err");
+      } finally {
+        btn.disabled = false;
+        span.textContent = "下载";
+      }
+    });
+    return btn;
+  }
+
+  /** 榜单卡片右下角的操作区。
+
+      ``kind=video``（B 站/YouTube）→ 只给「下载」；
+      ``kind=media``（豆瓣四类）→ 给「订阅 + 搜资源」，
+      「搜资源」会跳到资源搜索页（本轮需求 1，不再在榜单页内搜）。
+  */
+  function discoverActions(row, data, onSearch) {
+    if ((data.kind || "media") === "video") {
+      return [videoDownloadButton(row)];
+    }
+    return [
+      iconButton("订阅", "star", (event) => {
+        if (event) event.stopPropagation();
+        subscribeFromTrending({
+          title: row.title,
+          media_type: row.media_type || "movie",
+          season: 1,
+        });
+      }, "sm primary"),
+      iconButton("搜资源", "search", (event) => {
+        if (event) event.stopPropagation();
+        onSearch(row.title);
+      }, "sm ghost"),
+    ];
+  }
+
+  /** 发现榜画板：来源是豆瓣/B 站/YouTube，字段与本地资源榜不同，单独渲染。
 
       与本地资源榜的区别：这里没有"做种数/站点数"，而是有评分、
       更新进度、以及**本地是否已有片源**（local_count）——后者是本项目
@@ -1358,7 +1492,12 @@
         emptyBox(data.message || "暂无数据", "flame"),
       ]);
     }
-    const isBili = data.source === "bilibili";
+    // 视频站（B 站/YouTube）与影视榜（豆瓣）的副标题字段不同：
+    // 前者有 UP 主/时长/播放量，后者有类型/更新进度/评分。
+    const isVideo = (data.kind || "media") === "video";
+    const sourceLabel =
+      data.source === "bilibili" ? "Bilibili"
+        : data.source === "youtube" ? "YouTube" : "豆瓣";
     return el(
       "div",
       { class: "board" },
@@ -1386,12 +1525,14 @@
             el("div", { class: "board-title", title: row.title, text: row.title }),
             el("div", { class: "board-sub", text:
               [
-                isBili ? row.uploader : typeLabel(row.media_type),
+                isVideo ? row.uploader : typeLabel(row.media_type),
                 row.episodes_info || null,
-                isBili && row.duration ? fmtDuration(row.duration) : null,
-              ].filter(Boolean).join(" · ") || (isBili ? "Bilibili" : "豆瓣") }),
+                // 直播条目 duration=0，显示"直播中"比显示 00:00 有意义
+                isVideo && row.is_live ? "直播中" : null,
+                isVideo && row.duration ? fmtDuration(row.duration) : null,
+              ].filter(Boolean).join(" · ") || sourceLabel }),
             el("div", { class: "board-foot" }, [
-              el("span", { class: "tiny dim", text: isBili
+              el("span", { class: "tiny dim", text: isVideo
                 ? fmtCompact(row.heat) + " 播放"
                 : (row.rating ? row.rating + " 分" : "暂无评分") }),
               hasLocal
@@ -1399,27 +1540,7 @@
                 : el("span", { class: "tiny dim", text: "未入库" }),
             ]),
           ]),
-          el("div", { class: "board-actions" }, [
-            iconButton("订阅", "star", (event) => {
-              event.stopPropagation();
-              subscribeFromTrending({
-                title: row.title,
-                media_type: row.media_type || (isBili ? "tv" : "movie"),
-                season: 1,
-              });
-            }, "sm primary"),
-            iconButton("搜资源", "search", (event) => {
-              event.stopPropagation();
-              // 榜单页内有右侧搜索面板时就地搜索；否则退回资源搜索页
-              if (onSearch) {
-                onSearch(row.title);
-                return;
-              }
-              searchState.keyword = row.title;
-              searchState.items = [];
-              go("search");
-            }, "sm ghost"),
-          ]),
+          el("div", { class: "board-actions" }, discoverActions(row, data, onSearch)),
         ]);
         const open = () => discoverDetail(row, data, onSearch);
         card.addEventListener("click", open);
@@ -1436,49 +1557,44 @@
 
   /** 发现榜列表视图。 */
   function discoverTable(data, onSearch) {
-    const isBili = data.source === "bilibili";
+    const isVideo = (data.kind || "media") === "video";
     return table(
       [
         { title: "#", render: (row) => rankCell(row.rank) },
         {
-          title: "作品",
+          title: isVideo ? "视频" : "作品",
           render: (row) =>
             el("div", {}, [
               el("div", { class: "truncate", title: row.title, text: row.title }),
               el("div", { class: "cell-sub", text:
-                [isBili ? row.uploader : typeLabel(row.media_type), row.episodes_info]
+                [isVideo ? row.uploader : typeLabel(row.media_type), row.episodes_info]
                   .filter(Boolean).join(" · ") }),
             ]),
         },
-        isBili
+        isVideo
           ? { title: "播放", class: "num", render: (row) => fmtCompact(row.heat) }
           : { title: "评分", class: "num", render: (row) => row.rating || "-" },
-        {
-          title: "本地片源",
-          render: (row) =>
-            (row.local_count || 0) > 0
-              ? el("span", { class: "tag brand", text: row.local_count + " 条" })
-              : el("span", { class: "tiny dim", text: "未入库" }),
-        },
+        // 视频站条目是单个视频，「本地片源」这一列对它没有意义
+        isVideo
+          ? {
+              title: "时长",
+              class: "num",
+              render: (row) =>
+                row.is_live
+                  ? el("span", { class: "tag warn tiny", text: "直播" })
+                  : el("span", { text: row.duration ? fmtDuration(row.duration) : "-" }),
+            }
+          : {
+              title: "本地片源",
+              render: (row) =>
+                (row.local_count || 0) > 0
+                  ? el("span", { class: "tag brand", text: row.local_count + " 条" })
+                  : el("span", { class: "tiny dim", text: "未入库" }),
+            },
         {
           title: "操作",
           render: (row) =>
-            el("div", { class: "row tight" }, [
-              iconButton("订阅", "star", () => subscribeFromTrending({
-                title: row.title,
-                media_type: row.media_type || (isBili ? "tv" : "movie"),
-                season: 1,
-              }), "sm"),
-              iconButton("搜资源", "search", () => {
-                if (onSearch) {
-                  onSearch(row.title);
-                  return;
-                }
-                searchState.keyword = row.title;
-                searchState.items = [];
-                go("search");
-              }, "sm ghost"),
-            ]),
+            el("div", { class: "row tight" }, discoverActions(row, data, onSearch)),
         },
       ],
       data.items || [],
@@ -1487,7 +1603,9 @@
   }
 
   function discoverDetail(row, data, onSearch) {
-    const isBili = data.source === "bilibili";
+    const isVideo = (data.kind || "media") === "video";
+    const isYt = data.source === "youtube";
+    const srcName = isYt ? "YouTube" : data.source === "bilibili" ? "Bilibili" : "豆瓣";
     const info = (label, value) =>
       el("div", { class: "kv-item" }, [
         el("div", { class: "kv-label", text: label }),
@@ -1496,215 +1614,137 @@
     let close = () => {};
     close = panelModal(
       row.title,
-      isBili ? "来自 Bilibili 排行榜" : "来自豆瓣榜单",
+      "来自 " + srcName + (isVideo ? " 热门榜" : " 榜单"),
       el("div", {}, [
         el("div", { class: "kv" }, [
           info("排名", "#" + row.rank),
-          info("评分", row.rating ? String(row.rating) : "暂无"),
-          isBili ? info("播放量", fmtCompact(row.heat)) : info("类型", typeLabel(row.media_type)),
-          isBili ? info("UP 主", row.uploader || "-") : info("更新", row.episodes_info || "-"),
-          info("本地片源", (row.local_count || 0) > 0 ? row.local_count + " 条" : "未入库"),
-          info("来源站点", (row.local_sites || []).join("、") || "-"),
+          isVideo
+            ? info("播放量", fmtCompact(row.heat))
+            : info("评分", row.rating ? String(row.rating) : "暂无"),
+          isVideo
+            ? info("时长", row.is_live ? "直播中" : (row.duration ? fmtDuration(row.duration) : "-"))
+            : info("类型", typeLabel(row.media_type)),
+          isVideo
+            ? info(isYt ? "频道" : "UP 主", row.uploader || "-")
+            : info("更新", row.episodes_info || "-"),
+          // 视频站条目是单个视频，不存在"本地片源"的概念，这两格换成来源信息
+          isVideo
+            ? info("来源", srcName)
+            : info("本地片源", (row.local_count || 0) > 0 ? row.local_count + " 条" : "未入库"),
+          isVideo
+            ? info("可下载", "是（yt-dlp）")
+            : info("来源站点", (row.local_sites || []).join("、") || "-"),
         ]),
         row.desc ? el("div", { class: "divider" }) : null,
         row.desc ? el("div", { class: "dim tiny", text: row.desc }) : null,
         el("div", { class: "divider" }),
-        el("div", { class: "row tight" }, [
-          iconButton("搜索资源", "search", () => {
-            close();
-            // 榜单页有右侧面板就地搜，避免用户被弹到另一个页面丢失榜单位置
-            if (onSearch) {
-              onSearch(row.title);
-              return;
-            }
-            searchState.keyword = row.title;
-            searchState.items = [];
-            go("search");
-          }, "sm primary"),
-          iconButton("创建订阅", "star", () => {
-            subscribeFromTrending({
-              title: row.title,
-              media_type: row.media_type || (isBili ? "tv" : "movie"),
-              season: 1,
-            });
-          }, "sm"),
-          row.douban_url || row.url
-            ? el("a", {
-                class: "btn sm ghost",
-                href: row.douban_url || row.url,
-                target: "_blank",
-                rel: "noreferrer noopener",
-                text: isBili ? "去 B 站看" : "去豆瓣看",
-              })
-            : null,
-        ]),
+        el(
+          "div",
+          { class: "row tight" },
+          isVideo
+            ? [
+                videoDownloadButton(row),
+                row.url
+                  ? el("a", {
+                      class: "btn sm ghost",
+                      href: row.url,
+                      target: "_blank",
+                      rel: "noreferrer noopener",
+                      text: "去 " + srcName + " 看",
+                    })
+                  : null,
+              ]
+            : [
+                iconButton("搜索资源", "search", () => {
+                  close();
+                  onSearch(row.title);
+                }, "sm primary"),
+                iconButton("创建订阅", "star", () => {
+                  subscribeFromTrending({
+                    title: row.title,
+                    media_type: row.media_type || "movie",
+                    season: 1,
+                  });
+                }, "sm"),
+                row.douban_url
+                  ? el("a", {
+                      class: "btn sm ghost",
+                      href: row.douban_url,
+                      target: "_blank",
+                      rel: "noreferrer noopener",
+                      text: "去豆瓣看",
+                    })
+                  : null,
+              ]
+        ),
       ]),
       true
     );
   }
 
-  /** 榜单右侧的资源搜索面板：选中榜单条目即可原地搜，不用跳到搜索页。 */
-  function trendingSearchPanel() {
-    const keyword = el("input", {
-      class: "input",
-      placeholder: "片名，或点左侧榜单卡片",
-    });
-    const results = el("div", { class: "side-results" }, [
-      emptyBox("点击左侧榜单里的「搜资源」，或直接输入片名", "search"),
-    ]);
-    const kindBar = el("div", {});
-
-    let items = [];
-    let kind = "";
-
-    const render = () => {
-      const filtered = kind
-        ? items.filter((row) =>
-            kind === "pan"
-              ? row.kind === "pan" || row.kind === "direct"
-              : row.kind === "torrent" || row.kind === "magnet"
-          )
-        : items.slice();
-      // 侧栏窄，固定按综合分排序即可；细粒度排序去资源搜索页
-      filtered.sort(SORTERS.score);
-
-      const counts = { pan: 0, bt: 0 };
-      items.forEach((row) => {
-        if (row.kind === "pan" || row.kind === "direct") counts.pan += 1;
-        else counts.bt += 1;
-      });
-
-      kindBar.replaceChildren(
-        items.length
-          ? segment(
-              [
-                { value: "", label: "全部 " + items.length },
-                { value: "bt", label: "BT " + counts.bt },
-                { value: "pan", label: "网盘 " + counts.pan },
-              ],
-              kind,
-              (value) => {
-                kind = value;
-                render();
-              }
-            )
-          : el("span", {})
-      );
-
-      if (!filtered.length) {
-        results.replaceChildren(emptyBox("没有匹配的资源，换个关键词或启用更多站点", "alert"));
-        return;
-      }
-      // 侧栏用紧凑卡片而不是表格——表格在窄栏里必然横向溢出
-      results.replaceChildren(
-        ...filtered.map((row) =>
-          el("div", { class: "side-item" }, [
-            el("div", { class: "side-item-title", title: row.title, text: row.title }),
-            el("div", { class: "side-item-meta" }, [
-              el("span", { class: "tag tiny" + (row.kind === "pan" ? " brand" : ""), text: kindLabel(row.kind) }),
-              el("span", { class: "tiny dim", text: row.site || "-" }),
-              (row.meta && row.meta.resolution)
-                ? el("span", { class: "tiny dim", text: row.meta.resolution })
-                : null,
-              el("span", { class: "tiny dim", text: fmtSize(row.size) }),
-              row.seeders ? el("span", { class: "tiny dim", text: row.seeders + " 种" }) : null,
-              el("span", { class: "tag brand tiny", text: String(Math.round(row.score || 0)) }),
-            ]),
-            el("div", { class: "side-item-actions" }, [resourceActions(row)]),
-          ])
-        )
-      );
-    };
-
-    const doSearch = async (value) => {
-      const text = (value || keyword.value || "").trim();
-      if (!text) {
-        toast("请输入关键词", "err");
-        return;
-      }
-      keyword.value = text;
-      results.replaceChildren(loading());
-      kindBar.replaceChildren();
-      try {
-        const data = await api("/search", { method: "POST", body: { keyword: text } });
-        items = data.items || [];
-        kind = "";
-        render();
-        toast("找到 " + data.total + " 条资源", data.total ? "ok" : "");
-      } catch (error) {
-        items = [];
-        results.replaceChildren(emptyBox(error.message, "alert"));
-      }
-    };
-
-    keyword.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") doSearch();
-    });
-
-    const btn = el("button", { class: "btn primary", style: "flex:0 0 auto" }, [
-      icon("search", "sm"),
-      el("span", { text: "搜索" }),
-    ]);
-    btn.addEventListener("click", () => doSearch());
-
-    const panel = el("div", { class: "card flush side-panel" }, [
-      el("div", { class: "card-head" }, [
-        el("h3", {}, [icon("search", "sm"), el("span", { text: "资源搜索" })]),
-        el("span", { class: "tag", text: "BT + 网盘" }),
-      ]),
-      el("div", { class: "pad-sm" }, [
-        el("div", { class: "row tight" }, [keyword, btn]),
-        kindBar,
-      ]),
-      results,
-    ]);
-    // 暴露给榜单卡片调用：点「搜资源」直接填进侧栏并搜索
-    panel.searchFor = doSearch;
-    return panel;
-  }
-
   async function pageTrending() {
-    shell(loading(), "热度排行", "发现榜（豆瓣 / Bilibili）+ 资源搜索");
+    shell(loading(), "热度排行", "当前最热（豆瓣 / Bilibili / YouTube）");
 
-    // 分类与 B 站分区由后端下发，前端不写死；只在首次进页面时拉一次。
+    // 分类与二级分区由后端下发，前端不写死；只在首次进页面时拉一次。
     // 拉失败不阻塞页面——用一份兜底分类，至少还能看电影榜。
     if (!store.discoverCategories) {
       try {
         const meta = await api("/trending/discover/categories");
         store.discoverCategories = meta.data.categories || [];
         store.biliPartitions = meta.data.bili_partitions || [];
+        store.ytRegions = meta.data.yt_regions || [];
       } catch (error) {
         store.discoverCategories = [
-          { key: "movie", label: "电影" },
-          { key: "tv", label: "电视剧" },
-          { key: "anime", label: "动漫" },
-          { key: "show", label: "综艺" },
-          { key: "bilibili", label: "Bilibili" },
+          { key: "movie", label: "电影", kind: "media" },
+          { key: "tv", label: "电视剧", kind: "media" },
+          { key: "anime", label: "动漫", kind: "media" },
+          { key: "show", label: "综艺", kind: "media" },
+          { key: "bilibili", label: "Bilibili", kind: "video" },
+          { key: "youtube", label: "YouTube", kind: "video" },
         ];
         store.biliPartitions = [{ key: "all", label: "全站" }];
+        store.ytRegions = [{ key: "US", label: "美国" }];
       }
     }
 
     const listBox = el("div", {});
     const moreBox = el("div", { class: "board-more" });
     const meta = el("div", { class: "dim tiny" });
-    const searchPanel = trendingSearchPanel();
 
-    // 榜单卡片里的「搜资源」改为在右侧面板原地搜索，不再跳转页面
-    const searchHere = (title) => searchPanel.searchFor(title);
+    /** 点「搜资源」→ 跳到资源搜索页。
+
+        跳走之前把「当前滚动位置 + 已加载了多少条」记进 trendingState.restore，
+        用户从搜索页切回榜单时按这份快照复原（本轮需求 1）。
+    */
+    const goSearch = (title) => {
+      trendingState.restore = {
+        scrollY: window.scrollY,
+        // 记条数而不是页数：下拉过几页后必须把这些条目**先补回来**
+        // 再滚动，否则页面高度不足，scrollTo 会滚不到目标位置。
+        count: trendingState.items.length,
+        cat: trendingState.discoverCat,
+        biliPartition: trendingState.biliPartition,
+        ytRegion: trendingState.ytRegion,
+        view: trendingState.view,
+      };
+      searchState.keyword = title;
+      searchState.items = [];
+      go("search");
+    };
 
     const renderList = () => {
       const data = {
         items: trendingState.items,
         label: trendingState.label,
         source: trendingState.source,
+        kind: trendingState.kind,
         message: trendingState.message,
         count: trendingState.items.length,
       };
       listBox.replaceChildren(
         trendingState.view === "board"
-          ? discoverBoard(data, searchHere)
-          : discoverTable(data, searchHere)
+          ? discoverBoard(data, goSearch)
+          : discoverTable(data, goSearch)
       );
 
       // 加载更多：有更多才显示按钮，到底了给一句明确的「已到底」
@@ -1727,10 +1767,14 @@
 
     const fetchPage = async (offset) => {
       const cat = trendingState.discoverCat;
-      const isBili = cat === "bilibili";
-      const base = isBili
-        ? "/trending/bilibili/" + trendingState.biliPartition
-        : "/trending/discover/" + cat;
+      let base;
+      if (cat === "bilibili") {
+        base = "/trending/bilibili/" + trendingState.biliPartition;
+      } else if (cat === "youtube") {
+        base = "/trending/youtube/" + trendingState.ytRegion;
+      } else {
+        base = "/trending/discover/" + cat;
+      }
       const response = await api(
         base + "?limit=" + TRENDING_PAGE_SIZE + "&offset=" + offset
       );
@@ -1738,13 +1782,16 @@
     };
 
     const updateMeta = () => {
-      const isBili = trendingState.source === "bilibili";
+      const srcName =
+        trendingState.source === "bilibili" ? "Bilibili"
+          : trendingState.source === "youtube" ? "YouTube" : "豆瓣";
+      const isVideo = trendingState.kind === "video";
       const hit = trendingState.items.filter((r) => (r.local_count || 0) > 0).length;
       meta.textContent =
-        (isBili ? "Bilibili · " : "豆瓣 · ") +
-        trendingState.label +
+        srcName + " · " + trendingState.label +
         " 已加载 " + trendingState.items.length + " 条" +
-        (hit ? "，其中 " + hit + " 部你的站点已有片源" : "") +
+        // 视频站条目没有"本地片源"概念，别显示这句让人困惑
+        (!isVideo && hit ? "，其中 " + hit + " 部你的站点已有片源" : "") +
         (trendingState.message ? " · " + trendingState.message : "");
     };
 
@@ -1755,10 +1802,9 @@
       try {
         const data = await fetchPage(trendingState.offset);
         // 去重兜底：万一后端分页有重叠，不让同一条重复出现在画板里
-        const seen = new Set(trendingState.items.map((r) => r.title + "|" + (r.douban_id || r.bvid || "")));
-        const fresh = (data.items || []).filter(
-          (r) => !seen.has(r.title + "|" + (r.douban_id || r.bvid || ""))
-        );
+        const key = (r) => r.title + "|" + (r.douban_id || r.bvid || r.video_id || "");
+        const seen = new Set(trendingState.items.map(key));
+        const fresh = (data.items || []).filter((r) => !seen.has(key(r)));
         trendingState.items = trendingState.items.concat(fresh);
         trendingState.offset += TRENDING_PAGE_SIZE;
         trendingState.hasMore = Boolean(data.has_more);
@@ -1788,12 +1834,47 @@
         trendingState.hasMore = Boolean(data.has_more);
         trendingState.label = data.label || "";
         trendingState.source = data.source || "";
+        trendingState.kind = data.kind || "media";
         trendingState.message = data.message || "";
         updateMeta();
         renderList();
+        await restoreScroll();
       } catch (error) {
         listBox.replaceChildren(el("div", { class: "pad" }, [emptyBox(error.message, "alert")]));
       }
+    };
+
+    /** 从资源搜索页切回来时，复原滚动位置。
+
+        只有「分类/分区/视图都没变」才复原——用户如果切了页签，
+        再把他滚到旧位置就是帮倒忙。
+    */
+    const restoreScroll = async () => {
+      const snap = trendingState.restore;
+      trendingState.restore = null;
+      if (!snap) return;
+      if (
+        snap.cat !== trendingState.discoverCat ||
+        snap.biliPartition !== trendingState.biliPartition ||
+        snap.ytRegion !== trendingState.ytRegion ||
+        snap.view !== trendingState.view
+      ) {
+        return;
+      }
+      // 把跳走前多加载的那几页补回来，否则页面不够高、滚不到原位置
+      let guard = 0;
+      while (
+        trendingState.items.length < snap.count &&
+        trendingState.hasMore &&
+        guard < 10
+      ) {
+        guard += 1;
+        await loadMore();
+      }
+      // 等一帧让浏览器完成布局，再滚——DOM 刚插入时高度还没算出来
+      requestAnimationFrame(() => {
+        window.scrollTo({ top: snap.scrollY, behavior: "auto" });
+      });
     };
 
     const views = segment(
@@ -1808,7 +1889,20 @@
       }
     );
 
-    const isBili = trendingState.discoverCat === "bilibili";
+    const cat = trendingState.discoverCat;
+    const isBili = cat === "bilibili";
+    const isYt = cat === "youtube";
+
+    // 二级切换：B 站按分区、YouTube 按地区，两者互斥
+    const subBar = isBili
+      ? { label: "分区", list: store.biliPartitions || [{ key: "all", label: "全站" }],
+          value: trendingState.biliPartition,
+          onPick: (value) => { trendingState.biliPartition = value; pageTrending(); } }
+      : isYt
+      ? { label: "地区", list: store.ytRegions || [{ key: "US", label: "美国" }],
+          value: trendingState.ytRegion,
+          onPick: (value) => { trendingState.ytRegion = value; pageTrending(); } }
+      : null;
 
     const filterBar = el("div", { class: "card" }, [
       el("div", { class: "row center" }, [
@@ -1823,19 +1917,13 @@
             }
           ),
         ]),
-        isBili
+        subBar
           ? el("div", { style: "flex:0 0 auto" }, [
-              el("div", { class: "dim tiny", style: "margin-bottom:6px", text: "分区" }),
+              el("div", { class: "dim tiny", style: "margin-bottom:6px", text: subBar.label }),
               segment(
-                (store.biliPartitions || [{ key: "all", label: "全站" }]).map((p) => ({
-                  value: p.key || p.value,
-                  label: p.label,
-                })),
-                trendingState.biliPartition,
-                (value) => {
-                  trendingState.biliPartition = value;
-                  pageTrending();
-                }
+                subBar.list.map((p) => ({ value: p.key || p.value, label: p.label })),
+                subBar.value,
+                subBar.onPick
               ),
             ])
           : null,
@@ -1848,26 +1936,25 @@
       meta,
     ]);
 
+    const srcTag = isYt ? "YouTube" : isBili ? "Bilibili" : "豆瓣";
     const board = el("div", { class: "card flush" }, [
       el("div", { class: "card-head" }, [
         el("h3", {}, [
-          icon(isBili ? "video" : "flame", "sm"),
-          el("span", { text: "发现榜" }),
+          icon(isBili || isYt ? "video" : "flame", "sm"),
+          el("span", { text: "当前最热" }),
         ]),
-        el("span", { class: "tag brand", text: isBili ? "Bilibili" : "豆瓣" }),
+        el("span", { class: "tag brand", text: srcTag }),
       ]),
       listBox,
       moreBox,
     ]);
 
     shell(
-      el("div", { class: "grid" }, [
-        filterBar,
-        // 左榜单 + 右搜索：窄屏时 CSS 自动堆叠成上下
-        el("div", { class: "trending-split" }, [board, searchPanel]),
-      ]),
+      el("div", { class: "grid" }, [filterBar, board]),
       "热度排行",
-      "榜单来自豆瓣与 Bilibili 官方榜，右侧可直接搜索资源",
+      isBili || isYt
+        ? srcTag + " 当前最热视频，可直接下载"
+        : "豆瓣当前最热，可创建订阅或跳转资源搜索",
       [iconButton("刷新", "refresh", () => load())]
     );
     load();
@@ -2788,10 +2875,12 @@
   }
 
   // ---------------- 站点管理 ----------------
+  //: 站点管理页负责的类别。
+  //: **不含 downloader** —— 下载器从 v1.10.0 起搬到「设置」页，
+  //: 用按 provider 定制的详细表单配置，不再挤在通用站点表单里手写 options JSON。
   const KIND_LABELS = {
     indexer: "BT 索引器",
     pan: "网盘搜索",
-    downloader: "下载器",
     mediaserver: "媒体服务器",
     notifier: "通知渠道",
     metadata: "元数据",
@@ -2800,7 +2889,6 @@
   const KIND_ICONS = {
     indexer: "search",
     pan: "cloud",
-    downloader: "download",
     mediaserver: "server",
     notifier: "info",
     metadata: "box",
@@ -3035,10 +3123,15 @@
 
   async function pageSites() {
     shell(loading(), "站点管理", "索引器、盘搜、下载器、媒体服务器与通知");
-    const [sites, providers] = await Promise.all([
+    const [allSites, allProviders] = await Promise.all([
       api("/sites"),
       api("/sites/providers"),
     ]);
+    // 下载器已搬到设置页，这里必须一并从**计数**和**Provider 下拉**里排掉，
+    // 否则页面会显示"共 8 个配置"却只列出 6 个，且能从这里新建出一个
+    // 没法在本页编辑的下载器。
+    const sites = allSites.filter((item) => item.kind !== "downloader");
+    const providers = allProviders.filter((item) => item.kind !== "downloader");
 
     const actionsCell = (row) => {
       const test = el("button", { class: "btn sm" }, [
@@ -3156,11 +3249,12 @@
           : [el("div", { class: "card" }, [emptyBox("还没有配置站点", "settings")])]
       ),
       "站点管理",
-      "共 " + sites.length + " 个配置 · 已启用 " + enabledCount + " 个",
+      "共 " + sites.length + " 个配置 · 已启用 " + enabledCount + " 个 · 下载器请到「设置」页配置",
       [
         iconButton("发现站点", "radar", () => discoverDialog()),
         iconButton("从模板添加", "box", () => presetPicker(providers)),
         iconButton("新增站点", "plus", () => siteForm(providers), "primary"),
+        iconButton("下载器设置", "download", () => go("settings"), "ghost"),
       ]
     );
   }
@@ -5896,17 +5990,246 @@
     };
   }
 
+  /** 下载器表单：按后端下发的字段清单渲染，不再让用户手写 options JSON。
+
+      字段元信息（类型/范围/可选值/说明）全部来自 ``/downloaders/schema``，
+      所以新增下载器或新增参数时前端零改动。
+  */
+  function downloaderForm(schemaItems, existing) {
+    const isEdit = Boolean(existing);
+    // 编辑时锁定 provider：换 provider 等于换一套字段，语义上应该是删旧建新
+    let provider = existing ? existing.provider : (schemaItems[0] || {}).provider;
+
+    const open = () => {
+      const spec = schemaItems.find((item) => item.provider === provider) || { fields: [] };
+      const values = (existing && existing.values) || {};
+      const fields = [
+        {
+          key: "name",
+          label: "显示名",
+          value: existing ? existing.name : spec.display_name,
+          placeholder: "例：家里的 qBittorrent",
+        },
+        isEdit
+          ? null
+          : {
+              key: "provider",
+              label: "类型",
+              type: "select",
+              value: provider,
+              options: schemaItems.map((item) => ({
+                value: item.provider,
+                label: item.display_name,
+              })),
+            },
+      ].filter(Boolean);
+
+      spec.fields.forEach((f) => {
+        // 密码类字段已设置过就提示"留空不改"，避免用户以为丢了
+        const isSecret = f.type === "password";
+        const already = isSecret && values[f.key + "_set"];
+        const raw = values[f.key];
+        fields.push({
+          key: f.key,
+          label: f.label + (already ? "（已设置，留空不改）" : ""),
+          type:
+            f.type === "bool" ? "checkbox"
+              : f.type === "password" ? "password"
+              : f.type === "choice" ? "select"
+              : f.type === "int" || f.type === "float" ? "number"
+              : "text",
+          value: isSecret
+            ? ""
+            : f.type === "bool"
+            ? (raw === undefined ? Boolean(f.default) : Boolean(raw))
+            : Array.isArray(raw)
+            ? raw.join(",")
+            : raw === undefined || raw === null
+            ? (f.default === undefined ? "" : f.default)
+            : raw,
+          options: (f.choices || []).map((c) => ({ value: String(c), label: String(c) })),
+          placeholder: f.placeholder || "",
+          hint: f.hint || "",
+        });
+      });
+
+      fields.push({
+        key: "enabled",
+        label: "启用",
+        type: "checkbox",
+        value: existing ? existing.enabled : false,
+        hint: isEdit ? "" : "建议先保存再点「测试」验证连通性，通了再启用",
+      });
+
+      modal(
+        isEdit ? "编辑下载器：" + existing.name : "添加下载器",
+        fields,
+        async (input) => {
+          const picked = isEdit ? provider : input.provider || provider;
+          const targetSpec =
+            schemaItems.find((item) => item.provider === picked) || { fields: [] };
+          const payloadValues = {};
+          targetSpec.fields.forEach((f) => {
+            const v = input[f.key];
+            // 密码留空 = 不修改，别把空串提交上去把已存的密码清掉
+            if (f.type === "password" && !String(v || "").trim()) return;
+            if (v === undefined) return;
+            payloadValues[f.key] = v;
+          });
+          const body = {
+            name: input.name,
+            provider: picked,
+            enabled: Boolean(input.enabled),
+            values: payloadValues,
+          };
+          if (isEdit) {
+            await api("/downloaders/" + existing.id, { method: "PATCH", body: body });
+          } else {
+            await api("/downloaders", { method: "POST", body: body });
+          }
+          toast(isEdit ? "已保存" : "已添加，建议点「测试」验证连通性", "ok");
+          pageSettings();
+        },
+        "保存",
+        {
+          lead: (schemaItems.find((item) => item.provider === provider) || {}).note || "",
+        }
+      );
+    };
+    open();
+  }
+
+  /** 设置页里的「下载器」卡片。 */
+  function downloaderCard(list, schemaItems, isAdmin) {
+    const rows = list || [];
+    const body = rows.length
+      ? el("div", { class: "list" }, rows.map((row) => {
+          const spec = schemaItems.find((item) => item.provider === row.provider);
+          const okState = String(row.last_status || "").indexOf("正常") === 0;
+          return el("div", { class: "list-row" }, [
+            el("span", {}, [
+              el("div", { class: "row tight center", style: "gap:6px" }, [
+                el("span", { text: row.name }),
+                el("span", {
+                  class: "tag dot tiny " + (row.enabled ? "ok" : ""),
+                  text: row.enabled ? "已启用" : "已禁用",
+                }),
+              ]),
+              el("div", { class: "cell-sub tiny" }, [
+                (spec && spec.display_name) || row.provider,
+                row.values && row.values.url ? " · " + row.values.url : "",
+                " · 优先级 " + row.priority,
+              ]),
+              row.last_status
+                ? el("div", { class: "tiny dim" }, [
+                    okState
+                      ? el("span", { text: row.last_status })
+                      : el("span", { class: "tag warn tiny", text: row.last_status }),
+                  ])
+                : el("div", { class: "tiny dim", text: "未检测" }),
+            ]),
+            el("span", {}, [
+              isAdmin
+                ? el("div", { class: "row tight" }, [
+                    (() => {
+                      const test = el("button", { class: "btn sm" }, [
+                        icon("check", "sm"),
+                        el("span", { text: "测试" }),
+                      ]);
+                      test.addEventListener("click", async () => {
+                        test.disabled = true;
+                        test.querySelector("span").textContent = "检测中…";
+                        try {
+                          const r = await api("/downloaders/" + row.id + "/test", { method: "POST" });
+                          toast(row.name + "：" + r.message, r.success ? "ok" : "err");
+                          pageSettings();
+                        } catch (error) {
+                          toast(error.message, "err");
+                          test.disabled = false;
+                          test.querySelector("span").textContent = "测试";
+                        }
+                      });
+                      return test;
+                    })(),
+                    iconButton(row.enabled ? "禁用" : "启用", row.enabled ? "pause" : "play",
+                      async () => {
+                        try {
+                          await api("/downloaders/" + row.id, {
+                            method: "PATCH",
+                            body: {
+                              name: row.name,
+                              provider: row.provider,
+                              enabled: !row.enabled,
+                              values: {},
+                            },
+                          });
+                          pageSettings();
+                        } catch (error) {
+                          toast(error.message, "err");
+                        }
+                      }, "sm"),
+                    iconButton("编辑", "edit",
+                      () => downloaderForm(schemaItems, row), "sm ghost"),
+                    iconButton("删除", "trash", async () => {
+                      if (!confirm("确定删除下载器 " + row.name + "？")) return;
+                      try {
+                        await api("/downloaders/" + row.id, { method: "DELETE" });
+                        toast("已删除", "ok");
+                        pageSettings();
+                      } catch (error) {
+                        toast(error.message, "err");
+                      }
+                    }, "sm danger"),
+                  ])
+                : el("span", { class: "tiny dim", text: row.enabled ? "已启用" : "已禁用" }),
+            ]),
+          ]);
+        }))
+      : el("div", { class: "pad-sm" }, [
+          emptyBox("还没有配置下载器。BT 资源需要 qBittorrent/Transmission，" +
+                   "榜单里的 B 站/YouTube 视频需要 yt-dlp。", "download"),
+        ]);
+
+    return el("div", { class: "card flush" }, [
+      el("div", { class: "card-head" }, [
+        el("h3", {}, [icon("download", "sm"), el("span", { text: "下载器" })]),
+        el("div", { class: "row tight center" }, [
+          el("span", { class: "tag", text: "已启用 " + rows.filter((r) => r.enabled).length + "/" + rows.length }),
+          isAdmin
+            ? iconButton("添加", "plus", () => downloaderForm(schemaItems, null), "sm primary")
+            : null,
+        ]),
+      ]),
+      body,
+    ]);
+  }
+
   async function pageSettings() {
     shell(loading(), "设置", "在线修改配置并立即生效");
-    const [data, info, me] = await Promise.all([
+    // 下载器数据拉不到不该让整个设置页白屏（比如老版本后端没这个接口），
+    // 所以两个下载器请求都做降级：失败就当没有下载器，其余设置照常显示。
+    const [data, info, me, dlList, dlSchema] = await Promise.all([
       api("/system/settings"),
       api("/system/info"),
       api("/auth/me").catch(() => null),
+      api("/downloaders").catch(() => ({ items: [] })),
+      api("/downloaders/schema").catch(() => ({ items: [] })),
     ]);
     const isAdmin = canDo("admin");
     const controls = {};
 
-    const groups = (data.groups || []).map((group) =>
+    // 把「一项都改不了」的组单独挑出来：它们（服务/目录/安全）只能改
+    // .env 或 config.yaml 后重启，摆在页面上只是拉长滚动条（本轮需求 3）。
+    // 不是直接删掉——用户仍需要查当前生效值，所以收进一个可展开的卡片。
+    const allGroups = data.groups || [];
+    const editableGroups = allGroups.filter((group) =>
+      group.items.some((item) => item.editable)
+    );
+    const readonlyGroups = allGroups.filter(
+      (group) => !group.items.some((item) => item.editable)
+    );
+
+    const groups = editableGroups.map((group) =>
       el("div", { class: "card flush" }, [
         el("div", { class: "card-head" }, [
           el("h3", {}, [icon("settings", "sm"), el("span", { text: group.title })]),
@@ -6000,6 +6323,70 @@
           el("div", { class: "muted", text: "当前角色（" + (ROLE_LABEL[store.role] || store.role) + "）不能修改配置，请联系管理员。" }),
         ]);
 
+    /** 只读配置卡片：默认收起，点开才渲染表格。
+
+        这些项（HOST/PORT/密钥/目录…）改了必须重启进程才生效，界面给输入框
+        就是假功能（ADR-18），所以只提供**查看**。默认收起是因为日常配置
+        用不到它们，摊开只会让页面变长（本轮需求 3）。
+    */
+    const readonlyCard = readonlyGroups.length
+      ? (() => {
+          const bodyBox = el("div", {});
+          let open = false;
+          const toggle = el("button", { class: "btn sm ghost" }, [
+            icon("chevron-down", "sm"),
+            el("span", { text: "展开查看" }),
+          ]);
+          const total = readonlyGroups.reduce((sum, g) => sum + g.items.length, 0);
+          const render = () => {
+            if (!open) {
+              bodyBox.replaceChildren();
+              toggle.querySelector("span").textContent = "展开查看";
+              return;
+            }
+            toggle.querySelector("span").textContent = "收起";
+            bodyBox.replaceChildren(
+              ...readonlyGroups.map((group) =>
+                el("div", { class: "card soft" }, [
+                  el("div", { class: "card-head" }, [
+                    el("h3", {}, [el("span", { text: group.title })]),
+                  ]),
+                  el("div", { class: "list" }, group.items.map((row) =>
+                    el("div", { class: "list-row" }, [
+                      el("span", {}, [
+                        el("div", { text: row.label || row.key }),
+                        el("div", { class: "cell-sub mono tiny", text: row.env }),
+                      ]),
+                      el("span", { class: "mono tiny", text:
+                        typeof row.value === "boolean"
+                          ? (row.value ? "开启" : "关闭")
+                          : String(row.value === "" ? "（空）" : row.value) }),
+                    ])
+                  )),
+                ])
+              )
+            );
+          };
+          toggle.addEventListener("click", () => {
+            open = !open;
+            render();
+          });
+          return el("div", { class: "card" }, [
+            el("div", { class: "card-head" }, [
+              el("h3", {}, [icon("info", "sm"), el("span", { text: "只读配置（需重启生效）" })]),
+              el("div", { class: "row tight center" }, [
+                el("span", { class: "tag tiny", text: total + " 项" }),
+                toggle,
+              ]),
+            ]),
+            el("div", { class: "muted tiny", text:
+              readonlyGroups.map((g) => g.title).join("、") +
+              " —— 这些项只能改 .env 或 config/config.yaml 后重启容器，界面不提供修改入口。" }),
+            bodyBox,
+          ]);
+        })()
+      : null;
+
     const accountCard = el("div", { class: "card" }, [
       el("div", { class: "card-head" }, [
         el("h3", {}, [icon("users", "sm"), el("span", { text: "账号" })]),
@@ -6084,11 +6471,18 @@
     shell(
       el("div", { class: "grid" }, [
         el("div", { class: "grid cols-2" }, [accountCard, noteCard]),
+        // 下载器放在保存栏之前：它是独立的增删改，不受「保存并生效」影响，
+        // 摆在最上面也符合"配置下载器"是新装机第一件事的使用顺序。
+        downloaderCard(dlList.items || [], dlSchema.items || [], isAdmin),
         saveBar,
-        ...groups,
-      ]),
+        // 可改的配置组用多列瀑布流：原先单列纵向排 13 张卡片，页面极长
+        // 需要一直滚（本轮需求 3）。cols-settings 在宽屏给 2~3 列。
+        el("div", { class: "grid cols-settings" }, groups),
+        readonlyCard,
+      ].filter(Boolean)),
       "设置",
-      (data.groups || []).length + " 组配置 · " + data.editable_total + " 项可在线改 · 敏感项已脱敏",
+      editableGroups.length + " 组可改 · " + data.editable_total +
+        " 项可在线改 · " + (dlList.items || []).length + " 个下载器 · 敏感项已脱敏",
       [iconButton("刷新", "refresh", () => pageSettings())]
     );
   }

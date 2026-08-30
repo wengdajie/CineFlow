@@ -239,17 +239,28 @@ call("GET", "/images/proxy?url=" + urllib.parse.quote("https://evil.example.com/
      expect=(400,))
 
 print("\n" + "=" * 70)
-print("4e) 发现榜：豆瓣四分类 + Bilibili（v1.8.0）")
+print("4e) 发现榜：豆瓣四分类 + Bilibili + YouTube（v1.10.0）")
 print("=" * 70)
 # 分类清单：前端据此渲染页签，所以它必须先对
 cats = call("GET", "/trending/discover/categories", token=token)
 cat_data = cats.get("data") or {}
 cat_keys = [c.get("key") for c in (cat_data.get("categories") or [])]
 print(f"       分类 {len(cat_keys)} 个：{cat_keys}")
-assert len(cat_keys) == 5, f"发现榜应有 5 个分类，实际 {cat_keys}"
+assert len(cat_keys) == 6, f"发现榜应有 6 个分类，实际 {cat_keys}"
 assert "bilibili" in cat_keys, "缺少 Bilibili 分类"
+assert "youtube" in cat_keys, "缺少 YouTube 分类"
+# kind 决定前端给「搜资源」还是「直接下载」，漏了会让 B 站/YouTube 卡片
+# 错误显示成搜资源（v1.10.0 实测踩过这个坑），所以这里逐个钉死。
+kinds = {c.get("key"): c.get("kind") for c in (cat_data.get("categories") or [])}
+assert kinds == {
+    "movie": "media", "tv": "media", "anime": "media", "show": "media",
+    "bilibili": "video", "youtube": "video",
+}, f"分类 kind 不符预期：{kinds}"
 parts = cat_data.get("bili_partitions") or []
 print(f"       B 站二级分区 {len(parts)} 个：{[p.get('key') for p in parts]}")
+regions = cat_data.get("yt_regions") or []
+print(f"       YouTube 地区 {len(regions)} 个：{[r.get('key') for r in regions]}")
+assert regions, "YouTube 分类必须下发可选地区，否则前端二级切换是空的"
 
 # 总览：一次并发拉全部分类，首屏用
 dv = call("GET", "/trending/discover?limit=4", token=token)
@@ -263,7 +274,7 @@ for chart in charts:
 
 # 逐个分类单拉（切页签的路径）。外部榜单可能限流/被风控，
 # 所以只断言 HTTP 200 + 结构正确，不断言一定有数据——否则门禁会随外网状态飘。
-for category in ("movie", "tv", "anime", "show", "bilibili"):
+for category in ("movie", "tv", "anime", "show", "bilibili", "youtube"):
     one = call("GET", f"/trending/discover/{category}?limit=6", token=token)
     body = one.get("data") or {}
     rows = items_of(body)
@@ -278,6 +289,21 @@ for category in ("movie", "tv", "anime", "show", "bilibili"):
 # B 站二级分区：番剧/国创走的是 PGC 接口（与 UGC 分区不同），必须都能通
 for partition in ("all", "bangumi", "guochuang", "douga"):
     call("GET", f"/trending/bilibili/{partition}?limit=5", token=token)
+
+# YouTube 走公开 Piped 实例，实例可能整体不可用——只断言 HTTP 200 与结构，
+# 不断言有数据，否则门禁会随第三方实例状态飘红（同豆瓣/B 站的处理口径）。
+for region in ("US", "JP", "HK"):
+    yt = call("GET", f"/trending/youtube/{region}?limit=5", token=token)
+    yt_rows = items_of(yt.get("data") or {})
+    print(f"       youtube/{region:3} {len(yt_rows):3} 条")
+    for row in yt_rows[:2]:
+        print(
+            f"         {str(row.get('title'))[:26]:28}"
+            f" 封面={'有' if row.get('poster') else '无'}"
+            f" 地址={'有' if row.get('url') else '无'}"
+        )
+        assert row.get("url"), "YouTube 榜条目必须带播放地址，否则「下载」按钮是假的"
+call("GET", "/trending/youtube/NOSUCH?limit=5", token=token)
 
 # 未知分类应优雅降级：200 + 空列表 + 可读提示，而不是 404 让整页报错
 unknown = call("GET", "/trending/discover/nosuchcategory?limit=5", token=token)
@@ -941,8 +967,100 @@ call("POST", "/pan/login/cookie",
 # 网盘登录接口的 operator 门槛由 §9j 的通用 403 边界用例覆盖。
 
 print("\n" + "=" * 70)
+print("9o) 下载器管理：字段清单 / CRUD / 参数校验（v1.10.0 从站点管理搬到设置页）")
+print("=" * 70)
+dl_schema = call("GET", "/downloaders/schema", token=token)
+dl_items = dl_schema.get("items") or []
+spec_by_provider = {item.get("provider"): item for item in dl_items}
+print(f"       下载器种类 {len(dl_items)} 个")
+for item in dl_items:
+    print(
+        f"         {item.get('display_name')!s:16}"
+        f" {len(item.get('fields') or [])} 个可配字段"
+        f"  {str(item.get('note'))[:30]}"
+    )
+    # display_name/note 是前端表单标题与说明的唯一来源，漏下发界面就是空白
+    assert item.get("display_name"), f"{item.get('provider')} 缺少 display_name"
+    assert item.get("note"), f"{item.get('provider')} 缺少用途说明 note"
+    for field in item.get("fields") or []:
+        assert field.get("label"), f"{item.get('provider')}.{field.get('key')} 缺少 label"
+        assert field.get("type"), f"{item.get('provider')}.{field.get('key')} 缺少 type"
+        assert field.get("target") in ("column", "option"), \
+            f"{item.get('provider')}.{field.get('key')} 的 target 非法"
+        if field.get("type") == "choice":
+            assert field.get("choices"), \
+                f"{item.get('provider')}.{field.get('key')} 是枚举却没给 choices"
+for expected in ("qbittorrent", "transmission", "aria2", "ytdlp"):
+    assert expected in spec_by_provider, f"schema 缺少 {expected}"
+# 反向确认「假配置项」不会回归：aria2 不读 username，ytdlp 不读 url/password
+aria2_keys = {f.get("key") for f in spec_by_provider["aria2"]["fields"]}
+ytdlp_keys = {f.get("key") for f in spec_by_provider["ytdlp"]["fields"]}
+assert "username" not in aria2_keys, "aria2 不读 username，不该出现在表单里"
+assert not ({"url", "username", "password"} & ytdlp_keys), \
+    "yt-dlp 是本地进程，不读 url/username/password（靠 cookie_file 登录）"
+assert "cookie_file" in ytdlp_keys, "yt-dlp 必须能配 cookie_file"
+
+# 列表：站点管理页已不再管下载器，这里是唯一入口
+dl_list = call("GET", "/downloaders", token=token)
+print(f"       现有下载器 {len(dl_list.get('items') or [])} 个")
+
+# 新建（默认不启用：连不上的下载器一旦启用会污染真实下载流程）
+dl_created = call(
+    "POST", "/downloaders", token=token,
+    body={
+        "name": "冒烟-下载器",
+        "provider": "qbittorrent",
+        "enabled": False,
+        "values": {"url": "http://127.0.0.1:9/", "username": "smoke",
+                   "password": "smoke-pass", "priority": 7, "timeout": 20},
+    },
+)
+dl_id = (dl_created.get("data") or {}).get("id")
+dl_values = (dl_created.get("data") or {}).get("values") or {}
+print(f"       新建下载器 id={dl_id} 密码已脱敏={dl_values.get('password_set')}")
+assert dl_values.get("password_set") is True, "回显应只给 password_set 布尔"
+assert "password" not in dl_values, "回显不能带明文密码"
+
+if dl_id:
+    # 参数校验：越界/非法枚举/非数字都必须 400，而不是静默写进库
+    call("PATCH", f"/downloaders/{dl_id}", token=token,
+         body={"name": "冒烟-下载器", "provider": "qbittorrent",
+               "enabled": False, "values": {"timeout": "abc"}}, expect=(400,))
+    call("PATCH", f"/downloaders/{dl_id}", token=token,
+         body={"name": "冒烟-下载器", "provider": "qbittorrent",
+               "enabled": False, "values": {"priority": 9999}}, expect=(400,))
+    # 未登记的键要被丢弃，不能往 options 里堆垃圾
+    patched = call("PATCH", f"/downloaders/{dl_id}", token=token,
+                   body={"name": "冒烟-下载器改名", "provider": "qbittorrent",
+                         "enabled": False,
+                         "values": {"category": "cineflow", "不存在的键": "x"}})
+    pv = (patched.get("data") or {}).get("values") or {}
+    print(f"       改名后 category={pv.get('category')} 垃圾键被丢弃={'不存在的键' not in pv}")
+    assert "不存在的键" not in pv, "未登记的键不该写进 options"
+    # 测试连通性：连不上是预期结果，接口本身必须 200 并给出结论
+    dl_test = call("POST", f"/downloaders/{dl_id}/test", token=token, expect=(200, 400))
+    print(f"       连通性结论 success={dl_test.get('success')} {str(dl_test.get('message'))[:40]}")
+
+# 边界：非下载器 provider 不能从这里建；不存在的 id 一律 404
+call("POST", "/downloaders", token=token,
+     body={"name": "冒烟-非法", "provider": "torznab", "enabled": False, "values": {}},
+     expect=(400,))
+call("PATCH", "/downloaders/99999999", token=token,
+     body={"name": "x", "provider": "qbittorrent", "enabled": False, "values": {}},
+     expect=(404,))
+call("DELETE", "/downloaders/99999999", token=token, expect=(404,))
+# 鉴权：schema/列表要登录，写操作要管理员
+call("GET", "/downloaders/schema", expect=(401,))
+call("GET", "/downloaders", expect=(401,))
+call("POST", "/downloaders",
+     body={"name": "x", "provider": "qbittorrent", "enabled": False, "values": {}},
+     expect=(401,))
+
+print("\n" + "=" * 70)
 print("10) 清理测试数据")
 print("=" * 70)
+if dl_id:
+    call("DELETE", f"/downloaders/{dl_id}", token=token)
 if sub_id:
     call("DELETE", f"/subscribes/{sub_id}", token=token)
 if ps_id:

@@ -24,19 +24,29 @@ from app.core.logger import get_logger
 from app.core.meta import parse
 from app.db.models import ResourceRecord
 from app.db.session import session_scope
-from app.providers.indexer import bili_chart
+from app.providers.indexer import bili_chart, yt_chart
 from app.providers.metadata import douban_chart
 from app.services.trending import _canonical_title
 
 logger = get_logger(__name__)
 
-#: 四个影视分类榜 + B 站榜，前端页签就是照这个顺序渲染
+#: 四个影视分类榜 + B 站 + YouTube，前端页签就是照这个顺序渲染。
+#:
+#: ``kind`` 决定这一类的**交互形态**，前端据此决定显示什么按钮：
+#: ``media`` 是影视作品（要先搜资源再下载），``video`` 是单个视频
+#: （已经有确切播放地址，直接交给 yt-dlp 下载即可，不需要搜资源）。
+#: 把这个判断放后端下发，前端就不用写死"哪些分类是视频站"。
 CATEGORIES: dict[str, dict[str, Any]] = {
-    "movie": {"label": "电影", "source": "douban", "douban": "movie"},
-    "tv": {"label": "电视剧", "source": "douban", "douban": "tv"},
-    "anime": {"label": "动漫", "source": "douban", "douban": "anime"},
-    "show": {"label": "综艺", "source": "douban", "douban": "show"},
-    "bilibili": {"label": "Bilibili", "source": "bilibili", "bili": "all"},
+    "movie": {"label": "电影", "source": "douban", "douban": "movie", "kind": "media"},
+    "tv": {"label": "电视剧", "source": "douban", "douban": "tv", "kind": "media"},
+    "anime": {"label": "动漫", "source": "douban", "douban": "anime", "kind": "media"},
+    "show": {"label": "综艺", "source": "douban", "douban": "show", "kind": "media"},
+    "bilibili": {
+        "label": "Bilibili", "source": "bilibili", "bili": "all", "kind": "video",
+    },
+    "youtube": {
+        "label": "YouTube", "source": "youtube", "region": "US", "kind": "video",
+    },
 }
 
 
@@ -105,6 +115,7 @@ async def chart(
             "category": category,
             "label": category,
             "source": "",
+            "kind": "media",
             "items": [],
             "count": 0,
             "offset": 0,
@@ -125,6 +136,14 @@ async def chart(
                 if douban_chart.is_rate_limited()
                 else "豆瓣榜单暂无数据（可能是网络不通）"
             )
+    elif meta["source"] == "youtube":
+        items = await yt_chart.chart(str(meta["region"]), limit=limit, offset=offset)
+        if not items and offset == 0:
+            message = (
+                "YouTube 公开榜单实例暂不可用，已自动退避"
+                if yt_chart.is_rate_limited()
+                else "YouTube 榜单暂无数据（需要能访问外网）"
+            )
     else:
         items = await bili_chart.chart(str(meta["bili"]), limit=limit, offset=offset)
         if not items and offset == 0:
@@ -142,6 +161,8 @@ async def chart(
         "category": category,
         "label": str(meta["label"]),
         "source": str(meta["source"]),
+        # media=影视作品（要搜资源）/ video=单个视频（可直接下载）
+        "kind": str(meta.get("kind") or "media"),
         "items": items,
         "count": len(items),
         "offset": offset,
@@ -166,6 +187,7 @@ async def overview(*, limit: int = 12) -> dict[str, Any]:
                     "category": name,
                     "label": str(CATEGORIES[name]["label"]),
                     "source": str(CATEGORIES[name]["source"]),
+                    "kind": str(CATEGORIES[name].get("kind") or "media"),
                     "items": [],
                     "count": 0,
                     "message": "拉取失败",
@@ -177,9 +199,18 @@ async def overview(*, limit: int = 12) -> dict[str, Any]:
 
 
 def categories() -> list[dict[str, str]]:
-    """页签元数据，前端据此渲染，新增分类无需改前端。"""
+    """页签元数据，前端据此渲染，新增分类无需改前端。
+
+    带上 ``kind`` 让前端知道该分类的卡片要显示「搜资源」还是「下载」——
+    这个判断属于数据源的性质，写在后端才不会两边漂移。
+    """
     return [
-        {"key": key, "label": str(meta["label"]), "source": str(meta["source"])}
+        {
+            "key": key,
+            "label": str(meta["label"]),
+            "source": str(meta["source"]),
+            "kind": str(meta.get("kind") or "media"),
+        }
         for key, meta in CATEGORIES.items()
     ]
 
@@ -191,6 +222,9 @@ async def bili_categories_chart(
     if category not in bili_chart.CATEGORIES:
         return {
             "category": category,
+            "label": category,
+            "source": "bilibili",
+            "kind": "video",
             "items": [],
             "count": 0,
             "offset": 0,
@@ -206,6 +240,8 @@ async def bili_categories_chart(
         "category": category,
         "label": str(bili_chart.CATEGORIES[category]["label"]),
         "source": "bilibili",
+        # B 站条目是单个视频，可直接下载——前端据此显示「下载」而不是「搜资源」
+        "kind": "video",
         "items": items,
         "count": len(items),
         "offset": offset,
@@ -222,3 +258,51 @@ def bili_partitions() -> list[dict[str, str]]:
         {"key": key, "label": str(meta["label"])}
         for key, meta in bili_chart.CATEGORIES.items()
     ]
+
+
+async def yt_region_chart(
+    region: str, *, limit: int = 30, offset: int = 0
+) -> dict[str, Any]:
+    """YouTube 地区榜（美国/日本/韩国…），供 YouTube 页签内二级切换。
+
+    结构与 ``bili_categories_chart`` 保持一致，前端两个视频页签可共用渲染。
+    """
+    if region not in yt_chart.CATEGORIES:
+        return {
+            "category": region,
+            "label": region,
+            "source": "youtube",
+            "kind": "video",
+            "items": [],
+            "count": 0,
+            "offset": 0,
+            "has_more": False,
+            "message": "未知地区",
+        }
+    offset = max(0, int(offset or 0))
+    items = await yt_chart.chart(region, limit=limit, offset=offset)
+    items = _annotate_local(list(items))
+    for index, item in enumerate(items, start=offset + 1):
+        item["rank"] = index
+    return {
+        "category": region,
+        "label": str(yt_chart.CATEGORIES[region]["label"]),
+        "source": "youtube",
+        "kind": "video",
+        "items": items,
+        "count": len(items),
+        "offset": offset,
+        "has_more": len(items) >= limit,
+        "message": ""
+        if items or offset
+        else (
+            "YouTube 公开榜单实例暂不可用，已自动退避"
+            if yt_chart.is_rate_limited()
+            else "该地区暂无数据（需要能访问外网）"
+        ),
+    }
+
+
+def yt_regions() -> list[dict[str, str]]:
+    """YouTube 可用地区清单。"""
+    return yt_chart.partitions()

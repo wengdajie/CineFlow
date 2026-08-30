@@ -236,14 +236,29 @@ class YtDlpDownloader(BaseDownloader):
         return True
 
     def _ydl_options(
-        self, save_path: str, cookie: str | None = None, url: str = ""
+        self,
+        save_path: str,
+        cookie: str | None = None,
+        url: str = "",
+        video_format: str | None = None,
     ) -> dict[str, Any]:
         """构造 yt-dlp 参数。
 
         画质上限与限速可在站点 options 里配；默认给保守值，
         既避免把 NAS 带宽占满，也降低对站点的压力。
+
+        ``video_format`` 是**界面上用户点选的那一档画质**（probe 返回的
+        ``format_id``），优先级最高——用户明确挑了 1080p 就不该被站点
+        配置的 ``max_height`` 再压一次。它后面接 ``+bestaudio`` 是因为
+        YouTube 的高清流是视频/音频分离的，只给视频 id 会下到无声画面。
         """
-        fmt = str(self.option("format", "") or "").strip()
+        picked = str(video_format or "").strip()
+        if picked:
+            # 分离流需要合并音轨；万一该 id 本身就是合并流，
+            # yt-dlp 会因 "+bestaudio" 找不到而回退到后面的备选。
+            fmt = f"{picked}+bestaudio/{picked}/best"
+        else:
+            fmt = str(self.option("format", "") or "").strip()
         if not fmt:
             height = int(self.option("max_height", 1080) or 1080)
             # 优先取"视频+音频分离流再合并"，退化到单文件流
@@ -290,7 +305,13 @@ class YtDlpDownloader(BaseDownloader):
 
         if not shutil.which("ffmpeg"):
             # 没有 ffmpeg 就无法合并分离流，退回单文件格式，
-            # 否则会下到一半失败——宁可画质低一档也要能下完
+            # 否则会下到一半失败——宁可画质低一档也要能下完。
+            # 用户在界面选的画质同样受此限制，这里记一条日志说明为什么没生效。
+            if picked:
+                logger.warning(
+                    "未安装 ffmpeg，无法合并分离流，忽略所选画质 %s 改用单文件最佳",
+                    picked,
+                )
             options["format"] = "best"
             options["postprocessors"] = []
             options.pop("writethumbnail", None)
@@ -380,8 +401,12 @@ class YtDlpDownloader(BaseDownloader):
         category: str | None = None,
         paused: bool = False,
         cookie: str | None = None,
+        video_format: str | None = None,
     ) -> str | None:
-        """开始一个下载任务，立即返回任务 ID（后台异步下载）。"""
+        """开始一个下载任务，立即返回任务 ID（后台异步下载）。
+
+        ``video_format`` 供界面「选画质再下载」使用，留空表示按配置自动挑最佳。
+        """
         blocked, block_reason = is_blocked(link)
         if blocked:
             logger.warning("拒绝下载付费墙内容：%s（%s）", link, block_reason)
@@ -398,7 +423,9 @@ class YtDlpDownloader(BaseDownloader):
         task_id = f"ytdlp-{uuid.uuid4().hex[:12]}"
         progress = _Progress(task_id, link)
         self._tasks[task_id] = progress
-        options = self._ydl_options(str(target), cookie, url=link)
+        options = self._ydl_options(
+            str(target), cookie, url=link, video_format=video_format
+        )
 
         def _download() -> None:
             import yt_dlp

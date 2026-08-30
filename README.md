@@ -27,8 +27,8 @@
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)](#-docker-部署推荐)
-[![Tests](https://img.shields.io/badge/tests-778%20passed-brightgreen)](docs/14-开发指南.md)
-[![Version](https://img.shields.io/badge/version-1.9.2-blue)](docs/08-变更日志.md)
+[![Tests](https://img.shields.io/badge/tests-791%20passed-brightgreen)](docs/14-开发指南.md)
+[![Version](https://img.shields.io/badge/version-1.10.0-blue)](docs/08-变更日志.md)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 </div>
@@ -103,7 +103,7 @@ CineFlow 是一个**从零实现**的 NAS 影视自动化项目，设计上参�
 | 能力 | 一句话 |
 |---|---|
 | 🔍 **聚合搜索** | BT 索引器（Jackett/Prowlarr/torznab）+ 网盘盘搜 + 自定义站点 + B站/YouTube，一次并发查全部 |
-| 🔥 **热度排行** | 豆瓣电影/电视剧/动漫/综艺 + Bilibili 分区榜，画板式封面墙，首屏 30 条下拉加载，**右侧就地搜资源** |
+| 🔥 **当前最热** | 豆瓣电影/电视剧/动漫/综艺 + **Bilibili 分区** + **YouTube 地区**共六个榜，画板式封面墙，首屏 30 条下拉加载；B 站/YouTube 条目**直接选画质下载**，影视条目跳搜资源并**记住回来的位置** |
 | 🎯 **智能择优** | 硬过滤（枪版/做种不足/错剧）+ 加权打分（分辨率/字幕/季包/站点权重）+ 分层规则组 |
 | 🔁 **自动追新** | 定时巡检、多级关键词降级、缺集收敛、洗版替换、榜单自动订阅 |
 | ☁️ **网盘管理** | 115/百度/夸克/AList/WebDAV，**扫码登录 + Cookie 保活**、转存、在线浏览、分享追更 |
@@ -111,7 +111,7 @@ CineFlow 是一个**从零实现**的 NAS 影视自动化项目，设计上参�
 | 🎬 **免下载播放** | STRM 同步 + 302 直链，网盘里的片子不落地也能播 |
 | 🤖 **ChatOps** | 飞书 / 钉钉 / Telegram 发一句话完成搜索与下载 |
 | 🧩 **可扩展** | 插件系统 + 事件订阅 + 不写代码接入任意站点（`api_generic` / `html_generic`） |
-| 🎨 **界面** | 暗色 / 浅色一键切换，51 项配置在线可改、改完即生效，多用户三档权限 |
+| 🎨 **界面** | 暗色 / 浅色一键切换，设置页**多列布局**（51 项在线可改、改完即生效；14 项需重启的收进折叠卡片），**下载器在设置页按真实表单配置**，多用户三档权限 |
 
 > 📖 **每一项的完整说明、字段解释与实现细节** → **[docs/12-功能特性详解.md](docs/12-功能特性详解.md)**
 
@@ -130,7 +130,7 @@ README 只保留**声明 / 介绍 / 安装**三件事，其余全部在 [`docs/`
 | [`docs/05-ChatOps-机器人.md`](docs/05-ChatOps-机器人.md) | 三平台配置步骤、验签算法、指令表 |
 | [`docs/06-网盘管理.md`](docs/06-网盘管理.md) | 盘搜 vs 网盘、五种存储配置、**扫码登录与保活**、转存流程 |
 | [`docs/07-运维手册.md`](docs/07-运维手册.md) | **完整 Docker 安装（11 步 · 四平台）**、备份、排障、验证脚本 |
-| [`docs/08-变更日志.md`](docs/08-变更日志.md) | v1.0.0 → v1.9.0 逐版本记录 |
+| [`docs/08-变更日志.md`](docs/08-变更日志.md) | v1.0.0 → v1.10.0 逐版本记录 |
 | [`docs/09-竞品对标与差距分析.md`](docs/09-竞品对标与差距分析.md) | 对标 MoviePilot / T3FAP / quark-auto-save 等，**差距与不做的事** |
 | [`docs/10-站点接入指南.md`](docs/10-站点接入指南.md) | **加站点完整操作指南**：torznab 地址怎么拼、逐字段说明、Cookie 从哪抠、403 怎么办 |
 | [`docs/11-飞牛NAS部署指南.md`](docs/11-飞牛NAS部署指南.md) | 飞牛 fnOS 专用部署（`/vol1` 路径差异、图文步骤） |

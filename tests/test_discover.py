@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from app.providers.indexer import bili_chart
+from app.providers.indexer import bili_chart, yt_chart
 from app.providers.metadata import douban_chart
 from app.services import discover
 
@@ -24,9 +24,11 @@ def _clean():
     """每个用例前后都清缓存，避免用例间互相污染。"""
     douban_chart.reset_state()
     bili_chart.reset_state()
+    yt_chart.reset_state()
     yield
     douban_chart.reset_state()
     bili_chart.reset_state()
+    yt_chart.reset_state()
 
 
 # ---------------- 豆瓣分类榜 ----------------
@@ -237,11 +239,26 @@ def test_bili_partitions_cover_video_kinds():
 
 
 # ---------------- 发现服务 ----------------
-def test_discover_categories_are_five():
-    """电影/电视剧/动漫/综艺/Bilibili 五个页签。"""
+def test_discover_categories_cover_six_tabs():
+    """电影/电视剧/动漫/综艺/Bilibili/YouTube 六个页签。"""
     cats = discover.categories()
-    assert [c["key"] for c in cats] == ["movie", "tv", "anime", "show", "bilibili"]
-    assert [c["label"] for c in cats] == ["电影", "电视剧", "动漫", "综艺", "Bilibili"]
+    assert [c["key"] for c in cats] == [
+        "movie", "tv", "anime", "show", "bilibili", "youtube",
+    ]
+    assert [c["label"] for c in cats] == [
+        "电影", "电视剧", "动漫", "综艺", "Bilibili", "YouTube",
+    ]
+
+
+def test_discover_categories_expose_kind():
+    """kind 要下发给前端：media 走「搜资源」，video 走「直接下载」。"""
+    kinds = {c["key"]: c["kind"] for c in discover.categories()}
+    assert kinds["movie"] == "media"
+    assert kinds["tv"] == "media"
+    assert kinds["anime"] == "media"
+    assert kinds["show"] == "media"
+    assert kinds["bilibili"] == "video"
+    assert kinds["youtube"] == "video"
 
 
 def test_discover_chart_annotates_local(monkeypatch):
@@ -316,30 +333,44 @@ def test_discover_overview_returns_all_charts(monkeypatch):
     async def fake_bili(category, *, limit=20, offset=0):
         return [{"title": "视频"}]
 
+    async def fake_yt(region, *, limit=20, offset=0):
+        return [{"title": "YT 视频"}]
+
     monkeypatch.setattr(douban_chart, "chart", fake_douban)
     monkeypatch.setattr(bili_chart, "chart", fake_bili)
+    monkeypatch.setattr(yt_chart, "chart", fake_yt)
     monkeypatch.setattr(discover, "_local_titles", lambda: {})
     data = run(discover.overview(limit=3))
-    assert len(data["charts"]) == 5
-    assert len(data["categories"]) == 5
+    assert len(data["charts"]) == 6
+    assert len(data["categories"]) == 6
+    assert {c["category"] for c in data["charts"]} == {
+        "movie", "tv", "anime", "show", "bilibili", "youtube",
+    }
 
 
 def test_discover_overview_survives_one_source_failing(monkeypatch):
     """一个来源炸了不能让整页 500。"""
 
-    async def boom(category, *, limit=20):
+    async def boom(category, *, limit=20, offset=0):
         raise RuntimeError("豆瓣挂了")
 
     async def fake_bili(category, *, limit=20, offset=0):
         return [{"title": "视频"}]
 
+    async def fake_yt(region, *, limit=20, offset=0):
+        return [{"title": "YT 视频"}]
+
     monkeypatch.setattr(douban_chart, "chart", boom)
     monkeypatch.setattr(bili_chart, "chart", fake_bili)
+    monkeypatch.setattr(yt_chart, "chart", fake_yt)
     monkeypatch.setattr(discover, "_local_titles", lambda: {})
     data = run(discover.overview(limit=3))
-    assert len(data["charts"]) == 5
+    assert len(data["charts"]) == 6
     bili = next(c for c in data["charts"] if c["category"] == "bilibili")
     assert bili["count"] == 1
+    # 豆瓣四个榜都失败，但整页仍返回 6 个 chart，失败的给空 items + message
+    movie = next(c for c in data["charts"] if c["category"] == "movie")
+    assert movie["items"] == []
 
 
 def test_discover_bili_partition_chart(monkeypatch):

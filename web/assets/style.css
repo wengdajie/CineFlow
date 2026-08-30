@@ -1172,59 +1172,33 @@ select.input.sm {
   .board-actions { flex-direction: column; }
 }
 
-/* 热度排行：左榜单 + 右搜索双栏。榜单占满剩余宽度，面板固定 380px。 */
-/* 窄屏 <1180px 堆叠成上下，避免侧栏被压窄到不可用。 */
-.trending-split {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 380px;
-  gap: var(--sp-4);
-  align-items: start;
-}
-@media (max-width: 1180px) {
-  .trending-split { grid-template-columns: minmax(0, 1fr); }
-}
+/* 设置页配置组的多列瀑布流。
 
-/* 面板吸顶：左侧下拉加载后页面很长，搜索框要始终可见 */
-.side-panel {
-  position: sticky;
-  top: var(--sp-4);
-  display: flex;
-  flex-direction: column;
-  max-height: calc(100vh - var(--sp-4) * 2);
+   为什么用 columns 而不是 grid：配置组的**高度差异极大**（"下载器调度"只有
+   2 行，"搜索与订阅策略"有 8 行）。grid 会按行对齐，矮卡片下方留一大片空白；
+   CSS multi-column 是按内容流填充，矮的后面直接接下一张，垂直空间不浪费。
+
+   代价是列间顺序变成"竖着读"，但配置组之间本来无先后关系，可接受。
+   break-inside 必须设，否则一张卡片会被从中间劈到两列去。 */
+.grid.cols-settings {
+  display: block;
+  column-count: 2;
+  column-gap: var(--sp-4);
 }
-.side-results {
-  overflow-y: auto;
-  padding: 0 var(--sp-4) var(--sp-4);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+.grid.cols-settings > * {
+  break-inside: avoid;
+  -webkit-column-break-inside: avoid;
+  page-break-inside: avoid;
+  /* multi-column 下 margin-bottom 才是卡片间距（gap 只管列间） */
+  margin-bottom: var(--sp-4);
 }
-.side-item {
-  border: 1px solid var(--border-soft);
-  border-radius: var(--r-md);
-  background: var(--surface-2);
-  padding: 10px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+/* 超宽屏给三列；1240px 以下回到单列，免得每列窄到放不下"标签+输入框" */
+@media (min-width: 1700px) {
+  .grid.cols-settings { column-count: 3; }
 }
-.side-item:hover { border-color: var(--border); }
-.side-item-title {
-  font-size: 13px;
-  line-height: 1.45;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  word-break: break-all;
+@media (max-width: 1240px) {
+  .grid.cols-settings { column-count: 1; }
 }
-.side-item-meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-}
-.side-item-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 
 /* 加载更多按钮区 */
 .board-more {

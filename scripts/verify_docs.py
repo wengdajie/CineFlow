@@ -119,8 +119,8 @@ try:
         for m in methods
         if m.lower() in ("get", "post", "patch", "delete", "put")
     )
-    check("API 端点 136 个", total == 136, f"实际 {total}")
-    check("README 声明 136 个端点", "136 个端点" in README and "共 136 个" in README)
+    check("API 端点 143 个", total == 143, f"实际 {total}")
+    check("README 声明 143 个端点", "143 个端点" in README and "共 143 个" in README)
     paths = set(spec["paths"])
     for path in ("/api/v1/users", "/api/v1/users/{user_id}",
                  "/api/v1/system/settings", "/api/v1/system/settings/reset",
@@ -141,7 +141,12 @@ try:
                  # v1.7.0：网盘文件管理 + 保活 + 豆瓣封面 + 图片代理
                  "/api/v1/pan/rename", "/api/v1/pan/move", "/api/v1/pan/search",
                  "/api/v1/pan/keep-alive", "/api/v1/trending/douban",
-                 "/api/v1/images/proxy"):
+                 "/api/v1/images/proxy",
+                 # v1.10.0：YouTube 榜 + 下载器独立管理（从站点管理搬到设置页）
+                 "/api/v1/trending/youtube/{region}",
+                 "/api/v1/downloaders", "/api/v1/downloaders/schema",
+                 "/api/v1/downloaders/{site_id}",
+                 "/api/v1/downloaders/{site_id}/test"):
         check(f"端点存在 {path}", path in paths)
 except Exception as exc:
     check("API 端点校验（需先起服务）", False, str(exc)[:80])
@@ -149,8 +154,8 @@ except Exception as exc:
 # ---- router 数量 ----
 router_src = pathlib.Path("app/api/router.py").read_text(encoding="utf-8")
 router_count = router_src.count("api_router.include_router(")
-check("router 21 个", router_count == 21, f"实际 {router_count}")
-check("README 声明 21 个 router", "21 个 router" in README)
+check("router 22 个", router_count == 22, f"实际 {router_count}")
+check("README 声明 22 个 router", "22 个 router" in README)
 for name in ("trending", "schedules", "pan", "chatops", "strm", "pan_subscribes",
              "users", "site_health", "ranking", "rule_groups"):
     check(f"router {name} 已挂载", f"{name}.router" in router_src)
@@ -216,8 +221,8 @@ check("README 说明定时任务可改期", "定时任务" in README and "cron" 
 
 # ---- 测试文件 ----
 test_files = sorted(p.name for p in pathlib.Path("tests").glob("test_*.py"))
-check("测试文件 35 个", len(test_files) == 35, str(test_files))
-check("README 声明 35 个测试文件", "35 个测试文件" in README)
+check("测试文件 36 个", len(test_files) == 36, str(test_files))
+check("README 声明 36 个测试文件", "36 个测试文件" in README)
 for name in ("test_custom_sites.py", "test_radar.py", "test_trending.py",
              "test_panstorage.py", "test_chatops.py", "test_nfo.py",
              "test_scraper.py", "test_webdav.py", "test_strm_sync.py",
@@ -232,12 +237,12 @@ for script in ("smoke_test.py", "ui_check.py", "demo_pipeline.py", "live_check.p
     check(f"脚本存在 {script}", pathlib.Path("scripts", script).exists())
     check(f"scripts/README 提及 {script}", script in SCRIPTS_README)
 check("文档声明七个验证脚本", "七个开发期验证工具" in README)
-check("README 测试徽章 778", "tests-778%20passed" in README_ONLY)
-check("README 版本号 1.9.2", "1.9.2" in README_ONLY)
+check("README 测试徽章 791", "tests-791%20passed" in README_ONLY)
+check("README 版本号 1.10.0", "1.10.0" in README_ONLY)
 version_src = pathlib.Path("app/core/version.py").read_text(encoding="utf-8")
-check("代码版本号为 1.9.2", 'APP_VERSION = "1.9.2"' in version_src)
-check("README 声明 255 项接口用例", "255 项真实 HTTP 接口用例" in README)
-check("scripts/README 声明 255 项", "255 项接口用例" in SCRIPTS_README)
+check("代码版本号为 1.10.0", 'APP_VERSION = "1.10.0"' in version_src)
+check("README 声明 274 项接口用例", "274 项真实 HTTP 接口用例" in README)
+check("scripts/README 声明 274 项", "274 项接口用例" in SCRIPTS_README)
 
 # ---- 服务模块 ----
 for module in ("radar", "discovery", "presets", "trending", "settings_store",
@@ -949,18 +954,76 @@ check("榜单端点默认 30 条", "Query(30" in trending_router)
 app_js = pathlib.Path("web/assets/app.js").read_text(encoding="utf-8")
 check("前端分页大小为 30", "TRENDING_PAGE_SIZE = 30" in app_js)
 check("前端有加载更多区域", "board-more" in app_js)
-check("榜单页含右侧搜索面板", "trendingSearchPanel" in app_js
-      and "trending-split" in app_js)
-check("榜单卡片支持就地搜索", "searchFor" in app_js)
+# v1.10.0（ADR-48）：页内搜索面板下线，改为跳转资源搜索页 + 回来复原位置。
+# 这里断言死代码真的删干净了，避免只删渲染调用、留一堆用不到的函数。
+for gone in ("trendingSearchPanel", "searchFor", "searchHere"):
+    check(f"页内搜索死代码 {gone} 已删除", gone not in app_js)
+check("榜单跳转搜索页并记录位置",
+      "trendingState.restore" in app_js and "restoreScroll" in app_js)
+# 切了页签就不该把用户拽回旧位置，所以复原前要比对四个维度
+check("榜单复原会校验分类/分区/地区/视图未变",
+      "snap.cat !== trendingState.discoverCat" in app_js
+      and "snap.biliPartition" in app_js
+      and "snap.ytRegion" in app_js
+      and "snap.view" in app_js)
+# 榜单是下拉分页的，只记 scrollY 会因页面不够高而落到底部
+check("榜单复原会补加载回原有条数",
+      "trendingState.items.length < snap.count" in app_js and "guard < 10" in app_js)
 # 四个下线的页签与随之删掉的死代码都不该再出现
 for gone in ("rankingBoard", "rankingView", "rankingTable", "trendingDetail"):
     check(f"死代码 {gone} 已删除", gone not in app_js)
 style_css = pathlib.Path("web/assets/style.css").read_text(encoding="utf-8")
-for sel in (".trending-split", ".side-panel", ".side-results",
-            ".side-item", ".board-more"):
-    check(f"样式含 {sel}", sel in style_css)
-# 侧栏窄屏必须塌成单列，否则 380px 固定列会挤爆手机
-check("侧栏有窄屏断点", "1180px" in style_css)
+check("样式含 .board-more", ".board-more" in style_css)
+# 面板删了，样式也必须一起删——留着就是死 CSS，日后没人敢动
+for sel in (".trending-split", ".side-panel", ".side-results", ".side-item"):
+    check(f"死样式 {sel} 已删除", sel not in style_css)
+
+# ---- v1.10.0 · 六分类榜单（新增 YouTube）----
+check("YouTube 榜单 Provider 存在",
+      pathlib.Path("app/providers/indexer/yt_chart.py").exists())
+yt_src = pathlib.Path("app/providers/indexer/yt_chart.py").read_text(encoding="utf-8")
+# 公开 Piped 实例实测 8 个只活 1 个，故障转移是这个数据源能用的前提
+check("YouTube 榜多实例故障转移",
+      "DEFAULT_INSTANCES" in yt_src and "_instance_order" in yt_src)
+check("YouTube 榜记住可用实例", "_PREFERRED" in yt_src)
+check("YouTube 榜有失败退避", "_BACKOFF" in yt_src and "_mark_rate_limited" in yt_src)
+# Piped 默认返回自家图片代理地址（不稳），必须还原成 ytimg 直链
+check("YouTube 封面还原为 ytimg 直链", "i.ytimg.com" in yt_src)
+discover_src = pathlib.Path("app/services/discover.py").read_text(encoding="utf-8")
+check("发现榜含 youtube 分类", '"youtube"' in discover_src)
+# kind 决定前端给「搜资源」还是「直接下载」，漏了 B站/YouTube 会显示错按钮
+check("分类下发 kind 区分影视与视频",
+      '"kind": "media"' in discover_src and '"kind": "video"' in discover_src)
+check("前端按 kind 分流按钮",
+      "discoverActions" in app_js and "videoDownloadButton" in app_js)
+# 画质选择必须全链路打通，否则是个「选了不生效」的假功能
+check("下载接口接收画质参数",
+      "video_format" in pathlib.Path("app/api/routers/downloads.py").read_text(encoding="utf-8"))
+check("yt-dlp 按所选画质补音轨",
+      "video_format" in pathlib.Path("app/providers/downloader/ytdlp.py").read_text(encoding="utf-8"))
+
+# ---- v1.10.0 · 下载器搬到设置页 ----
+check("下载器字段清单模块存在",
+      pathlib.Path("app/services/downloader_specs.py").exists())
+specs_src = pathlib.Path("app/services/downloader_specs.py").read_text(encoding="utf-8")
+# 「界面能填但代码不读」的假配置项必须被显式排除（实测抓到 3 个）
+check("排除下载器读不到的公共字段", "EXCLUDED_COMMON" in specs_src)
+check("字段区分存表列还是 options", '"target"' in specs_src)
+check("下载器路由已挂载", "downloaders.router" in router_src)
+check("站点管理页不再列下载器", 'item.kind !== "downloader"' in app_js)
+check("设置页含下载器表单", "downloaderForm" in app_js and "downloaderCard" in app_js)
+check("下载器规格有反向测试",
+      pathlib.Path("tests/test_downloader_specs.py").exists())
+
+# ---- v1.10.0 · 设置页布局 ----
+# 只读项（服务/目录/安全）改了必须重启，给输入框就是假功能（ADR-18），
+# 所以收进默认收起的折叠卡片，而不是删掉——用户仍需查当前生效值。
+check("设置页拆分可改与只读组",
+      "editableGroups" in app_js and "readonlyGroups" in app_js)
+check("只读配置卡片默认收起", "readonlyCard" in app_js)
+check("设置页多列布局", "cols-settings" in app_js and ".cols-settings" in style_css)
+# multi-column 必须配 break-inside，否则卡片会被劈成两半跨列
+check("多列布局防卡片劈裂", "break-inside: avoid" in style_css)
 
 # 后端接口一律不删：榜单订阅还在消费资源热榜口径（ADR-43）
 for kept in ("/resources", "/keywords", "/sites", "/live"):
@@ -968,16 +1031,24 @@ for kept in ("/resources", "/keywords", "/sites", "/live"):
           or f"'{kept}'" in trending_router)
 
 adr_text = (docs_dir / "04-决策记录.md").read_text(encoding="utf-8")
-for adr in ("ADR-42", "ADR-43", "ADR-44"):
+for adr in ("ADR-42", "ADR-43", "ADR-44", "ADR-48", "ADR-49", "ADR-50"):
     check(f"决策记录含 {adr}", adr in adr_text)
+# YouTube 数据源绕过两条弯路（官方 trending 已下线、社区 playlist 是陈旧假数据），
+# 这两条否决理由必须写进 ADR，否则下个人会再踩一遍
+check("ADR 记录 YouTube 数据源否决方案",
+      "Piped" in adr_text and "feed/trending" in adr_text)
+check("ADR 说明下载器复用 SiteConfig 表",
+      "SiteConfig" in adr_text and "零迁移" in adr_text)
+check("ADR 说明 multi-column 而非 grid", "multi-column" in adr_text)
 check("ADR 说明豆瓣真分页与 B 站切片差异",
       "page_start" in adr_text and "切片" in adr_text)
 check("ADR 说明为什么保留后端榜单接口", "榜单自动订阅" in adr_text)
 changelog_text = (docs_dir / "08-变更日志.md").read_text(encoding="utf-8")
 check("变更日志含 v1.9.0", "## v1.9.0" in changelog_text)
+check("变更日志含 v1.10.0", "## v1.10.0" in changelog_text)
 check("变更日志记录破坏性变更", "破坏性变更" in changelog_text)
 roadmap_all = (docs_dir / "03-升级路线图.md").read_text(encoding="utf-8")
-for milestone in ("M30", "M31", "M32", "M33"):
+for milestone in ("M30", "M31", "M32", "M33", "M34", "M35", "M36"):
     check(f"路线图含里程碑 {milestone}", f"里程碑 {milestone}" in roadmap_all)
 
 

@@ -122,6 +122,7 @@ def discover_categories(user: CurrentUser) -> dict[str, Any]:
         "data": {
             "categories": discover_service.categories(),
             "bili_partitions": discover_service.bili_partitions(),
+            "yt_regions": discover_service.yt_regions(),
         },
     }
 
@@ -141,6 +142,26 @@ async def discover_chart(
     return {
         "success": True,
         "data": await discover_service.chart(category, limit=limit, offset=offset),
+    }
+
+
+@router.get("/youtube/{region}", summary="YouTube 地区热门榜（美国/日本/韩国…）")
+async def yt_region_chart(
+    region: str,
+    user: CurrentUser,
+    limit: int = Query(30, ge=1, le=100, description="每页条数，默认 30"),
+    offset: int = Query(0, ge=0, le=500, description="偏移量，供下拉加载更多"),
+) -> dict[str, Any]:
+    """YouTube 页签内的二级地区切换。
+
+    数据来自 Piped 开源实例（免 API Key），实例不可用时返回空 items +
+    可读 message，不抛 5xx。
+    """
+    return {
+        "success": True,
+        "data": await discover_service.yt_region_chart(
+            region, limit=limit, offset=offset
+        ),
     }
 
 
