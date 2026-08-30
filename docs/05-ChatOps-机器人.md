@@ -19,23 +19,23 @@
 
 | 方法 | 路径 | 鉴权 | 说明 |
 |---|---|---|---|
-| POST | `/api/chatops/webhook/{platform}` | **匿名**（靠验签） | 平台回调入口 |
-| GET | `/api/chatops/platforms` | JWT | 平台清单 + 配置字段声明 + 配置指引 |
-| GET | `/api/chatops/config` | JWT | 当前配置（敏感项脱敏） |
-| PUT | `/api/chatops/config` | JWT | 更新配置 |
-| POST | `/api/chatops/test` | JWT | 本地模拟一条指令并**真实执行** |
-| POST | `/api/chatops/parse` | JWT | 只解析不执行（调试） |
-| GET | `/api/chatops/commands` | JWT | 指令帮助与别名表 |
-| GET | `/api/chatops/audit` | JWT | 指令审计日志 |
+| POST | `/api/v1/chatops/webhook/{platform}` | **匿名**（靠验签） | 平台回调入口 |
+| GET | `/api/v1/chatops/platforms` | JWT | 平台清单 + 配置字段声明 + 配置指引 |
+| GET | `/api/v1/chatops/config` | JWT | 当前配置（敏感项脱敏） |
+| PUT | `/api/v1/chatops/config` | JWT | 更新配置 |
+| POST | `/api/v1/chatops/test` | JWT | 本地模拟一条指令并**真实执行** |
+| POST | `/api/v1/chatops/parse` | JWT | 只解析不执行（调试） |
+| GET | `/api/v1/chatops/commands` | JWT | 指令帮助与别名表 |
+| GET | `/api/v1/chatops/audit` | JWT | 指令审计日志 |
 
 > 为什么 Webhook 不走 JWT：见 [`04-决策记录.md`](04-决策记录.md) ADR-03。
 
 **回调地址**形如：
 
 ```
-http://<你的NAS地址>:6060/api/chatops/webhook/feishu
-http://<你的NAS地址>:6060/api/chatops/webhook/dingtalk
-http://<你的NAS地址>:6060/api/chatops/webhook/telegram
+http://<你的NAS地址>:6060/api/v1/chatops/webhook/feishu
+http://<你的NAS地址>:6060/api/v1/chatops/webhook/dingtalk
+http://<你的NAS地址>:6060/api/v1/chatops/webhook/telegram
 ```
 
 机器人页每个平台卡片上都有一个可一键复制的回调地址框（`webhook-box`），
@@ -106,7 +106,7 @@ CineFlow 会把执行结果一并写进响应体，所以即使 `sessionWebhook`
 3. 注册 Webhook（把尖括号内容换成你的）：
 
 ```
-https://api.telegram.org/bot<BotToken>/setWebhook?url=https://<你的域名>/api/chatops/webhook/telegram&secret_token=<SecretToken>
+https://api.telegram.org/bot<BotToken>/setWebhook?url=https://<你的域名>/api/v1/chatops/webhook/telegram&secret_token=<SecretToken>
 ```
 
 **验签**：比对请求头 `X-Telegram-Bot-Api-Secret-Token`
@@ -189,7 +189,7 @@ https://api.telegram.org/bot<BotToken>/setWebhook?url=https://<你的域名>/api
   （飞书 open_id、钉钉 senderStaffId、TG 数字 id），所以白名单在
   **service 层统一校验**而非适配器里。
 - **审计**：每条指令写一条 `audit_logs`（来源渠道、用户、原文、结果），
-  机器人页底部表格可查，也可 `GET /api/chatops/audit?limit=100`。
+  机器人页底部表格可查，也可 `GET /api/v1/chatops/audit?limit=100`。
 
 ---
 
@@ -205,7 +205,7 @@ https://api.telegram.org/bot<BotToken>/setWebhook?url=https://<你的域名>/api
 
 **最有效的排障方式**是绕开平台，直接在机器人页用「指令试跑」：
 
-- **执行**：`POST /api/chatops/test`，真实走完解析 → 执行 → 回复文本，
+- **执行**：`POST /api/v1/chatops/test`，真实走完解析 → 执行 → 回复文本，
   唯一区别是不经过平台验签。能定位「是平台配置问题还是 CineFlow 逻辑问题」。
-- **只解析**：`POST /api/chatops/parse`，看清指令名/关键词/季/集/序号，
+- **只解析**：`POST /api/v1/chatops/parse`，看清指令名/关键词/季/集/序号，
   用于确认季集号是否被正确抽取。

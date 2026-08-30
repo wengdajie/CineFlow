@@ -223,8 +223,8 @@ check("README 说明定时任务可改期", "定时任务" in README and "cron" 
 
 # ---- 测试文件 ----
 test_files = sorted(p.name for p in pathlib.Path("tests").glob("test_*.py"))
-check("测试文件 43 个", len(test_files) == 43, str(test_files))
-check("README 声明 43 个测试文件", "43 个测试文件" in README)
+check("测试文件 44 个", len(test_files) == 44, str(test_files))
+check("README 声明 44 个测试文件", "44 个测试文件" in README)
 for name in ("test_custom_sites.py", "test_radar.py", "test_trending.py",
              "test_panstorage.py", "test_chatops.py", "test_nfo.py",
              "test_scraper.py", "test_webdav.py", "test_strm_sync.py",
@@ -239,7 +239,7 @@ for script in ("smoke_test.py", "ui_check.py", "demo_pipeline.py", "live_check.p
     check(f"脚本存在 {script}", pathlib.Path("scripts", script).exists())
     check(f"scripts/README 提及 {script}", script in SCRIPTS_README)
 check("文档声明七个验证脚本", "七个开发期验证工具" in README)
-check("README 测试徽章 1011", "tests-1011%20passed" in README_ONLY)
+check("README 测试徽章 1014", "tests-1014%20passed" in README_ONLY)
 check("README 版本号 1.12.1", "1.12.1" in README_ONLY)
 version_src = pathlib.Path("app/core/version.py").read_text(encoding="utf-8")
 check("代码版本号为 1.12.1", 'APP_VERSION = "1.12.1"' in version_src)
