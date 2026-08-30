@@ -1,6 +1,6 @@
 # 开发与验证脚本
 
-这些脚本不参与运行时，仅用于开发期验证。除 `demo_pipeline.py` / `research_refs.py` 外都需要先启动服务：
+这些脚本不参与运行时，仅用于开发期验证。除 `demo_pipeline.py` / `research_refs.py` / `verify_yaml.py` 外都需要先启动服务：
 
 ```bash
 python -m app.main
@@ -17,6 +17,7 @@ python -m app.main
 | `verify_docs.py` | 校验 README / scripts/README / `docs/` 里的事实性声明（Provider 数量、端点数、router 数、表数、页面数、测试文件数、主题/热度/定时任务/网盘/ChatOps/刮削/WebDAV/STRM/分享追更/洗版/分类/**可编辑配置白名单/三档角色/站点健康三档/下载器三策略/榜单上限/规则组分层/发现榜豆瓣四类 tag/B站 UGC-PGC 分流/扫码会话不泄漏 Cookie/夸克不支持扫码/站点接入指南/Docker 安装步骤**相关实现、11 篇文档存在且已回填、JSON 示例合法性等）与代码实际一致 |
 | `live_check.py` | **联网**验证真实站点闭环：启用 mukaku 预设 → 真实搜索（磁力+网盘）→ 建订阅 → 追新雷达 dry-run 匹配 → 清理 |
 | `research_refs.py` | **联网**抓取同类开源项目（MoviePilot / quark-auto-save / SmartStrm / MediaWarp / TgtoDrive 等）的 README 与 topics，提取特性关键词并与本项目已实现能力做差集，产出对标差距表（写入 `docs/09-竞品对标与差距分析.md` 的输入数据）。无网络时输出内置快照，不阻塞 |
+| `verify_yaml.py` | 校验 4 个 YAML（两个 compose / workflow / config 示例）的**语法、重复键、Tab 缩进、行尾**，以及**语义自洽**：容器端口与 Dockerfile `EXPOSE`/`HEALTHCHECK` 三方一致、healthcheck 依赖的命令真装在镜像里、`CF_*` 环境变量都被 `Settings` 认识、Dockerfile 声明的数据目录都被挂载、**配置模板不落在会被 bind mount 遮蔽的目录**、entrypoint 先建目录再复制、**取消注释启用可选服务后仍是合法 YAML 且各服务 `/downloads` 指向同一宿主路径**、以及端到端验证「生成的 config.yaml 真被读取且环境变量仍能覆盖」。共 101 项，无需启动服务 |
 
 `ui_check.py` 需要额外依赖：
 

@@ -28,7 +28,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)](#-docker-部署推荐)
 [![Tests](https://img.shields.io/badge/tests-778%20passed-brightgreen)](docs/14-开发指南.md)
-[![Version](https://img.shields.io/badge/version-1.9.0-blue)](docs/08-变更日志.md)
+[![Version](https://img.shields.io/badge/version-1.9.1-blue)](docs/08-变更日志.md)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 </div>

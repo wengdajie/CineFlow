@@ -42,7 +42,9 @@ WORKDIR /app
 COPY app/ ./app/
 COPY web/ ./web/
 COPY plugins/ ./plugins/
-COPY config/config.yaml.example ./config/config.yaml.example
+# 模板放在 /app 下而非 /app/config 下：compose 会把宿主目录 bind mount 到
+# /app/config，那是整体替换，放在里面的文件一定被遮蔽 → entrypoint 取不到模板。
+COPY config/config.yaml.example /app/config.yaml.example
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh \
     && mkdir -p /app/data /app/config /downloads /library /strm

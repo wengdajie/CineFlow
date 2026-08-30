@@ -3,7 +3,8 @@
 # （NAS 性能弱，本地 build 要 5~10 分钟且常因网络失败）
 name: build-image
 
-on:
+# 加引号：YAML 1.1 把裸 on 当布尔，键名会变成 True，yq/actionlint 读不到
+"on":
   push:
     branches: [main]
     tags: ["v*"]
