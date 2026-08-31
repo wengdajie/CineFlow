@@ -27,8 +27,8 @@
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)](#-docker-部署推荐)
-[![Tests](https://img.shields.io/badge/tests-1148%20passed-brightgreen)](docs/14-开发指南.md)
-[![Version](https://img.shields.io/badge/version-1.13.0-blue)](docs/08-变更日志.md)
+[![Tests](https://img.shields.io/badge/tests-1202%20passed-brightgreen)](docs/14-开发指南.md)
+[![Version](https://img.shields.io/badge/version-1.14.0-blue)](docs/08-变更日志.md)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 </div>
@@ -223,6 +223,19 @@ python -m app.main
 ## 📄 License
 
 [MIT](LICENSE)
+
+---
+
+## 🙏 致谢
+
+- [MoviePilot](https://github.com/jxxghp/MoviePilot) · [T3FAP](https://github.com/qq85423296/T3FAP)
+  —— 本项目的设计思路参考自这两个项目。
+- [awesome-zhuiju-free](https://github.com/laoma2053/awesome-zhuiju-free)
+  —— **社区站点清单**数据源（许可证 **CC-BY-4.0**）。
+  「站点管理 → 社区清单」的候选站目录来自该项目。
+  本项目**只使用其站点目录数据**，不分发任何影视资源；
+  且不直接采用其可用性结论 —— 每个站是否可用，由 CineFlow
+  用真实关键词**自己搜一次**判定（详见 [ADR-70](docs/04-决策记录.md)）。
 
 ---
 

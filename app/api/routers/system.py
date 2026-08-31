@@ -178,6 +178,15 @@ SETTING_GROUPS: list[dict[str, Any]] = [
         ],
     },
     {
+        "title": "社区站点清单（awesome-zhuiju-free）",
+        "keys": [
+            "ZHUIJU_SYNC_ENABLED",
+            "ZHUIJU_SYNC_INTERVAL_MINUTES",
+            "ZHUIJU_PROBE_ON_SYNC",
+            "ZHUIJU_PROBE_LIMIT",
+        ],
+    },
+    {
         "title": "下载器调度",
         "keys": ["DOWNLOADER_STRATEGY", "DOWNLOADER_FAILOVER"],
     },

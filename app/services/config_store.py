@@ -124,6 +124,11 @@ def _spec_list() -> list[FieldSpec]:
                   minimum=0, maximum=10080, reschedule=True),
         FieldSpec("SITE_HEALTH_FAIL_THRESHOLD", "int", "掉线告警阈值", minimum=1, maximum=50),
         FieldSpec("SITE_AUTO_DISABLE", "bool", "连续失败自动停用站点"),
+        FieldSpec("ZHUIJU_SYNC_ENABLED", "bool", "同步社区站点清单", reschedule=True),
+        FieldSpec("ZHUIJU_SYNC_INTERVAL_MINUTES", "int", "清单同步间隔(分)",
+                  minimum=0, maximum=10080, reschedule=True),
+        FieldSpec("ZHUIJU_PROBE_ON_SYNC", "bool", "同步后真搜一次探测"),
+        FieldSpec("ZHUIJU_PROBE_LIMIT", "int", "单轮探测站点数上限", minimum=0, maximum=200),
         # ---- 下载器调度 ----
         FieldSpec("DOWNLOADER_STRATEGY", "choice", "下载器选择策略",
                   choices=("priority", "least_tasks", "round_robin"),

@@ -66,6 +66,7 @@
     download: '<path d="M12 3v12"/><path d="M7.5 10.5 12 15l4.5-4.5"/><path d="M4 20h16"/>',
     library: '<path d="M4 5h16v14H4z"/><path d="M4 10h16"/><path d="M9 10v9"/>',
     radar: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r="1"/><path d="M12 12 19 6"/>',
+    compass: '<circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/>',
     settings: '<circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.2 5.2l2.1 2.1M16.7 16.7l2.1 2.1M18.8 5.2l-2.1 2.1M7.3 16.7 5.2 18.8"/>',
     plugin: '<path d="M9 3v4"/><path d="M15 3v4"/><path d="M5 7h14v6a6 6 0 0 1-6 6h-2a6 6 0 0 1-6-6z"/>',
     logs: '<path d="M5 4h9l5 5v11H5z"/><path d="M14 4v5h5"/><path d="M8 13h8M8 17h6"/>',
@@ -3330,6 +3331,175 @@
   }
 
   /**
+   * 社区站点清单（awesome-zhuiju-free）。
+   *
+   * 关键的一点：**上游的「可访问」不等于「搜得到」**。上游每天只 GET 首页看
+   * 状态码，实测 20 个候选里 14 个标 reachable，但真能搜到可下载链接的只有 4 个。
+   * 所以这里显示的是我们自己「真搜一次」的结论（probe），并且只有 searchable
+   * 档能一键添加——否则等于把搜不到东西的站塞进搜索链路。
+   */
+  async function zhuijuDialog(onDone) {
+    const listBox = el("div", {}, [el("div", { class: "muted", text: "正在读取清单…" })]);
+    const summary = el("div", { class: "muted tiny", style: "margin-bottom:8px" });
+
+    const PROBE_META = {
+      searchable: { cls: "ok", label: "可搜到资源" },
+      reachable_only: { cls: "warn", label: "能打开但搜不到" },
+      blocked: { cls: "err", label: "被拦截" },
+      unknown: { cls: "", label: "未探测" },
+    };
+
+    function render(data) {
+      const stats = data.stats || {};
+      const up = data.upstream || {};
+      summary.replaceChildren(
+        el("span", { text: "清单共 " + (stats.total || 0) + " 个候选：" }),
+        el("span", { class: "tag dot ok", text: "可搜到 " + (stats.searchable || 0) }),
+        el("span", { text: " " }),
+        el("span", { class: "tag dot warn", text: "搜不到 " + (stats.reachable_only || 0) }),
+        el("span", { text: " " }),
+        el("span", { class: "tag dot err", text: "被拦截 " + (stats.blocked || 0) }),
+        el("span", { class: "dim", text: "　上游更新 " + (data.upstream_updated_at || "-") +
+          (data.probed_at ? "　本地探测 " + data.probed_at.slice(0, 16).replace("T", " ") : "") })
+      );
+
+      const rows = (data.entries || []).slice();
+      // 可搜到的排最前：用户最该看的是这几个
+      const order = { searchable: 0, reachable_only: 1, unknown: 2, blocked: 3 };
+      rows.sort(function (a, b) {
+        return (order[a.probe] || 9) - (order[b.probe] || 9);
+      });
+
+      listBox.replaceChildren(
+        el("div", { class: "notice" }, [
+          el("div", {}, [
+            el("strong", { text: "数据来源：" }),
+            el("a", { href: up.url || "#", target: "_blank", rel: "noreferrer",
+                      text: up.repo || "awesome-zhuiju-free" }),
+            el("span", { text: "（" + (up.license || "CC-BY-4.0") + "，社区维护）" }),
+          ]),
+          el("div", { class: "tiny dim", text:
+            "⚠️ 上游只检测首页是否可访问；本页「状态」列是 CineFlow 自己真搜一次的结论。" +
+            "只有「可搜到资源」的站点可一键添加。" }),
+        ]),
+        table(
+          [
+            { title: "名称", render: function (row) { return row.name; } },
+            {
+              title: "类型",
+              render: function (row) {
+                return el("span", { class: "tag", text: row.category_label || row.category });
+              },
+            },
+            {
+              title: "域名",
+              render: function (row) {
+                return el("a", { class: "mono", href: row.url, target: "_blank",
+                                 rel: "noreferrer", text: row.domain });
+              },
+            },
+            {
+              title: "状态",
+              render: function (row) {
+                const meta = PROBE_META[row.probe] || PROBE_META.unknown;
+                return el("div", {}, [
+                  el("span", { class: "tag dot " + meta.cls, text: meta.label }),
+                  row.probe_note
+                    ? el("div", { class: "dim tiny", text: row.probe_note })
+                    : null,
+                ].filter(Boolean));
+              },
+            },
+            {
+              title: "操作",
+              render: function (row) {
+                if (row.already_added) {
+                  return el("span", { class: "tag dot ok", text: "已添加" });
+                }
+                if (row.probe !== "searchable") {
+                  return el("span", { class: "dim tiny", text: "不建议添加" });
+                }
+                const add = el("button", { class: "btn sm", text: "添加" });
+                add.addEventListener("click", async function () {
+                  add.disabled = true;
+                  try {
+                    await api("/sites/catalog/" + encodeURIComponent(row.id) + "/apply", {
+                      method: "POST",
+                    });
+                    toast("已添加「" + row.name + "」，默认未启用", "ok");
+                    row.already_added = true;
+                    add.replaceWith(el("span", { class: "tag dot ok", text: "已添加" }));
+                    if (onDone) onDone();
+                  } catch (error) {
+                    toast(error.message, "err");
+                    add.disabled = false;
+                  }
+                });
+                return add;
+              },
+            },
+          ],
+          rows,
+          "清单为空（可点「同步清单」拉取）"
+        )
+      );
+    }
+
+    async function load(refresh) {
+      listBox.replaceChildren(el("div", { class: "muted", text: refresh ? "正在同步上游清单…" : "正在读取清单…" }));
+      try {
+        const response = await api("/sites/catalog" + (refresh ? "?refresh=true" : ""));
+        render(response.data);
+        if (response.data.stale && response.data.error) {
+          toast(response.data.error, "warn");
+        }
+      } catch (error) {
+        listBox.replaceChildren(el("div", { class: "notice err", text: error.message }));
+      }
+    }
+
+    const syncBtn = el("button", { class: "btn" }, [
+      icon("refresh", "sm"),
+      el("span", { text: "同步清单" }),
+    ]);
+    syncBtn.addEventListener("click", async function () {
+      syncBtn.disabled = true;
+      await load(true);
+      syncBtn.disabled = false;
+    });
+
+    const probeBtn = el("button", { class: "btn primary" }, [
+      icon("radar", "sm"),
+      el("span", { text: "真搜一次探测" }),
+    ]);
+    probeBtn.addEventListener("click", async function () {
+      probeBtn.disabled = true;
+      probeBtn.querySelector("span").textContent = "探测中…（约 1~3 分钟）";
+      try {
+        const response = await api("/sites/catalog/probe", { method: "POST" });
+        toast("探测完成：可搜到 " + (response.data.stats.searchable || 0) + " 个", "ok");
+        await load(false);
+      } catch (error) {
+        toast(error.message, "err");
+      }
+      probeBtn.disabled = false;
+      probeBtn.querySelector("span").textContent = "真搜一次探测";
+    });
+
+    panelModal(
+      "社区站点清单（awesome-zhuiju-free）",
+      null,
+      el("div", {}, [
+        el("div", { class: "row tight", style: "margin-bottom:12px" }, [syncBtn, probeBtn]),
+        summary,
+        listBox,
+      ]),
+      true
+    );
+    load(false);
+  }
+
+  /**
    * 内置 AI 分析站点：analyze → verify → apply 三步走。
    *
    * 刻意不做"一键分析并添加"：模型会编造字段，直接落库等于把一个
@@ -3611,6 +3781,7 @@
       "共 " + sites.length + " 个配置 · 已启用 " + enabledCount + " 个 · 下载器请到「设置」页配置",
       [
         iconButton("发现站点", "radar", () => discoverDialog()),
+        iconButton("社区清单", "compass", () => zhuijuDialog(pageSites)),
         iconButton("AI 分析站点", "sparkles", () => aiSiteDialog(pageSites)),
         iconButton("从模板添加", "box", () => presetPicker(providers)),
         iconButton("新增站点", "plus", () => siteForm(providers), "primary"),
