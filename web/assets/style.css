@@ -442,6 +442,9 @@ h1, h2, h3, h4 { margin: 0; font-weight: 650; letter-spacing: -0.01em; }
 .btn.ghost { background: transparent; border-color: transparent; color: var(--text-2); }
 .btn.ghost:hover { background: var(--surface-3); color: var(--text); }
 .btn.danger { border-color: var(--err-soft); color: var(--err-text); background: var(--err-soft); }
+/* 缺对应下载器时的警示态：不禁用按钮（用户可能刚配好），但先把“这里有问题”说在前面 */
+.btn.warn { border-color: var(--warn-soft); color: var(--warn-text); background: var(--warn-soft); }
+.btn.warn:hover { border-color: var(--warn-text); }
 .btn.danger:hover { border-color: var(--err); }
 .btn.sm { padding: 4px 10px; font-size: var(--fs-sm); border-radius: var(--r-xs); gap: 5px; }
 .btn.block { width: 100%; }
@@ -619,6 +622,36 @@ tbody tr:last-child td { border-bottom: 0; }
   content: "";
   width: 5px; height: 5px; border-radius: 50%;
   background: currentColor;
+}
+
+/* 提示条：AI 分析这类"要先看清再动手"的面板需要一块比 .muted 更醒目、
+   又不像 toast 那样一闪而过的位置来解释前提条件与风险。 */
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border-soft);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+}
+.notice .icon { flex: none; margin-top: 2px; }
+.notice.warn { border-color: var(--warn-soft); background: var(--warn-soft); color: var(--warn-text); }
+.notice.err { border-color: var(--err-soft); background: var(--err-soft); color: var(--err-text); }
+/* AI 回填的 options 是多行 JSON，默认 pre 不换行会把弹窗撑出横向滚动条 */
+.pre-wrap {
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 0;
+  padding: var(--sp-3);
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border-soft);
+  background: var(--surface-2);
+  max-height: 220px;
+  overflow: auto;
 }
 
 .chips { display: flex; gap: var(--sp-2); flex-wrap: wrap; }

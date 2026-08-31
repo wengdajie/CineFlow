@@ -57,6 +57,20 @@ async def add_download(payload: DownloadRequest, user: OperatorUser) -> dict[str
     return {"success": True, "task_id": task.id, "status": task.status}
 
 
+@router.get("/routing", summary="各资源类型当前能否下载")
+def routing(user: CurrentUser, downloader: str | None = None) -> dict[str, Any]:
+    """告诉前端【哪些类型现在下不了、缺什么】。
+
+    不同资源要不同的下载方式：磁力/种子靠 BT 下载器，
+    网盘靠转存或 aria2，视频网页只能靠 yt-dlp。有了这个接口，
+    界面能在用户点下载【之前】就把缺什么说清楚，
+    而不是点了才弹一个失败。
+    """
+    from app.services import download_routing
+
+    return {"success": True, **download_routing.describe(downloader)}
+
+
 @router.post("/webvideo/probe", summary="解析视频网页（不下载）")
 async def probe_webvideo(
     user: OperatorUser, url: str = Query(min_length=4, description="视频页面地址")

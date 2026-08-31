@@ -53,6 +53,25 @@ class Resource:
         return md5(f"{self.kind}:{base}".encode()).hexdigest()
 
     @property
+    def paywalled(self) -> bool:
+        """该资源是否指向会员/付费墙内容（当前只对网页视频有意义）。
+
+        为什么放在 Resource 上：搜索结果里混着"能下的"和"下不了的"时，
+        必须在**列表上**就能区分，否则用户只能靠一个个点来试错。
+        判定复用 yt-dlp 那套 URL 特征（ADR-24 的唯一裁决点），
+        不在这里重复一份规则，免得两边漂移。
+        """
+        if self.kind != ResourceKind.WEBVIDEO.value:
+            return False
+        try:
+            from app.providers.downloader.ytdlp import is_blocked
+
+            blocked, _ = is_blocked(self.link)
+            return bool(blocked)
+        except Exception:  # pragma: no cover - 判定不可用时按"可下"处理，交给下载入口兜
+            return False
+
+    @property
     def actions(self) -> list[str]:
         """这条资源支持哪些动作，供前端按能力渲染按钮。
 
@@ -71,8 +90,12 @@ class Resource:
             result.append("save")
             result.append("download")
         elif self.kind == ResourceKind.WEBVIDEO.value:
-            # 公开视频页（YouTube/B 站等）只能交给 yt-dlp 下载
-            result.append("download")
+            # 公开视频页（YouTube/B 站等）只能交给 yt-dlp 下载。
+            # 会员正片（腾讯/爱奇艺/优酷/苒果等）不给 download：
+            # 按 ADR-24 它们会在入口被拒，渲染一个必然失败的按钮
+            # 只会让用户白点一次。只留「详情页」让他去官方平台看。
+            if not self.paywalled:
+                result.append("download")
         else:
             # 种子/磁力：投下载器
             if link.startswith("magnet:") or link:
@@ -86,6 +109,7 @@ class Resource:
         data["publish_at"] = self.publish_at.isoformat() if self.publish_at else None
         data["unique_key"] = self.unique_key
         data["actions"] = self.actions
+        data["paywalled"] = self.paywalled
         return data
 
 

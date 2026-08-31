@@ -30,6 +30,8 @@ README = README_ONLY + "\n".join(
     pathlib.Path(p).read_text(encoding="utf-8") for p in _SPLIT_DOCS
 )
 SCRIPTS_README = pathlib.Path("scripts/README.md").read_text(encoding="utf-8")
+#: v1.13.0：配置/端点这类「会被复制粘贴」的内容要单独断言，不能混在 README 语料里
+API_DOC = pathlib.Path("docs/13-配置与API参考.md").read_text(encoding="utf-8")
 checks = []
 
 
@@ -44,8 +46,8 @@ from app.providers.registry import list_providers, load_builtin_providers  # noq
 load_builtin_providers()
 providers = list_providers()
 names = {p["name"] for p in providers}
-check("Provider 总数 29", len(providers) == 29, f"实际 {len(providers)}")
-check("README 声明 29 个 Provider", "29 个注册 Provider" in README)
+check("Provider 总数 30", len(providers) == 30, f"实际 {len(providers)}")
+check("README 声明 30 个 Provider", "30 个注册 Provider" in README)
 for expected in ("api_generic", "html_generic", "mukaku", "pan_generic",
                  "torznab", "rss", "nyaa", "pansou",
                  # v1.7.0 新增：两个视频站搜索 + 两个资源站
@@ -67,8 +69,8 @@ for table in ("audit_logs", "pan_saves", "pan_subscribes", "strm_records",
 # ---- 默认站点 ----
 from app.db.init_db import DEFAULT_SITES  # noqa: E402
 
-check("默认示例站点 22 条", len(DEFAULT_SITES) == 22, f"实际 {len(DEFAULT_SITES)}")
-check("README 声明 22 条示例站点", "写入 22 条" in README)
+check("默认示例站点 24 条", len(DEFAULT_SITES) == 24, f"实际 {len(DEFAULT_SITES)}")
+check("README 声明 24 条示例站点", "写入 24 条" in README)
 check("默认站点含 webdav", any(s["provider"] == "webdav" for s in DEFAULT_SITES))
 # 需要填地址/账号的站点必须默认禁用（示例值直接跑必然报错）；
 # yt-dlp 是本地库调用、装了依赖就能用，是唯一例外
@@ -119,8 +121,8 @@ try:
         for m in methods
         if m.lower() in ("get", "post", "patch", "delete", "put")
     )
-    check("API 端点 155 个", total == 155, f"实际 {total}")
-    check("README 声明 155 个端点", "155 个端点" in README and "共 155 个" in README)
+    check("API 端点 160 个", total == 160, f"实际 {total}")
+    check("README 声明 160 个端点", "160 个端点" in README and "共 160 个" in README)
     paths = set(spec["paths"])
     for path in ("/api/v1/users", "/api/v1/users/{user_id}",
                  "/api/v1/system/settings", "/api/v1/system/settings/reset",
@@ -148,7 +150,11 @@ try:
                  "/api/v1/downloaders/{site_id}",
                  "/api/v1/downloaders/{site_id}/test",
                  # v1.11.0：更新日志（解析 docs/08 变更日志）
-                 "/api/v1/system/changelog"):
+                 "/api/v1/system/changelog",
+                 # v1.13.0：资源类型→下载方式路由 + 内置 AI 站点分析
+                 "/api/v1/downloads/routing",
+                 "/api/v1/ai/config", "/api/v1/ai/analyze",
+                 "/api/v1/ai/verify", "/api/v1/ai/apply"):
         check(f"端点存在 {path}", path in paths)
 except Exception as exc:
     check("API 端点校验（需先起服务）", False, str(exc)[:80])
@@ -156,8 +162,8 @@ except Exception as exc:
 # ---- router 数量 ----
 router_src = pathlib.Path("app/api/router.py").read_text(encoding="utf-8")
 router_count = router_src.count("api_router.include_router(")
-check("router 23 个", router_count == 23, f"实际 {router_count}")
-check("README 声明 23 个 router", "23 个 router" in README)
+check("router 24 个", router_count == 24, f"实际 {router_count}")
+check("README 声明 24 个 router", "24 个 router" in README)
 for name in ("trending", "schedules", "pan", "chatops", "strm", "pan_subscribes",
              "users", "site_health", "ranking", "rule_groups"):
     check(f"router {name} 已挂载", f"{name}.router" in router_src)
@@ -223,8 +229,8 @@ check("README 说明定时任务可改期", "定时任务" in README and "cron" 
 
 # ---- 测试文件 ----
 test_files = sorted(p.name for p in pathlib.Path("tests").glob("test_*.py"))
-check("测试文件 44 个", len(test_files) == 44, str(test_files))
-check("README 声明 44 个测试文件", "44 个测试文件" in README)
+check("测试文件 48 个", len(test_files) == 48, str(test_files))
+check("README 声明 48 个测试文件", "48 个测试文件" in README)
 for name in ("test_custom_sites.py", "test_radar.py", "test_trending.py",
              "test_panstorage.py", "test_chatops.py", "test_nfo.py",
              "test_scraper.py", "test_webdav.py", "test_strm_sync.py",
@@ -239,12 +245,12 @@ for script in ("smoke_test.py", "ui_check.py", "demo_pipeline.py", "live_check.p
     check(f"脚本存在 {script}", pathlib.Path("scripts", script).exists())
     check(f"scripts/README 提及 {script}", script in SCRIPTS_README)
 check("文档声明七个验证脚本", "七个开发期验证工具" in README)
-check("README 测试徽章 1016", "tests-1016%20passed" in README_ONLY)
-check("README 版本号 1.12.1", "1.12.1" in README_ONLY)
+check("README 测试徽章 1148", "tests-1148%20passed" in README_ONLY)
+check("README 版本号 1.13.0", "1.13.0" in README_ONLY)
 version_src = pathlib.Path("app/core/version.py").read_text(encoding="utf-8")
-check("代码版本号为 1.12.1", 'APP_VERSION = "1.12.1"' in version_src)
-check("README 声明 275 项接口用例", "275 项真实 HTTP 接口用例" in README)
-check("scripts/README 声明 275 项", "275 项接口用例" in SCRIPTS_README)
+check("代码版本号为 1.13.0", 'APP_VERSION = "1.13.0"' in version_src)
+check("README 声明 288 项接口用例", "288 项真实 HTTP 接口用例" in README)
+check("scripts/README 声明 288 项", "288 项接口用例" in SCRIPTS_README)
 
 # ---- 服务模块 ----
 for module in ("radar", "discovery", "presets", "trending", "settings_store",
@@ -531,7 +537,7 @@ from app.services import config_store  # noqa: E402
 
 cfgstore_src = pathlib.Path("app/services/config_store.py").read_text(encoding="utf-8")
 check("可编辑配置白名单存在", "EDITABLE" in cfgstore_src)
-check("可编辑配置项 52 个", len(config_store.EDITABLE) == 52, f"实际 {len(config_store.EDITABLE)}")
+check("可编辑配置项 59 个", len(config_store.EDITABLE) == 59, f"实际 {len(config_store.EDITABLE)}")
 for func in ("coerce", "update", "reset", "apply_overrides", "describe"):
     check(f"配置仓库函数 {func}", f"def {func}" in cfgstore_src)
 # 不可热改的键绝不能进白名单：改了不生效比改不了更糟
@@ -601,7 +607,8 @@ for func in ("_task_counts", "healthy_downloaders", "downloader_candidates"):
 check("三种调度策略", all(word in sites_src for word in ("priority", "least_tasks", "round_robin")))
 check("不健康下载器排后而不剔除", "排后" in sites_src or "而不是" in sites_src)
 check("投递失败自动换下一个下载器",
-      "downloader_candidates" in pathlib.Path("app/services/download.py").read_text(encoding="utf-8"))
+      "downloader_candidates" in pathlib.Path("app/services/download_routing.py").read_text(encoding="utf-8")
+      and "candidates_for" in pathlib.Path("app/services/download.py").read_text(encoding="utf-8"))
 for key in ("DOWNLOADER_STRATEGY", "DOWNLOADER_FAILOVER"):
     check(f"配置项 {key} 存在", hasattr(settings, key))
     check(f"README 提及 CF_{key}", f"CF_{key}" in README)
@@ -1057,15 +1064,130 @@ check("ADR 说明限速只做全局且三家单位不同",
       "ADR-60" in adr_text and "1024" in adr_text and "enabled" in adr_text)
 check("ADR 说明宁可没封面也不要错封面",
       "ADR-61" in adr_text and "sub_title" in adr_text)
+check("ADR 说明排序后必须再保名额",
+      "ADR-65" in adr_text and "enforce_site_share" in adr_text)
+check("ADR 说明超时改为站点预算",
+      "ADR-66" in adr_text and "SEARCH_TIMEOUT" in adr_text)
+check("ADR 说明下载器能力位",
+      "ADR-67" in adr_text and "supported_kinds" in adr_text)
+# 92% 会员正片是实测数据，必须留在 ADR 里，否则下个人会以为「接上就什么都能下」
+check("ADR 说明在线站只索引不接解析网关",
+      "ADR-68" in adr_text and "92" in adr_text and "ADR-24" in adr_text)
+check("ADR 说明 AI 默认关闭且只出建议",
+      "ADR-69" in adr_text and "默认关闭" in adr_text)
+# ---- v1.13.0 · 排序后再保名额 / 站点级超时预算 ----
+search_src = pathlib.Path("app/services/search.py").read_text(encoding="utf-8")
+filters_src = pathlib.Path("app/core/filters.py").read_text(encoding="utf-8")
+# 缺陷根因：apply_site_quota 的轮转交错只在排序前成立，filter_and_rank 会全局
+# 重排把交错打散，再 [:200] 一刀切就把评分天然低的站整站抹掉（实测 Nyaa/B站/YouTube 各 0 条）
+check("排序后再做一次站点名额保护", "def enforce_site_share" in search_src)
+check("名额保护按站点分桶轮转", "buckets" in search_src or "分桶" in search_src)
+check("盘搜分组归并到同一站点", 'split("·")' in search_src)
+check("排序仍是全局重排（名额保护不能靠它）", "def filter_and_rank" in filters_src)
+# 超时从「每关键词」改成「每站点预算」：带季集时 build_keywords 产 3 个关键词，
+# 旧写法让一个卡死站要花 3×SEARCH_TIMEOUT，gather 还得等最慢的
+check("站点级超时预算", "_MIN_KEYWORD_TIMEOUT" in search_src)
+check("超时提示写清是站点预算", "预算" in search_src)
+check("搜索名额有反向测试", pathlib.Path("tests/test_search_share.py").exists())
+
+# ---- v1.13.0 · 资源类型 → 下载器能力匹配 ----
+routing_src = pathlib.Path("app/services/download_routing.py").read_text(encoding="utf-8")
+dl_base_src = pathlib.Path("app/providers/downloader/base.py").read_text(encoding="utf-8")
+check("下载器声明可收的资源类型", "supported_kinds" in dl_base_src and "def accepts" in dl_base_src)
+for func in ("route_of", "label_of", "hint_of", "candidates_for", "check", "describe"):
+    check(f"下载路由函数 {func}", f"def {func}" in routing_src)
+# 只装 yt-dlp 时投磁力会被标成「正在下载」，是实测复现出来的真缺陷
+check("yt-dlp 只收网页视频",
+      "WEBVIDEO" in pathlib.Path("app/providers/downloader/ytdlp.py").read_text(encoding="utf-8"))
+check("aria2 收直链与种子",
+      "DIRECT" in pathlib.Path("app/providers/downloader/aria2.py").read_text(encoding="utf-8"))
+check("缺下载器给可行动提示", "hint_of" in pathlib.Path("app/services/download.py").read_text(encoding="utf-8"))
+check("网盘缺 aria2 时说明原因", "pan_pending_hint" in routing_src)
+check("下载路由端点已暴露", "/routing" in pathlib.Path("app/api/routers/downloads.py").read_text(encoding="utf-8"))
+check("前端按能力置灰下载按钮", "downloadRouting" in app_js and "routeFor" in app_js)
+check("下载路由有反向测试", pathlib.Path("tests/test_download_routing.py").exists())
+
+# ---- v1.13.0 · MacCMS 在线影视站只做索引 ----
+maccms_src = pathlib.Path("app/providers/indexer/maccms.py").read_text(encoding="utf-8")
+check("MacCMS 适配器存在", "class MacCmsIndexer" in maccms_src)
+check("解析 player_aaaa 播放配置", "parse_player_config" in maccms_src)
+check("产出网页视频而非直链", "WEBVIDEO" in maccms_src)
+# 底线：这类站「什么都能下」靠的是 VIP 解析网关（依赖盗取会员票据），按 ADR-24 不接。
+# 只查可执行代码：docstring 里必须能引用网关地址来解释「为什么不接」，
+# 否则这条决策的依据就没地方写了（tests/test_maccms.py 用同一口径）。
+_maccms_code = maccms_src
+for _doc in re.findall(r'"""(?:.|\n)*?"""', maccms_src):
+    _maccms_code = _maccms_code.replace(_doc, "")
+for banned in ("xiguadh", "jiexi", "/?url="):
+    check(f"可执行代码不接解析网关 {banned}", banned not in _maccms_code.lower())
+check("会员正片如实标注", "paywalled" in pathlib.Path("app/providers/base.py").read_text(encoding="utf-8"))
+check("前端标出会员资源", "会员" in app_js)
+check("MacCMS 有反向测试", pathlib.Path("tests/test_maccms.py").exists())
+
+# ---- v1.13.0 · 内置 AI 站点分析 ----
+ai_src = pathlib.Path("app/services/ai_site.py").read_text(encoding="utf-8")
+ai_router_src = pathlib.Path("app/api/routers/ai.py").read_text(encoding="utf-8")
+check("AI 服务存在", "PROVIDER_CHOICES" in ai_src)
+for func in ("is_configured", "describe", "condense", "extract_json", "chat",
+             "analyze_site", "verify"):
+    check(f"AI 服务函数 {func}", f"def {func}" in ai_src)
+# 默认关闭是硬要求：开启意味着把站点页面正文发给第三方模型
+check("AI 默认关闭", settings.AI_ENABLED is False)
+check("AI 走 OpenAI 兼容接口", "chat/completions" in ai_src)
+check("AI 三步走：analyze/verify/apply",
+      all(f'"/{name}"' in ai_router_src for name in ("analyze", "verify", "apply")))
+check("AI 建议落库留痕", "_ai_generated" in ai_router_src)
+check("AI 建站默认不启用", "enabled: bool = False" in ai_router_src)
+check("AI 路由已挂载", "ai.router" in router_src)
+check("AI 配置项在设置页可改",
+      all(key in config_store.EDITABLE for key in
+          ("AI_ENABLED", "AI_BASE_URL", "AI_API_KEY", "AI_MODEL", "AI_TIMEOUT",
+           "AI_MAX_PAGE_CHARS", "AI_TEMPERATURE")))
+# 敏感项「留空 = 不修改」：脱敏不回显，改隔壁字段会把密钥洗成空串
+check("敏感项留空不清空", "def is_secret" in cfgstore_src and "不修改" in cfgstore_src)
+check("前端有 AI 分析入口", "aiSiteDialog" in app_js)
+check("AI 分析按钮图标存在", "sparkles: '" in app_js)
+check("提示条样式存在", ".notice {" in style_css and ".notice.warn" in style_css)
+check("AI 有反向测试", pathlib.Path("tests/test_ai_site.py").exists())
+
+# ---- v1.13.0 · 文档必须把能力边界与操作步骤写清楚 ----
+features_doc = (docs_dir / "12-功能特性详解.md").read_text(encoding="utf-8")
+sites_doc = (docs_dir / "10-站点接入指南.md").read_text(encoding="utf-8")
+# 「搜到很多能下的少」如果不写清楚，用户会当成 bug 反复折腾配置
+for doc_name, doc_text in (("12-功能特性详解", features_doc), ("10-站点接入指南", sites_doc)):
+    check(f"{doc_name} 写明会员正片占比", "92%" in doc_text)
+    check(f"{doc_name} 声明不接解析网关", "解析网关" in doc_text)
+check("功能文档说明 cz4k 被 WAF 拦", "WAF" in features_doc and "468" in features_doc)
+# 名额修复要写进文档：否则下个人看到「轮转交错」会以为问题早就解决了
+check("功能文档更正名额保护时机", "排序之后" in features_doc and "632" in features_doc)
+check("功能文档说明超时是站点预算", "单站点的总预算" in features_doc)
+# 资源类型→下载器的对照表是用户最常查的东西
+check("功能文档给出资源类型对照", "supported_kinds" in features_doc or "可用下载器" in features_doc)
+check("站点指南给出资源类型对照", "必须装" in sites_doc)
+check("站点指南含 AI 三步走", "试跑验证" in sites_doc and "默认不启用" in sites_doc)
+check("站点指南含 maccms 模板路径", "从模板添加" in sites_doc and "maccms" in sites_doc)
+# AI 密钥「留空不改」这个行为反直觉，必须在文档里明说
+check("文档说明敏感项留空不改",
+      "留空 = 不修改" in features_doc or "留空表示不修改" in API_DOC)
+check("文档给出 OpenAI 兼容服务对照表",
+      all(word in features_doc for word in ("deepseek-chat", "11434", "qwen-plus")))
+check("配置文档含 7 个 AI 配置项",
+      all(f"CF_AI_{key}" in API_DOC for key in
+          ("ENABLED", "BASE_URL", "API_KEY", "MODEL", "TIMEOUT", "MAX_PAGE_CHARS", "TEMPERATURE")))
+check("配置文档说明搜索超时语义已变", "单个站点的总预算" in API_DOC)
+check("配置文档列出 AI 端点", "/ai/analyze" in API_DOC and "/ai/verify" in API_DOC)
+check("配置文档列出下载路由端点", "/downloads/routing" in API_DOC)
+
 changelog_text = (docs_dir / "08-变更日志.md").read_text(encoding="utf-8")
 check("变更日志含 v1.9.0", "## v1.9.0" in changelog_text)
 check("变更日志含 v1.10.0", "## v1.10.0" in changelog_text)
 check("变更日志含 v1.12.0", "## v1.12.0" in changelog_text)
 check("变更日志含 v1.12.1", "## v1.12.1" in changelog_text)
+check("变更日志含 v1.13.0", "## v1.13.0" in changelog_text)
 check("变更日志记录破坏性变更", "破坏性变更" in changelog_text)
 roadmap_all = (docs_dir / "03-升级路线图.md").read_text(encoding="utf-8")
 for milestone in ("M30", "M31", "M32", "M33", "M34", "M35", "M36",
-                  "M37", "M38", "M39", "M40", "M41"):
+                  "M37", "M38", "M39", "M40", "M41", "M42", "M43", "M44", "M45"):
     check(f"路线图含里程碑 {milestone}", f"里程碑 {milestone}" in roadmap_all)
 
 

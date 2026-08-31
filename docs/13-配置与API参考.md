@@ -65,6 +65,14 @@ YAML 里的二级 key 会拍平成 `CF_<父>_<子>`，例如 `tmdb.api_key` → 
 | 视频追更周期 | `CF_VIDEO_SUBSCRIBE_INTERVAL_MINUTES` | `120` | 分钟，`0`=关闭。UP 主更新频率远低于剧集，查太勤只增加被风控概率 |
 | 告警去抖窗口 | `CF_NOTIFY_ALERT_COOLDOWN_MINUTES` | `360` | 分钟，`0`=不去抖。同一条告警（站点掉线/网盘失效）的最短重复间隔 |
 | 限速时段周期 | `CF_SPEED_LIMIT_INTERVAL_MINUTES` | `10` | 分钟，`0`=关闭。时段切换只需分钟级精度 |
+| 搜索超时 | `CF_SEARCH_TIMEOUT` | `25` | 秒。⚠️ v1.13.0 起是**单个站点的总预算**（旧版是每个关键词各一次），带季集的订阅最坏耗时不再翻 3 倍 |
+| 内置 AI 开关 | `CF_AI_ENABLED` | `false` | **默认关闭**。开启后分析站点会把页面正文发给你配的模型，必须显式同意 |
+| AI 接口地址 | `CF_AI_BASE_URL` | `https://api.openai.com/v1` | OpenAI 兼容的 `/chat/completions`；Ollama 填 `http://主机:11434/v1` |
+| AI 密钥 | `CF_AI_API_KEY` | 空 | 本地模型可留空。设置页里**留空表示不修改**（脱敏不回显，防误清空） |
+| AI 模型 | `CF_AI_MODEL` | `gpt-4o-mini` | 如 `deepseek-chat` / `qwen-plus` / `llama3.1` |
+| AI 超时 | `CF_AI_TIMEOUT` | `60` | 秒。要读整页 HTML，别设太短 |
+| AI 正文上限 | `CF_AI_MAX_PAGE_CHARS` | `16000` | 发给模型的正文字符上限，超出则头尾各留一半 |
+| AI 温度 | `CF_AI_TEMPERATURE` | `0.0` | 分析结构要稳定输出，建议保持 0 |
 
 > 上表中**除密钥、目录、端口外的绝大多数项都能在设置页直接改并立即生效**，
 > 不必改文件重启。
@@ -94,7 +102,7 @@ curl -X POST -H "X-API-Token: your-token" \
      http://127.0.0.1:6060/api/v1/subscribes/run-all
 ```
 
-主要端点分组（共 155 个端点）：
+主要端点分组（共 160 个端点）：
 
 | 前缀 | 用途 |
 |---|---|
@@ -103,7 +111,7 @@ curl -X POST -H "X-API-Token: your-token" \
 | `/api/v1/trending` | 热度排行 / 发现榜：总览、资源榜、实时榜、搜索热词、站点贡献榜、**豆瓣条目查询**、豆瓣四分类、B 站分区、YouTube 地区榜、**Bangumi 放送日历** |
 | `/api/v1/images` | **封面图代理**（绕过豆瓣图床防盗链，带白名单 SSRF 防护，匿名可用） |
 | `/api/v1/subscribes` | 订阅 CRUD、缺集查询、单个/全部巡检 |
-| `/api/v1/downloads` | 任务列表、手动添加、暂停恢复、删除、同步 |
+| `/api/v1/downloads` | 任务列表、手动添加、暂停恢复、删除、同步、**资源类型→下载方式路由**（`GET /downloads/routing`：每类资源该走哪个下载器、现在缺什么、缺了去哪儿加） |
 | `/api/v1/library` | 统计、文件列表、扫描、手动整理、整理记录、刷新 |
 | `/api/v1/media` | 资源名识别、TMDB 搜索/详情/分集/热榜 |
 | `/api/v1/sites` | 站点 CRUD、连通性测试、Provider 清单、预设模板、导航站发现 |
@@ -121,6 +129,7 @@ curl -X POST -H "X-API-Token: your-token" \
 | `/api/v1/plugins` | 列表、启停、配置、执行动作 |
 | `/api/v1/users` | 用户与权限：CRUD、三档角色（仅管理员可访问） |
 | `/api/v1/system` | 仪表盘、系统信息、生效配置、**在线改配置/恢复默认**、调度任务、日志、通知 |
+| `/api/v1/ai` | **内置 AI 站点分析**（默认关闭，仅管理员）：`GET /ai/config` 配置状态与可选方案、`POST /ai/analyze` 出建议、`POST /ai/verify` 本地真跑一次搜索验证、`POST /ai/apply` 确认后落库 |
 
 ---
 
@@ -139,15 +148,16 @@ cineflow/
 │   │                  pan_storage scraper strm_sync pan_subscribe upgrade
 │   │                  config_store site_health ranking rule_groups
 │   │                  video_subscribe speed_limit changelog
+│   │                  download_routing ai_site
 │   │                  chatops/
 │   ├── plugins/       base manager
-│   ├── api/           deps router + routers/(23)
+│   ├── api/           deps router + routers/(24)
 │   ├── schemas/       enums models
 │   ├── utils/         http strings
 │   └── main.py        应用入口（lifespan / CORS / 静态资源）
 ├── web/               index.html + assets/(app.js style.css)  ← 零依赖前端
 ├── plugins/           auto_cleanup pan_transfer daily_digest  ← 示例插件
-├── tests/             44 个测试文件
+├── tests/             48 个测试文件
 ├── scripts/           smoke_test / ui_check / demo_pipeline 验证脚本
 ├── docs/              16 篇维护文档（现状/架构/路线图/决策/运维/站点接入/变更日志/竞品对标…）
 ├── config/            config.yaml.example

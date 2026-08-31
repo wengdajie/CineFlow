@@ -74,6 +74,7 @@ def load_builtin_providers() -> None:
         "app.providers.indexer.webvideo",
         "app.providers.indexer.yyets",
         "app.providers.indexer.wp_film",
+        "app.providers.indexer.maccms",
         "app.providers.pan.pansou",
         "app.providers.pan.generic",
         "app.providers.panstorage.alist",

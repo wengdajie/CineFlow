@@ -1060,6 +1060,94 @@ call("POST", "/downloaders",
      expect=(401,))
 
 print("\n" + "=" * 70)
+print("9p) 资源类型→下载方式路由（v1.13.0）")
+print("=" * 70)
+routing = call("GET", "/downloads/routing", token=token)
+routes = items_of(routing) or []
+print(f"       资源类型路由 {len(routes)} 项")
+kinds = {entry.get("kind") for entry in routes}
+# 五种资源类型都必须有明确结论，缺一种就意味着那类资源会走进"静默 pending"
+assert {"magnet", "torrent", "pan", "direct", "webvideo"} <= kinds, kinds
+for entry in routes:
+    print(f"       - {entry.get('kind'):9} ready={entry.get('ready')!s:5} "
+          f"可用={entry.get('downloaders')} {str(entry.get('hint'))[:44]}")
+    # 每一类都要能回答「缺了该怎么办」，且提示必须可行动（说清去哪儿加什么）
+    assert entry.get("hint"), f"{entry.get('kind')} 缺少提示"
+    assert "设置" in entry["hint"], f"{entry.get('kind')} 的提示没说去哪儿配"
+    assert entry.get("providers"), f"{entry.get('kind')} 没有候选下载器"
+    if not entry.get("ready"):
+        assert entry.get("reason"), f"{entry.get('kind')} 不可用却没给原因"
+# yt-dlp 是唯一默认启用的下载器，所以网页视频必须 ready、网盘/直链必须不 ready
+by_kind = {entry["kind"]: entry for entry in routes}
+assert by_kind["webvideo"]["providers"] == ["ytdlp"], "网页视频只能交给 yt-dlp"
+assert "aria2" in by_kind["pan"]["providers"], "网盘落地要靠 aria2"
+assert "qbittorrent" in by_kind["magnet"]["providers"], "磁力要交给 BT 下载器"
+assert "ytdlp" not in by_kind["magnet"]["providers"], "yt-dlp 下不了磁力，不该出现在候选里"
+call("GET", "/downloads/routing", expect=(401,))
+
+print("\n" + "=" * 70)
+print("9q) 内置 AI 站点分析（v1.13.0，默认关闭）")
+print("=" * 70)
+ai_cfg = call("GET", "/ai/config", token=token)
+ai_data = ai_cfg.get("data") or {}
+print(f"       ready={ai_data.get('ready')} enabled={ai_data.get('enabled')} "
+      f"model={ai_data.get('model')} key={ai_data.get('api_key_hint')}")
+# 默认必须是关的：开启才会把站点页面正文发给第三方模型
+assert ai_data.get("enabled") is False, "内置 AI 默认必须关闭（外发数据要显式同意）"
+assert ai_data.get("ready") is False, "未配置时不该报告 ready"
+assert "设置" in str(ai_data.get("reason")), "不可用的理由必须能指导操作"
+# 密钥绝不回显原文，只给长度
+assert "api_key_set" in ai_data and "api_key_hint" in ai_data
+print(f"       可选接入方案 {len(ai_data.get('providers') or [])} 种")
+# 未启用时 analyze 必须 400 且说清去哪配（而不是 500 或静默失败）
+denied = call("POST", "/ai/analyze", token=token,
+              body={"url": "https://example.com", "keyword": "流浪地球"}, expect=(400,))
+print(f"       未启用时 analyze 被拒：{str(denied.get('detail'))[:60]}")
+# 入口参数校验
+call("POST", "/ai/analyze", token=token, body={"url": "x"}, expect=(422,))
+# verify 不需要模型（本地真跑一次搜索），但野 provider 必须被拒
+bad_verify = call("POST", "/ai/verify", token=token,
+                  body={"suggestion": {"url": "https://example.com", "provider": "magic_parser"},
+                        "keyword": "测试"})
+print(f"       野 provider 试跑结论 success={(bad_verify.get('data') or {}).get('success')}")
+# apply：已注册但不在 AI 清单里的 provider 也必须被拦（否则能建出「kind=indexer 的下载器」）
+call("POST", "/ai/apply", token=token,
+     body={"suggestion": {"url": "https://example.com", "provider": "qbittorrent"},
+           "name": "冒烟-AI非法站点"}, expect=(400,))
+# 鉴权：全部端点都要登录
+call("GET", "/ai/config", expect=(401,))
+call("POST", "/ai/analyze", body={"url": "https://example.com"}, expect=(401,))
+call("POST", "/ai/verify",
+     body={"suggestion": {"url": "https://example.com", "provider": "rss"}}, expect=(401,))
+call("POST", "/ai/apply",
+     body={"suggestion": {"url": "https://example.com", "provider": "rss"}, "name": "x"},
+     expect=(401,))
+
+print("\n" + "=" * 70)
+print("9r) 在线影视站（MacCMS）预设：默认禁用且如实标注（v1.13.0）")
+print("=" * 70)
+# 「从模板添加」的选单必须包含 maccms，否则用户接这类站还得手填 provider
+presets = call("GET", "/sites/presets", token=token)
+maccms_presets = [p for p in (items_of(presets) or []) if p.get("provider") == "maccms"]
+print(f"       模板库 maccms 预设 {len(maccms_presets)} 个")
+assert maccms_presets, "「从模板添加」里必须能选到 MacCMS 在线影视站"
+for item in maccms_presets:
+    desc = str(item.get("description") or "")
+    print(f"       - {item.get('name')} · {desc[:52]}")
+    # 这类站约 92% 是会员正片。模板说明必须把边界写清楚，
+    # 否则用户会以为「加了站却下不了」是 bug，然后反复折腾配置
+    assert "92" in desc or "会员" in desc, "模板说明必须写明会员正片占比这个边界"
+
+# 已写进库的两个 maccms 站点必须默认禁用，且 note 里写明原因
+sites_all = call("GET", "/sites", token=token)
+site_list = sites_all if isinstance(sites_all, list) else (items_of(sites_all) or [])
+maccms_sites = [s for s in site_list if s.get("provider") == "maccms"]
+print(f"       内置 maccms 站点 {len(maccms_sites)} 个")
+for item in maccms_sites:
+    print(f"       - {item.get('name')} enabled={item.get('enabled')}")
+    assert not item.get("enabled"), f"{item.get('name')} 必须默认禁用"
+
+print("\n" + "=" * 70)
 print("10) 清理测试数据")
 print("=" * 70)
 if dl_id:

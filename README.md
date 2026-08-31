@@ -27,8 +27,8 @@
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)](#-docker-部署推荐)
-[![Tests](https://img.shields.io/badge/tests-1016%20passed-brightgreen)](docs/14-开发指南.md)
-[![Version](https://img.shields.io/badge/version-1.12.1-blue)](docs/08-变更日志.md)
+[![Tests](https://img.shields.io/badge/tests-1148%20passed-brightgreen)](docs/14-开发指南.md)
+[![Version](https://img.shields.io/badge/version-1.13.0-blue)](docs/08-变更日志.md)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 </div>
@@ -102,7 +102,7 @@ CineFlow 是一个**从零实现**的 NAS 影视自动化项目，设计上参�
 
 | 能力 | 一句话 |
 |---|---|
-| 🔍 **聚合搜索** | BT 索引器（Jackett/Prowlarr/torznab）+ 网盘盘搜 + 自定义站点 + B站/YouTube，一次并发查全部 |
+| 🔍 **聚合搜索** | BT 索引器（Jackett/Prowlarr/torznab）+ 网盘盘搜 + 自定义站点 + B站/YouTube + 在线影视站（MacCMS），一次并发查全部；**每个站点都有保底名额**，不会被高分站挤掉 |
 | 🔥 **当前最热** | 豆瓣电影/电视剧/动漫/综艺 + **Bilibili 分区** + **YouTube 地区** + **新番放送日历**共七个榜，画板式封面墙，首屏 30 条下拉加载；B 站/YouTube 条目**直接选画质下载**，影视条目跳搜资源并**记住回来的位置** |
 | 🎯 **智能择优** | 硬过滤（枪版/做种不足/错剧）+ 加权打分（分辨率/字幕/季包/站点权重）+ 分层规则组 |
 | 🔁 **自动追新** | 定时巡检、多级关键词降级、缺集收敛、洗版替换、榜单自动订阅 |
@@ -113,7 +113,9 @@ CineFlow 是一个**从零实现**的 NAS 影视自动化项目，设计上参�
 | 🎬 **免下载播放** | STRM 同步 + 302 直链，网盘里的片子不落地也能播 |
 | 🤖 **ChatOps** | 飞书 / 钉钉 / Telegram 发一句话完成搜索与下载 |
 | 🧩 **可扩展** | 插件系统 + 事件订阅 + 不写代码接入任意站点（`api_generic` / `html_generic`） |
-| 🎨 **界面** | 暗色 / 浅色一键切换，设置页**多列布局**（51 项在线可改、改完即生效；14 项需重启的收进折叠卡片），**下载器在设置页按真实表单配置**（含**限速时段**：白天限速、夜里跑满），多用户三档权限 |
+| ⬇️ **按资源选下载器** | 磁力/种子 → qB/TR/迅雷，网页视频 → yt-dlp，网盘直链 → aria2；**缺对应下载器时直接说明去哪儿加什么**，而不是投给一个必然失败的下载器 |
+| 🤖 **AI 分析站点** | 填个网址，AI 判断该用哪种适配器并填好字段；**只出建议，本地试搜通过后你确认才落库**（默认关闭，开启才会外发页面正文） |
+| 🎨 **界面** | 暗色 / 浅色一键切换，设置页**多列布局**（59 项在线可改、改完即生效；14 项需重启的收进折叠卡片），**下载器在设置页按真实表单配置**（含**限速时段**：白天限速、夜里跑满），多用户三档权限 |
 
 > 📖 **每一项的完整说明、字段解释与实现细节** → **[docs/12-功能特性详解.md](docs/12-功能特性详解.md)**
 

@@ -1133,6 +1133,73 @@ def main():
                 errors.append("[race] 切页后设置页内容缺失")
 
         print("\n" + "=" * 68)
+        print("6t) 交互测试：AI 分析站点弹窗（v1.13.0）")
+        print("=" * 68)
+        # 这个入口用了一个本轮新加的图标（sparkles）与两个新样式类
+        # （.notice / .pre-wrap）。图标名写错不会报 JS 错、只会画成占位点，
+        # 样式缺失也不报错、只是布局塌掉——都得靠点检真点开来看。
+        page.goto(f"{BASE}/#sites", wait_until="networkidle")
+        page.wait_for_timeout(1500)
+        ai_entry = page.get_by_role("button", name="AI 分析站点", exact=True)
+        if not ai_entry.count():
+            errors.append("[ai] 站点管理页未找到「AI 分析站点」入口")
+        else:
+            # 图标必须真的画出路径，而不是回落成 ICONS.dot 占位
+            icon_paths = ai_entry.first.locator("svg.icon path").count()
+            print(f"   按钮图标路径数：{icon_paths}")
+            if icon_paths < 2:
+                errors.append("[ai] AI 分析按钮图标缺失（sparkles 未注册，回落成占位点）")
+            ai_entry.first.click()
+            page.wait_for_timeout(1200)
+            modal = page.locator(".modal")
+            print(f"   弹窗渲染：{modal.count() > 0}")
+            if not modal.count():
+                errors.append("[ai] AI 分析弹窗没有渲染出来")
+            else:
+                modal_text = page.inner_text(".modal")
+                # AI 默认关闭，所以这里必须看到「去哪儿配」的可行动提示
+                notice = page.locator(".modal .notice")
+                print(f"   提示条渲染：{notice.count() > 0}")
+                print(f"   未配置时说明去哪儿配：{'设置' in modal_text}")
+                if not notice.count():
+                    errors.append("[ai] 未配置 AI 时没有渲染提示条（.notice 样式或分支缺失）")
+                if "设置" not in modal_text:
+                    errors.append("[ai] 未配置提示没有告诉用户去哪儿配")
+                # 必须检查 .notice **基类独有**的属性。
+                # 用背景色判断会假绿：`.notice.warn` 自己也定义了 background，
+                # 于是把基类整条规则改坏，背景色照样在（实测过这个假绿）。
+                # display:flex 与 padding 只在基类里出现，缺了布局就真塌了。
+                if notice.count():
+                    style = notice.first.evaluate(
+                        "el => { const s = getComputedStyle(el);"
+                        " return { display: s.display, padding: s.paddingLeft,"
+                        " radius: s.borderTopLeftRadius }; }"
+                    )
+                    ok = style["display"] == "flex" and style["padding"] != "0px"
+                    print(f"   提示条样式生效：{ok}（{style}）")
+                    if not ok:
+                        errors.append(
+                            f"[ai] .notice 基类样式未生效（CSS 缺失）：{style}"
+                        )
+                # 三个按钮的初始可用状态：只有「开始分析」可点
+                for label, should_disable in (
+                    ("开始分析", False), ("试跑验证", True), ("添加为站点", True)
+                ):
+                    button = page.get_by_role("button", name=label, exact=True)
+                    if not button.count():
+                        errors.append(f"[ai] 弹窗内缺少「{label}」按钮")
+                        continue
+                    disabled = button.first.is_disabled()
+                    print(f"   {label} 初始禁用={disabled}（期望 {should_disable}）")
+                    if disabled != should_disable:
+                        errors.append(
+                            f"[ai] 「{label}」初始禁用状态错误"
+                            f"（实际 {disabled} 期望 {should_disable}）"
+                        )
+                page.screenshot(path=str(SHOTS / "47-ai-site.png"))
+            close_modal(page)
+
+        print("\n" + "=" * 68)
         print("7) 响应式检查（移动端 430x900）")
         print("=" * 68)
         mobile = context.new_page()

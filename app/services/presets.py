@@ -86,6 +86,30 @@ SITE_PRESETS: list[dict[str, Any]] = [
         "verified": False,
     },
     {
+        # v1.13.0：MacCMS 在线影视站。放进预设是因为这类站数量极大且 URL 结构
+        # 完全固定（`/index.php/vod/...`），用户只要填个域名就能接一批站，
+        # 是「从模板添加」最划算的一项。
+        #
+        # description 必须把能力边界写清楚：实测 bzzdyy 首页 53 个播放源里
+        # 约 92% 是会员正片（腾讯/爱奇艺/优酷/芒果），它们会在下载入口被如实
+        # 拒绝（ADR-24：不接 VIP 解析网关）。不写清楚的话，用户会以为「加了
+        # 站却什么都下不了」是 bug，然后去反复折腾配置。
+        "id": "maccms",
+        "name": "在线影视站（MacCMS）",
+        "kind": ProviderKind.INDEXER.value,
+        "provider": "maccms",
+        "url": "https://example.com",
+        "priority": 60,
+        "description": "适配 MacCMS（苹果 CMS）搭建的在线影视站：只填域名即可，"
+                       "搜索/详情/播放路径内置。产出的是播放源指向的【平台原始地址】，"
+                       "交给 yt-dlp 下载。⚠️ 实测这类站约 92% 的内容是腾讯/爱奇艺/"
+                       "优酷/芒果的会员正片，会被如实拒绝（本项目不接入 VIP 解析网关），"
+                       "能下的主要是 B 站与官方免费内容。",
+        "requires": ["url"],
+        "options": {"max_items": 6},
+        "verified": True,
+    },
+    {
         "id": "pan_generic",
         "name": "自定义盘搜接口",
         "kind": ProviderKind.PAN.value,

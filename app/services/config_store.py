@@ -26,6 +26,13 @@ logger = get_logger(__name__)
 #: 运行期配置在 settings 表里的存储键
 KEY_RUNTIME = "runtime_config"
 
+#: 键名里出现这些词就当作敏感项（与 ``api/routers/system.py`` 的脱敏口径一致）
+SECRET_WORDS = ("SECRET", "TOKEN", "PASSWORD", "API_KEY")
+
+
+def is_secret(key: str) -> bool:
+    return any(word in str(key).upper() for word in SECRET_WORDS)
+
 
 @dataclass(frozen=True)
 class FieldSpec:
@@ -129,6 +136,22 @@ def _spec_list() -> list[FieldSpec]:
         # ---- 通知与元数据 ----
         FieldSpec("METADATA_CACHE_TTL", "int", "元数据缓存(秒)", minimum=60, maximum=864000),
         FieldSpec("TMDB_LANGUAGE", "str", "TMDB 语言"),
+        # ---- 内置 AI ----
+        FieldSpec("AI_ENABLED", "bool", "启用 AI 站点分析",
+                  hint="会把站点页面正文发给你配的模型，请确认后再开"),
+        FieldSpec("AI_BASE_URL", "str", "AI 接口地址",
+                  hint="OpenAI 兼容的 /chat/completions；Ollama 填 http://主机:11434/v1"),
+        # 密钥也许在线改：让用户为了填一个 key 去改 .env 并重启容器，
+        # 对 NAS 场景实在不现实。回显依旧脱敏（见 /ai/config），
+        # 且“留空表示不修改”，不会被一次误保存洗成空串。
+        FieldSpec("AI_API_KEY", "str", "AI API 密钥"),
+        FieldSpec("AI_MODEL", "str", "模型名",
+                  hint="如 gpt-4o-mini / deepseek-chat / qwen-plus / llama3.1"),
+        FieldSpec("AI_TIMEOUT", "int", "AI 请求超时(秒)", minimum=5, maximum=600),
+        FieldSpec("AI_MAX_PAGE_CHARS", "int", "页面截断长度", minimum=1000, maximum=200000,
+                  hint="发给模型的正文上限，太大烧钱也容易超上下文"),
+        FieldSpec("AI_TEMPERATURE", "float", "AI 温度", minimum=0, maximum=2,
+                  hint="分析结构要稳定输出，建议保持 0"),
         # ---- ChatOps ----
         FieldSpec("CHATOPS_ENABLED", "bool", "机器人总开关"),
         FieldSpec("CHATOPS_AUTO_DOWNLOAD", "bool", "指令自动下载"),
@@ -251,7 +274,17 @@ def update(values: dict[str, Any]) -> dict[str, Any]:
 
     coerced: dict[str, Any] = {}
     for key, raw in values.items():
-        coerced[key] = coerce(key, raw)
+        value = coerce(key, raw)
+        # 敏感项「留空 = 不修改」：界面出于脱敏不会回显已存的密钥，
+        # 用户改隔壁字段时这一格天然是空的，直接落库会把密钥洗成空串
+        # （表现为"改了个超时，AI 就不工作了"，极难排查）。
+        # 真要清空请用「恢复默认」（reset），那是显式意图。
+        if is_secret(key) and value == "":
+            logger.info("敏感项 %s 提交为空，按「不修改」处理", key)
+            continue
+        coerced[key] = value
+    if not coerced:
+        raise ValueError("没有需要保存的配置")
 
     stored = overrides()
     stored.update(coerced)

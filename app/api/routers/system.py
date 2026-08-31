@@ -218,6 +218,18 @@ SETTING_GROUPS: list[dict[str, Any]] = [
         ],
     },
     {
+        "title": "内置 AI（站点分析）",
+        "keys": [
+            "AI_ENABLED",
+            "AI_BASE_URL",
+            "AI_API_KEY",
+            "AI_MODEL",
+            "AI_TIMEOUT",
+            "AI_MAX_PAGE_CHARS",
+            "AI_TEMPERATURE",
+        ],
+    },
+    {
         "title": "ChatOps 机器人",
         "keys": [
             "CHATOPS_ENABLED",

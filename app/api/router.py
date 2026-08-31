@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.api.routers import (
+    ai,
     auth,
     chatops,
     downloaders,
@@ -32,6 +33,7 @@ from app.api.routers import (
 
 api_router = APIRouter()
 api_router.include_router(auth.router)
+api_router.include_router(ai.router)
 api_router.include_router(search.router)
 api_router.include_router(trending.router)
 api_router.include_router(images.router)

@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.providers.base import BaseProvider
-from app.schemas.enums import ProviderKind, TaskStatus
+from app.schemas.enums import ProviderKind, ResourceKind, TaskStatus
 
 
 @dataclass
@@ -39,6 +39,23 @@ class BaseDownloader(BaseProvider):
     """下载器基类。"""
 
     kind = ProviderKind.DOWNLOADER.value
+
+    #: 本下载器能处理的资源类型（``ResourceKind`` 值）。
+    #:
+    #: **为什么必须显式声明**：以前投递逻辑写死"没配就拿默认下载器"，
+    #: 于是一个只装了 qBittorrent 的用户点网页视频的下载，链接会被投给 qB，
+    #: qB 把 ``https://www.bilibili.com/video/...`` 当种子 URL 抓下来，
+    #: 得到一个几 KB 的 HTML "种子"然后报错——用户完全看不出问题在哪。
+    #: 声明能力位后，投递前就能判断"该类型有没有能收的下载器"，
+    #: 没有就给出**可行动的提示**（去设置页加哪个下载器），而不是静默失败。
+    supported_kinds: tuple[str, ...] = (
+        ResourceKind.TORRENT.value,
+        ResourceKind.MAGNET.value,
+    )
+
+    def accepts(self, resource_kind: str) -> bool:
+        """能否处理该资源类型。"""
+        return str(resource_kind) in self.supported_kinds
 
     @abstractmethod
     async def add(

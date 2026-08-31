@@ -8,7 +8,7 @@ from typing import Any
 from app.core.logger import get_logger
 from app.providers.downloader.base import BaseDownloader, TorrentState
 from app.providers.registry import register
-from app.schemas.enums import TaskStatus
+from app.schemas.enums import ResourceKind, TaskStatus
 from app.utils.http import fetch_json, normalize_endpoint
 
 logger = get_logger(__name__)
@@ -29,6 +29,15 @@ class Aria2Downloader(BaseDownloader):
 
     name = "aria2"
     display_name = "aria2"
+
+    #: aria2 是全能选手：HTTP/FTP 直链、磁力、种子文件都收。
+    #: 网盘分享链接**不在**其中——那是一个网页地址，必须先由网盘账号
+    #: 换成临时直链才能下（见 ``download_routing`` 对 pan 的处理）。
+    supported_kinds = (
+        ResourceKind.DIRECT.value,
+        ResourceKind.TORRENT.value,
+        ResourceKind.MAGNET.value,
+    )
 
     @property
     def base_url(self) -> str:
