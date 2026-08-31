@@ -21,6 +21,7 @@ from app.db.base import utcnow
 from app.db.models import DownloadTask
 from app.db.session import session_scope
 from app.schemas.enums import EventType, NotifyLevel, ResourceKind, TaskStatus
+from app.services import download_routing
 from app.services import notify as notify_service
 from app.services import sites as site_service
 from app.utils.strings import format_size, truncate
@@ -80,10 +81,12 @@ async def add_download(
     pan_saved: dict[str, Any] | None = None
 
     if kind in (ResourceKind.TORRENT.value, ResourceKind.MAGNET.value):
-        # 多下载器时按策略排序，投递失败自动换下一个（CF_DOWNLOADER_FAILOVER）
-        candidates = site_service.downloader_candidates(downloader_name)
+        # 多下载器时按策略排序，投递失败自动换下一个（CF_DOWNLOADER_FAILOVER）。
+        # 用 routing 而不是 site_service 直接取：必须先筛掉**收不了这种资源**的
+        # 下载器，否则只装了 yt-dlp 的用户点磁力会被投给 yt-dlp 并标成"正在下载"
+        candidates = download_routing.candidates_for(kind, downloader_name)
         if not candidates:
-            error = "未配置下载器"
+            error = download_routing.hint_of(kind)
             status = TaskStatus.FAILED.value
             logger.error("添加下载失败：%s（%s）", error, truncate(title, 80))
         else:
@@ -118,8 +121,9 @@ async def add_download(
     elif kind == ResourceKind.WEBVIDEO.value:
         # 视频网页（B 站/YouTube 等公开视频）：必须交给 yt-dlp，
         # 其他下载器拿到网页地址只会下到一个 HTML 文件
-        downloader = site_service.default_downloader(downloader_name or "ytdlp")
-        if downloader and downloader.name == "ytdlp":
+        picked = download_routing.candidates_for(kind, downloader_name or "ytdlp")
+        downloader = picked[0] if picked else None
+        if downloader:
             external_id = await downloader.add(
                 link, save_path=target_path, video_format=video_format
             )
@@ -130,17 +134,21 @@ async def add_download(
                 # add() 返回 None 的两种原因都要让用户看到，否则无从下手
                 error = "解析失败或该地址属于付费内容（详见运行日志）"
         else:
-            error = "视频网页需要 yt-dlp 下载器，请到站点管理启用"
+            error = download_routing.hint_of(kind)
             status = TaskStatus.FAILED.value
     elif kind == ResourceKind.DIRECT.value:
-        downloader = site_service.default_downloader(downloader_name or "aria2")
-        if downloader and downloader.name == "aria2":
+        picked = download_routing.candidates_for(kind, downloader_name or "aria2")
+        downloader = picked[0] if picked else None
+        if downloader:
             external_id = await downloader.add(link, save_path=target_path)
             status = (
                 TaskStatus.DOWNLOADING.value if external_id else TaskStatus.FAILED.value
             )
+            if not external_id:
+                error = f"{downloader.site_name} 拒绝或超时（详见运行日志）"
         else:
-            error = "直链需要 aria2 下载器"
+            error = download_routing.hint_of(kind)
+            status = TaskStatus.FAILED.value
     else:
         # 网盘分享：优先自动转存进自己的网盘，失败/未配置则留待人工或插件处理
         status = TaskStatus.PENDING.value
@@ -152,6 +160,11 @@ async def add_download(
                 pan_saved = pan_result
             else:
                 error = str(pan_result.get("message") or "")[:500] or None
+        elif not download_routing.has_pan_account():
+            # 既没网盘账号也没 aria2，这条任务永远不会自己走完。
+            # 这里必须把【下一步该做什么】写进 error，否则任务就这么
+            # pending 着，界面上一片空白，用户根本不知道在等什么。
+            error = download_routing.pan_pending_hint() or None
 
     with session_scope() as session:
         task = DownloadTask(

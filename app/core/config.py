@@ -228,6 +228,22 @@ class Settings(BaseSettings):
     #: 单次批量转存的最大任务数
     PAN_TRANSFER_BATCH: int = 20
 
+    # ---------- 内置 AI（站点分析） ----------
+    #: AI 总开关。默认关：它要把站点页面发给第三方模型，
+    #: 必须用户显式同意才能开，不能"装完就在往外发数据"。
+    AI_ENABLED: bool = False
+    #: OpenAI 兼容接口地址（只要它支持 /chat/completions 就能用：
+    #: OpenAI / DeepSeek / 智谱 / 通义 / Ollama / OneAPI 等）
+    AI_BASE_URL: str = "https://api.openai.com/v1"
+    AI_API_KEY: str = ""
+    AI_MODEL: str = "gpt-4o-mini"
+    #: 单次请求超时（秒）。分析站点要读整页 HTML，比聊天慢得多
+    AI_TIMEOUT: int = 60
+    #: 发给模型的页面正文最大字符数。太大会烧钱也容易超上下文，
+    #: 实测一个 MacCMS 搜索页 ~21KB，裁到 16000 足够判断结构
+    AI_MAX_PAGE_CHARS: int = 16000
+    AI_TEMPERATURE: float = 0.0
+
     # ---------- ChatOps 机器人 ----------
     #: 是否启用入站 Webhook（飞书/钉钉/Telegram 指令控制）
     CHATOPS_ENABLED: bool = True

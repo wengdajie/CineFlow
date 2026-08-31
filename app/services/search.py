@@ -108,6 +108,11 @@ class SiteOutcome:
         return asdict(self)
 
 
+#: 单个关键词至少要留这么多秒才值得发请求；余额不足直接放弃，
+#: 避免用 0.01s 的超时去捣站点（只会百分之百超时，白白多一次请求）。
+_MIN_KEYWORD_TIMEOUT = 1.0
+
+
 async def _search_one(
     provider: SearchProvider,
     keywords: list[str],
@@ -125,7 +130,25 @@ async def _search_one(
     started = time.perf_counter()
     last_error = ""
     async with semaphore:
+        # 预算制：SEARCH_TIMEOUT 是【整个站点】的上限，而不是每个关键词各给一份。
+        # 一个卡死的站点以前 = len(keywords) × SEARCH_TIMEOUT（带季集时 3×25=75s），
+        # 而 asyncio.gather 要等最慢的一个 → 整个聚合搜索被单一废站拖死。
+        budget = float(max(settings.SEARCH_TIMEOUT, 1))
         for keyword in keywords:
+            remaining = budget - (time.perf_counter() - started)
+            if remaining < _MIN_KEYWORD_TIMEOUT:
+                # 预算耗尽：剩下的关键词不再尝试，否则等于继续拖块整体进度。
+                # 注意：只有真的花完了时间才会走到这里；
+                # 【站点很快返回空、需要试下一个关键词】这个正常路径不受影响。
+                logger.warning(
+                    "站点 %s 超时预算耗尽，剩余关键词不再尝试（预算 %.0fs）",
+                    provider.site_name,
+                    budget,
+                )
+                if outcome.status != "error":
+                    outcome.status = "timeout"
+                last_error = last_error or f"站点超时预算耗尽（>{settings.SEARCH_TIMEOUT}s）"
+                break
             try:
                 results = await asyncio.wait_for(
                     provider.search(
@@ -134,12 +157,12 @@ async def _search_one(
                         season=season,
                         episode=episode,
                     ),
-                    timeout=settings.SEARCH_TIMEOUT,
+                    timeout=remaining,
                 )
             except asyncio.TimeoutError:
                 logger.warning("站点 %s 搜索超时: %s", provider.site_name, keyword)
                 outcome.status = "timeout"
-                last_error = f"搜索超时（>{settings.SEARCH_TIMEOUT}s）"
+                last_error = f"搜索超时（站点预算 >{settings.SEARCH_TIMEOUT}s）"
                 continue
             except Exception as exc:
                 logger.warning("站点 %s 搜索异常: %s", provider.site_name, exc)
@@ -214,6 +237,50 @@ def dedupe(resources: list[Resource]) -> list[Resource]:
         seen.add(key)
         unique.append(resource)
     return unique
+
+
+def enforce_site_share(ranked: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+    """全局截断前先保证**每个站点都留有名额**，返回长度不超过 ``limit``。
+
+    **为什么必须有这一步**：``apply_site_quota()`` 的轮转交错只在**排序之前**
+    成立，而 :func:`filter_and_rank` 紧接着会按分数做一次**全局重排**——
+    交错出来的公平顺序当场被打散，再按 ``limit`` 一刀切下去，
+    评分体系天然偏低的站点会被**整站抹掉**。
+
+    实测（复刻线上比例：Mukaku 217 / PanSou 537 / Nyaa 75 / B站 20 / YouTube 20）：
+    交错后 5 个站点都在，排序截断后只剩 PanSou 142 + Mukaku 58，
+    **Nyaa / Bilibili / YouTube 三个站点一条都不剩** ——
+    用户观感就是「明明开了 6 个站，结果只有一两个站的东西」。
+
+    评分低不代表没用：网盘资源没有做种数、网页视频没有分辨率标签，
+    它们在通用评分里天然吃亏，但恰恰可能是用户唯一能下到的来源。
+
+    做法：按站点分桶（**桶内保持已排好的分数序**），再轮转取出。
+    这样既保住高分资源整体靠前，又让每个站点都有靠前的曝光位。
+    ``limit <= 0`` 表示不限制。
+    """
+    if limit <= 0 or len(ranked) <= limit:
+        return ranked
+
+    buckets: dict[str, list[dict[str, Any]]] = {}
+    for item in ranked:
+        # 站点名可能带 "·分组" 后缀（盘搜按网盘类型分组），按主站名归并，
+        # 否则一个站点的多个分组会各自占一份名额，等于变相加权
+        site = str(item.get("site") or "")
+        buckets.setdefault(site.split("·")[0], []).append(item)
+
+    if len(buckets) <= 1:
+        return ranked[:limit]
+
+    merged: list[dict[str, Any]] = []
+    ordered = list(buckets.values())
+    for index in range(max(len(bucket) for bucket in ordered)):
+        for bucket in ordered:
+            if index < len(bucket):
+                merged.append(bucket[index])
+                if len(merged) >= limit:
+                    return merged
+    return merged
 
 
 async def search(
@@ -322,7 +389,8 @@ async def search_detailed(
         group = rule_group_service.load_group(rule_group_id)
     except Exception as exc:  # pragma: no cover - 规则组不可用时退回纯评分
         logger.warning("加载过滤规则组失败，本次仅按评分排序: %s", exc)
-    ranked = filter_and_rank(payload, effective_rule, group)[: settings.SEARCH_MAX_RESULTS]
+    ranked = filter_and_rank(payload, effective_rule, group)
+    ranked = enforce_site_share(ranked, settings.SEARCH_MAX_RESULTS)
 
     for item in ranked:
         info = item.pop("_meta", None)

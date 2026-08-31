@@ -29,7 +29,7 @@ import httpx
 from app.core.logger import get_logger
 from app.providers.downloader.base import BaseDownloader, TorrentState
 from app.providers.registry import register
-from app.schemas.enums import TaskStatus
+from app.schemas.enums import ResourceKind, TaskStatus
 from app.utils.http import build_headers, normalize_endpoint
 
 logger = get_logger(__name__)
@@ -83,6 +83,13 @@ class XunleiDownloader(BaseDownloader):
 
     name = "xunlei"
     display_name = "迅雷（NAS 本地）"
+
+    #: 迅雷收磁力/种子，也支持 HTTP 直链离线下载。
+    supported_kinds = (
+        ResourceKind.TORRENT.value,
+        ResourceKind.MAGNET.value,
+        ResourceKind.DIRECT.value,
+    )
 
     def __init__(self, config: dict[str, Any] | None = None) -> None:
         super().__init__(config)

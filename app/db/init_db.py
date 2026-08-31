@@ -74,6 +74,42 @@ DEFAULT_SITES = [
         },
     },
     {
+        # MacCMS 在线影视站。实测首页 30 部片 / 53 个播放源的分布：
+        # qq 21 / qiyi 12 / youku 10 / mgtv 6 / bilibili 3 / rrmj 1
+        # → 约 92% 是长视频平台会员正片，按 ADR-24 会在下载入口如实拒绕。
+        # 预设仍然提供：它能当「这部片在哪个平台有」的索引，
+        # 其中 B 站/UP 主自制/官方免费片那部分是真能下的。
+        "name": "西瓜影院（在线）",
+        "kind": ProviderKind.INDEXER.value,
+        "provider": "maccms",
+        "url": "https://www.bzzdyy.com",
+        "enabled": False,
+        "priority": 60,
+        "options": {
+            "note": "MacCMS 在线站：产出播放源指向的【平台原始地址】，交给 yt-dlp。"
+                    "实测约 92% 是腾讯/爱奇艺/优酷/苒果的会员正片，"
+                    "这部分会被如实拒绕（不接入任何 VIP 解析网关）；"
+                    "能下的主要是 B 站与官方免费内容",
+            "max_items": 6,
+        },
+    },
+    {
+        # 同为 MacCMS 结构；实测被 SafeLine WAF 拦在门外（HTTP 468），
+        # 换 UA / Accept-Language 均无效，故仅作预设：用户自备代理时可用。
+        # 不对抗 WAF（与 ADR-24 同口径：不做风控对抗）。
+        "name": "CZ4K（在线）",
+        "kind": ProviderKind.INDEXER.value,
+        "provider": "maccms",
+        "url": "https://www.cz4k.com",
+        "enabled": False,
+        "priority": 65,
+        "options": {
+            "note": "实测被 SafeLine WAF 拦截（HTTP 468），直连不可用；"
+                    "需自备代理。本项目不做 WAF 对抗，故仅保留预设",
+            "max_items": 6,
+        },
+    },
+    {
         # 与 bdflixs 同为 WordPress 结构；实测首页 200 但疑似限流，故仅作预设
         "name": "MJF 美剧站",
         "kind": ProviderKind.INDEXER.value,

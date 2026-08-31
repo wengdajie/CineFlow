@@ -30,7 +30,7 @@ from app.core.config import settings
 from app.core.logger import get_logger
 from app.providers.downloader.base import BaseDownloader, TorrentState
 from app.providers.registry import register
-from app.schemas.enums import TaskStatus
+from app.schemas.enums import ResourceKind, TaskStatus
 
 logger = get_logger(__name__)
 
@@ -218,6 +218,10 @@ class YtDlpDownloader(BaseDownloader):
 
     name = "ytdlp"
     display_name = "yt-dlp 视频下载"
+
+    #: 只收「视频网页」。反过来也成立：视频网页**只能**给它，
+    #: 别的下载器拿到网页地址只会下到一个 HTML 文件。
+    supported_kinds = (ResourceKind.WEBVIDEO.value,)
 
     #: 进程内任务表。yt-dlp 没有常驻服务，任务状态只能自己记。
     #: 重启即丢失，因此上层（download 服务）落库保存关键信息。

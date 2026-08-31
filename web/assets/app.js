@@ -107,6 +107,7 @@
     history: '<path d="M12 7.5V12l3.5 2"/><path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1"/><path d="M3.5 4v4.5H8"/>',
     back: '<path d="M20 12H4.5"/><path d="M10.5 6 4.5 12l6 6"/>',
     user: '<circle cx="12" cy="8" r="4"/><path d="M4.5 20.5c0-4 3.4-6.5 7.5-6.5s7.5 2.5 7.5 6.5"/>',
+    sparkles: '<path d="M11 3.5 12.6 8 17 9.6 12.6 11.2 11 15.6 9.4 11.2 5 9.6 9.4 8z"/><path d="M17.5 15 18.3 17.2 20.5 18l-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z"/>',
   };
 
   function icon(name, cls) {
@@ -854,12 +855,62 @@
     time: (a, b) => String(b.publish_at || "").localeCompare(String(a.publish_at || "")),
   };
 
+  /**
+   * 「这种资源现在能不能下」的缓存。
+   *
+   * 不同资源要不同下载方式：磁力/种子靠 BT 下载器，网盘靠转存或 aria2，
+   * 视频网页只能靠 yt-dlp。后端 /downloads/routing 会告知每种类型缺什么，
+   * 这里缓存一份，好在**点之前**就把提示显示出来。
+   */
+  const routingCache = { items: null, at: 0 };
+
+  async function downloadRouting() {
+    // 缓存 60s：用户去设置里加完下载器回来，很快就能看到状态变化，
+    // 又不会让一屏几十条资源各发一次请求
+    if (routingCache.items && Date.now() - routingCache.at < 60000) {
+      return routingCache.items;
+    }
+    try {
+      const result = await api("/downloads/routing");
+      routingCache.items = result.items || [];
+      routingCache.at = Date.now();
+    } catch (error) {
+      // 拿不到路由信息不该拦住下载：退回"直接试"，失败时后端仍会给出原因
+      routingCache.items = [];
+      routingCache.at = 0;
+    }
+    return routingCache.items;
+  }
+
+  function routeFor(items, kind) {
+    const target = kind || "torrent";
+    for (let index = 0; index < items.length; index += 1) {
+      if (items[index].kind === target) return items[index];
+    }
+    return null;
+  }
+
   function downloadButton(row, onDone) {
     const button = el("button", { class: "btn sm primary" }, [
       icon("download", "sm"),
       el("span", { text: "下载" }),
     ]);
+    // 异步标注"这类资源当前下不了"：不禁用按钮（用户可能刚配好还没刷新），
+    // 但把原因挂到 title 上，并在点击时先确认
+    downloadRouting().then((items) => {
+      const route = routeFor(items, row.kind);
+      if (route && !route.ready) {
+        button.classList.add("warn");
+        button.title = route.reason || route.hint || "";
+      }
+    });
     button.addEventListener("click", async () => {
+      const route = routeFor(await downloadRouting(), row.kind);
+      if (route && !route.ready) {
+        // 明确告知缺什么、去哪儿加，而不是投出去等一个必然的失败
+        toast(route.reason || route.hint || "当前没有能处理该资源的下载器", "err");
+        return;
+      }
       button.disabled = true;
       button.querySelector("span").textContent = "提交中…";
       try {
@@ -1060,7 +1111,17 @@
                 title: "资源名称",
                 render: (row) =>
                   el("div", {}, [
-                    el("div", { class: "truncate", title: row.title, text: row.title }),
+                    el("div", { class: "row tight center" }, [
+                      el("div", { class: "truncate", title: row.title, text: row.title }),
+                      // 会员正片在列表上就标出来：否则用户只能靠一个个点去试错
+                      row.paywalled
+                        ? el("span", {
+                            class: "tag warn",
+                            title: "长视频平台的会员正片，本工具不提供此类抓取，请用平台官方客户端观看",
+                            text: "会员",
+                          })
+                        : null,
+                    ]),
                     el("div", { class: "cell-sub" }, [
                       (row.meta && row.meta.quality) || "",
                       (row.meta && row.meta.video_codec) ? " · " + row.meta.video_codec : "",
@@ -3268,6 +3329,157 @@
     );
   }
 
+  /**
+   * 内置 AI 分析站点：analyze → verify → apply 三步走。
+   *
+   * 刻意不做"一键分析并添加"：模型会编造字段，直接落库等于把一个
+   * 搜不到东西的站点塞进搜索链路，之后每次搜索都白等它一次超时。
+   * 让用户看到「置信度 + 依据 + 试搜命中几条」再决定。
+   */
+  async function aiSiteDialog(onDone) {
+    const config = (await api("/ai/config")).data;
+
+    const urlInput = el("input", { class: "input", placeholder: "https://example.com" });
+    const kwInput = el("input", { class: "input", placeholder: "流浪地球" });
+    kwInput.value = "流浪地球";
+    const resultBox = el("div", {});
+
+    // 没配好就别让用户白点：直接把缺什么、去哪配说清楚
+    if (!config.ready) {
+      resultBox.replaceChildren(
+        el("div", { class: "notice warn" }, [
+          icon("info", "sm"),
+          el("span", { text: config.reason || "内置 AI 不可用" }),
+        ])
+      );
+    }
+
+    let suggestion = null;
+
+    const applyButton = el("button", { class: "btn primary", disabled: true }, [
+      icon("plus", "sm"),
+      el("span", { text: "添加为站点" }),
+    ]);
+    applyButton.addEventListener("click", () => {
+      if (!suggestion) return;
+      modal(
+        "添加 AI 分析出的站点",
+        [
+          { key: "name", label: "站点名称", required: true, value: "" },
+          { key: "priority", label: "优先级", type: "number", value: "50" },
+        ],
+        async (values) => {
+          await api("/ai/apply", {
+            method: "POST",
+            body: {
+              suggestion: suggestion,
+              name: values.name,
+              priority: Number(values.priority) || 50,
+              enabled: false,
+            },
+          });
+          toast("已添加（默认未启用，请先测试连通性）", "ok");
+          if (onDone) onDone();
+        },
+        "添加"
+      );
+    });
+
+    const verifyButton = el("button", { class: "btn", disabled: true }, [
+      icon("check", "sm"),
+      el("span", { text: "试跑验证" }),
+    ]);
+    verifyButton.addEventListener("click", async () => {
+      if (!suggestion) return;
+      verifyButton.disabled = true;
+      verifyButton.querySelector("span").textContent = "试搜中…";
+      try {
+        const result = (await api("/ai/verify", {
+          method: "POST",
+          body: { suggestion: suggestion, keyword: kwInput.value.trim() || "流浪地球" },
+        })).data;
+        toast(result.message, result.success ? "ok" : "err");
+        // 试搜没结果也允许添加（可能只是这个关键词没有），但要让用户知情
+        applyButton.disabled = false;
+      } catch (error) {
+        toast(error.message, "err");
+      }
+      verifyButton.disabled = false;
+      verifyButton.querySelector("span").textContent = "试跑验证";
+    });
+
+    const analyze = el("button", { class: "btn primary" }, [
+      icon("radar", "sm"),
+      el("span", { text: "开始分析" }),
+    ]);
+    analyze.addEventListener("click", async () => {
+      const url = urlInput.value.trim();
+      if (!url) {
+        toast("请先填写站点地址", "err");
+        return;
+      }
+      analyze.disabled = true;
+      analyze.querySelector("span").textContent = "分析中…";
+      resultBox.replaceChildren(el("div", { class: "muted", text: "正在抓取页面并请求模型，可能需要十几秒…" }));
+      try {
+        const data = (await api("/ai/analyze", {
+          method: "POST",
+          body: { url: url, keyword: kwInput.value.trim() || "流浪地球" },
+        })).data;
+        suggestion = data;
+        verifyButton.disabled = false;
+        applyButton.disabled = true;
+        const percent = Math.round((data.confidence || 0) * 100);
+        resultBox.replaceChildren(
+          el("div", { class: "stack" }, [
+            el("div", { class: "row tight center" }, [
+              el("span", { class: "tag brand", text: data.provider_label || data.provider }),
+              el("span", {
+                class: "tag " + (percent >= 70 ? "ok" : "warn"),
+                text: "置信度 " + percent + "%",
+              }),
+              (data.probes_hit || []).length
+                ? el("span", { class: "tag tiny", text: "命中探测：" + data.probes_hit.join("、") })
+                : null,
+            ]),
+            data.reason ? el("div", { class: "muted", text: "依据：" + data.reason }) : null,
+            data.notes ? el("div", { class: "muted tiny", text: data.notes }) : null,
+            el("div", { class: "muted tiny", text: "字段配置（可添加后再微调）：" }),
+            el("pre", { class: "mono tiny pre-wrap", text: JSON.stringify(data.options || {}, null, 2) }),
+            el("div", { class: "notice" }, [
+              icon("info", "sm"),
+              el("span", { text: "AI 只给建议。请先「试跑验证」看能不能真搜到结果，再决定是否添加。" }),
+            ]),
+          ])
+        );
+      } catch (error) {
+        resultBox.replaceChildren(
+          el("div", { class: "notice warn" }, [icon("info", "sm"), el("span", { text: error.message })])
+        );
+      }
+      analyze.disabled = false;
+      analyze.querySelector("span").textContent = "开始分析";
+    });
+
+    panelModal(
+      "AI 分析站点接入方式",
+      config.ready
+        ? "模型：" + config.model + "（" + config.base_url + "）"
+        : "需先到「设置 → 内置 AI」配置模型与密钥",
+      el("div", {}, [
+        el("div", { class: "field" }, [el("label", { text: "站点地址" }), urlInput]),
+        el("div", { class: "field" }, [
+          el("label", { text: "试探关键词" }),
+          kwInput,
+          el("div", { class: "muted tiny", text: "用来抓一页搜索结果给模型看结构，建议用一部热门片名" }),
+        ]),
+        el("div", { class: "row tight", style: "margin-bottom:12px" }, [analyze, verifyButton, applyButton]),
+        resultBox,
+      ]),
+      true
+    );
+  }
+
   async function pageSites() {
     shell(loading(), "站点管理", "索引器、盘搜、下载器、媒体服务器与通知");
     const [allSites, allProviders] = await Promise.all([
@@ -3399,6 +3611,7 @@
       "共 " + sites.length + " 个配置 · 已启用 " + enabledCount + " 个 · 下载器请到「设置」页配置",
       [
         iconButton("发现站点", "radar", () => discoverDialog()),
+        iconButton("AI 分析站点", "sparkles", () => aiSiteDialog(pageSites)),
         iconButton("从模板添加", "box", () => presetPicker(providers)),
         iconButton("新增站点", "plus", () => siteForm(providers), "primary"),
         iconButton("下载器设置", "download", () => go("settings"), "ghost"),

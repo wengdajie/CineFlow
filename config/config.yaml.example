@@ -128,3 +128,16 @@ downloader_failover: true          # 投递失败自动换下一个下载器
 # ---------- 榜单自动订阅（v1.5.0）----------
 ranking_interval_minutes: 720
 ranking_max_per_run: 5             # 单次最多新建多少订阅（硬上限）
+
+# ---------- 内置 AI 站点分析（v1.13.0）----------
+# 默认关闭：开启后「AI 分析站点」会把站点页面正文发给你配置的模型，
+# 这属于把数据外发给第三方，必须由你显式同意，不能装完就在往外发。
+# 只使用 OpenAI 兼容的 /chat/completions，所以 OpenAI / DeepSeek / 智谱 /
+# 通义 / Ollama / OneAPI 都能用；本地模型（Ollama）api_key 可留空。
+ai_enabled: false
+ai_base_url: "https://api.openai.com/v1"   # Ollama 填 http://127.0.0.1:11434/v1
+ai_api_key: ""
+ai_model: "gpt-4o-mini"            # 如 deepseek-chat / qwen-plus / llama3.1
+ai_timeout: 60                     # 秒；要读整页 HTML，别设太短
+ai_max_page_chars: 16000           # 发给模型的正文上限，超出则头尾各留一半
+ai_temperature: 0.0                # 分析结构要稳定输出，保持 0
