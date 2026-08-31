@@ -14,6 +14,7 @@ from app.db.models import ResourceRecord, SearchHistory
 from app.db.session import session_scope
 from app.providers.base import Resource, SearchProvider
 from app.schemas.enums import MediaType
+from app.services import search_breaker
 from app.services import sites as site_service
 from app.utils.strings import normalize
 
@@ -93,7 +94,7 @@ class SiteOutcome:
     """
 
     site: str
-    #: ok / empty / timeout / error
+    #: ok / empty / timeout / error / skipped（skipped = 被熔断器跳过）
     status: str = "ok"
     #: 站点原始返回条数（配额裁剪前）
     raw: int = 0
@@ -129,6 +130,13 @@ async def _search_one(
     outcome = SiteOutcome(site=provider.site_name)
     started = time.perf_counter()
     last_error = ""
+    # 熔断中的站点直接跳过：它上几轮都把整个预算吃光且没有任何结果，
+    # 继续带着它只会让每次搜索都多等一个 SEARCH_TIMEOUT（实测 25s）。
+    # 注意要如实写进诊断，不能静默消失（ADR-20）。
+    if search_breaker.is_open(provider.site_name):
+        outcome.status = "skipped"
+        outcome.message = search_breaker.skip_reason(provider.site_name)
+        return [], outcome
     async with semaphore:
         # 预算制：SEARCH_TIMEOUT 是【整个站点】的上限，而不是每个关键词各给一份。
         # 一个卡死的站点以前 = len(keywords) × SEARCH_TIMEOUT（带季集时 3×25=75s），
@@ -181,6 +189,7 @@ async def _search_one(
                 outcome.keyword = keyword
                 outcome.message = f"命中 {len(results)} 条"
                 outcome.elapsed_ms = int((time.perf_counter() - started) * 1000)
+                search_breaker.record_success(provider.site_name)
                 return results, outcome
 
         # 所有关键词都试过了：区分「真的没有」和「一直在报错」
@@ -190,6 +199,16 @@ async def _search_one(
         else:
             outcome.message = last_error or "搜索失败"
         outcome.elapsed_ms = int((time.perf_counter() - started) * 1000)
+        # 熔断计数只认「吃满预算且零结果」这一种情况：
+        # 慢但有结果的站（如盘搜）不该被剔掉，快速返回空的站（冷门片）更不该。
+        budget_ms = budget * 1000
+        if outcome.status == "timeout" and outcome.elapsed_ms >= budget_ms * 0.9:
+            if search_breaker.record_timeout(
+                provider.site_name, outcome.elapsed_ms, "连续吃满超时预算且无结果"
+            ):
+                outcome.message += "（已触发熔断，稍后自动重试）"
+        elif outcome.status == "empty":
+            search_breaker.record_success(provider.site_name)
         return [], outcome
 
 

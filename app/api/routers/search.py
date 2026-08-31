@@ -11,6 +11,7 @@ from app.core.filters import FilterRule
 from app.schemas.enums import ResourceKind
 from app.schemas.models import SearchRequest
 from app.services import search as search_service
+from app.services import search_breaker
 
 router = APIRouter(prefix="/search", tags=["搜索"])
 
@@ -71,3 +72,24 @@ async def quick_search(
         "items": results,
         "sites": [outcome.to_dict() for outcome in outcomes],
     }
+
+
+@router.get("/breaker", summary="慢站熔断状态")
+def breaker_state(user: CurrentUser) -> dict[str, Any]:
+    """哪些站点因反复超时被暂时跳过、还剩多久恢复。
+
+    有了这个接口，「为什么这次搜索少了几个站」才有据可查，
+    而不是让结果悄悄变少（ADR-20）。
+    """
+    return {
+        "success": True,
+        "enabled": search_breaker.enabled(),
+        "items": search_breaker.snapshot(),
+    }
+
+
+@router.post("/breaker/reset", summary="解除慢站熔断")
+def breaker_reset(user: OperatorUser, site: str | None = None) -> dict[str, Any]:
+    """手动恢复：用户刚改完站点地址/代理，不该还要干等冷却结束。"""
+    cleared = search_breaker.reset(site)
+    return {"success": True, "cleared": cleared}

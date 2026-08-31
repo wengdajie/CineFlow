@@ -13,6 +13,7 @@ from app.providers.downloader.ytdlp import guess_site
 from app.schemas.enums import ResourceKind, TaskStatus
 from app.schemas.models import DownloadRequest, DownloadTaskOut, Message
 from app.services import download as download_service
+from app.services import download_routing
 
 router = APIRouter(prefix="/downloads", tags=["下载"])
 
@@ -54,7 +55,29 @@ async def add_download(payload: DownloadRequest, user: OperatorUser) -> dict[str
     )
     if not task:
         raise HTTPException(status_code=400, detail="添加下载失败，请检查下载器配置")
-    return {"success": True, "task_id": task.id, "status": task.status}
+    # ⚠️ 任务建出来了 ≠ 投递成功。下载器拒绝/超时时 add_download 会把任务落库为
+    # failed 并写明原因，如果这里仍然回 success=True，界面就会弹绿色的
+    # 「已加入下载队列」，而任务列表里其实是一条红色失败 —— 用户完全被误导
+    # （实测：qBittorrent 没起来时，磁力/种子都是这个表现）。
+    # 所以把「真实结局」如实带出去，让前端能按 ok / failed 分别提示。
+    ok = task.status != TaskStatus.FAILED.value
+    payload: dict[str, Any] = {
+        "success": ok,
+        "task_id": task.id,
+        "status": task.status,
+        "downloader": task.downloader,
+    }
+    if task.error:
+        # 前端统一读 message 展示；detail 保持与 HTTPException 一致的字段名
+        payload["message"] = task.error
+        payload["detail"] = task.error
+    elif task.status == TaskStatus.PENDING.value:
+        # pending 不是失败，但也没真正开始下（典型：网盘资源缺网盘账号/aria2）。
+        # 不给提示的话用户会以为在下载，其实永远不会动。
+        hint = download_routing.pan_pending_hint() if task.kind == ResourceKind.PAN.value else ""
+        if hint:
+            payload["message"] = hint
+    return payload
 
 
 @router.get("/routing", summary="各资源类型当前能否下载")

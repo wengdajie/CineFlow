@@ -4,7 +4,9 @@
 
 1. ``weekday.id`` 是 1~7（周一=1），与 Python ``weekday()`` 的 0~6 错开一位；
 2. 接口返回的封面**全部是 http://**，HTTPS 部署会被混合内容拦成空白；
-3. 约 10% 条目没有 ``name_cn``，必须回退日文原名。
+3. 约 10% 条目没有 ``name_cn``，必须回退日文原名；
+4. ``images.large`` 是未压缩原图（实测 300 KB ~ 3 MB、单张最慢 21 秒），
+   卡片必须取 ``common``（11 KB），否则图片代理会超时 502 导致随机裂图。
 """
 
 from __future__ import annotations
@@ -31,7 +33,15 @@ SAMPLE = [
                 "id": 1001,
                 "name": "\u30c6\u30b9\u30c8\u6708\u66dc",
                 "name_cn": "\u6d4b\u8bd5\u5468\u4e00",
-                "images": {"large": "http://lain.bgm.tv/pic/cover/l/aa/mon.jpg"},
+                # 实测 113/113 条目五个尺寸全都有，样本要照着真实形状给，
+                # 否则「优先取 common」这条根本测不出来
+                "images": {
+                    "large": "http://lain.bgm.tv/pic/cover/l/aa/mon.jpg",
+                    "common": "http://lain.bgm.tv/pic/cover/c/aa/mon.jpg",
+                    "medium": "http://lain.bgm.tv/pic/cover/m/aa/mon.jpg",
+                    "small": "http://lain.bgm.tv/pic/cover/s/aa/mon.jpg",
+                    "grid": "http://lain.bgm.tv/pic/cover/g/aa/mon.jpg",
+                },
                 "rating": {"score": 7.8},
                 "air_date": "2026-01-05",
                 "eps": 12,
@@ -270,3 +280,53 @@ def test_health_check_reports_total(fake_calendar):
     ok, message = run(bangumi.health_check())
     assert ok is True
     assert "4" in message
+
+
+# ---------------- 封面必须取「卡片尺寸」而不是原图 ----------------
+def test_cover_prefers_common_over_large():
+    """有 common 时必须选它，绝不能选 large。
+
+    实测同一张封面：large 937 KB / 13216 ms，common 11 KB / 600 ms。
+    卡片显示宽度只有 ~120px，用原图不但慢，还会把图片代理的 15s 上游超时打爆
+    （返回 502 → 前端退占位 → 新番日历随机裂图）。
+    """
+    images = {
+        "large": "http://lain.bgm.tv/pic/cover/l/aa/x.jpg",
+        "common": "http://lain.bgm.tv/pic/cover/c/aa/x.jpg",
+        "medium": "http://lain.bgm.tv/pic/cover/m/aa/x.jpg",
+    }
+    assert bangumi.pick_cover(images) == "https://lain.bgm.tv/pic/cover/c/aa/x.jpg"
+
+
+def test_cover_priority_never_starts_with_large():
+    """钉住优先级表本身：谁把 large 挪到前面，这条就红。"""
+    assert bangumi.COVER_SIZE_PRIORITY[0] == "common"
+    assert bangumi.COVER_SIZE_PRIORITY.index("large") > bangumi.COVER_SIZE_PRIORITY.index(
+        "medium"
+    )
+
+
+def test_cover_falls_back_when_preferred_size_missing():
+    """接口没承诺字段必然存在：缺 common 就往下降级，而不是变成没封面。"""
+    assert bangumi.pick_cover(
+        {"large": "http://lain.bgm.tv/pic/cover/l/bb/y.jpg"}
+    ) == "https://lain.bgm.tv/pic/cover/l/bb/y.jpg"
+    assert bangumi.pick_cover(
+        {"grid": "http://lain.bgm.tv/pic/cover/g/bb/y.jpg"}
+    ) == "https://lain.bgm.tv/pic/cover/g/bb/y.jpg"
+
+
+def test_cover_bad_input_returns_none():
+    """脏数据不能抛异常——日历拉取失败不该演变成整页 500。"""
+    assert bangumi.pick_cover(None) is None
+    assert bangumi.pick_cover("not-a-dict") is None
+    assert bangumi.pick_cover({}) is None
+    assert bangumi.pick_cover({"large": "", "common": "   "}) is None
+
+
+def test_calendar_uses_card_sized_cover(fake_calendar):
+    """走完整条流程后，样本里那条「五个尺寸都有」的必须落在 /cover/c/ 上。"""
+    days = run(bangumi.calendar())
+    rows = [row for day in days for row in day["items"] if row["title"] == "\u6d4b\u8bd5\u5468\u4e00"]
+    assert rows, "样本里应当有这条"
+    assert rows[0]["poster"] == "https://lain.bgm.tv/pic/cover/c/aa/mon.jpg"

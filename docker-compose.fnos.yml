@@ -30,6 +30,12 @@ services:
     # 预构建多架构镜像，飞牛无需本地编译
     # 想换版本：改这里的 tag，或设环境变量 CINEFLOW_IMAGE
     image: ${CINEFLOW_IMAGE:-ghcr.io/wengdajie/cineflow:latest}
+    # ⚠️ 必须有 pull_policy：:latest 是**可变 tag**，docker compose up -d 默认
+    # 只要本地存在同名镜像就直接复用，不会去检查远端有没有更新 —— 表现就是
+    # 「明明 GitHub 已经是新版，容器里还是旧版本号」。always 让每次 up 都比对
+    # digest（没更新时只有几十 KB 的 manifest 请求，不会重复下载层）。
+    # 想锁定某个版本请把 tag 换成 sha-xxxxxxx 并把这里改成 missing。
+    pull_policy: always
     container_name: cineflow
     restart: unless-stopped
     ports:

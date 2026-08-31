@@ -19,6 +19,13 @@ HTTP 200 + text/html 的反爬脚本页**（不是图片），而同一张图换
 就正常返回 image/jpeg。约 1/4 的封面会被分到 img9，导致前端大面积裂图。
 因此这里对 doubanio 域做**镜像轮换重试**：img9 直接跳过，且任一镜像返回
 非图片内容时自动换下一个，全部失败才报错。
+
+**连接层抖动重试**：实测 ``lain.bgm.tv`` 的 TLS 连接会被**间歇性掐断**
+（同一 URL 三连的结果是 ``EXC / EXC / 200``，报错为
+``SSL: UNEXPECTED_EOF_WHILE_READING``）。镜像轮换只救得了豆瓣，
+其它图床只有一个候选，一次抖动就 502、前端退占位 —— 表现为封面随机裂图。
+所以每个候选地址会重试 :data:`MAX_ATTEMPTS_PER_CANDIDATE` 次，
+但**只针对连接层异常**：HTTP 403/404 这类重试多少次结果都一样。
 """
 
 from __future__ import annotations
@@ -61,6 +68,22 @@ DOUBAN_MIRRORS = ("img3", "img1", "img2")
 
 #: 被判定为坏节点的豆瓣镜像主机名前缀
 DOUBAN_BAD_MIRRORS = ("img9",)
+
+#: 单个候选地址的最大尝试次数（含首次）。
+#:
+#: **为什么必须重试**：实测 ``lain.bgm.tv``（Bangumi 图床）的 TLS 连接会
+#: **间歇性被掐断** —— 同一个 URL 连续请求三次，结果是
+#: ``EXC / EXC / 200``、``200 / EXC / 200``，报错固定为
+#: ``SSL: UNEXPECTED_EOF_WHILE_READING``（握手中途对端直接断开，
+#: 典型的链路干扰而非图床故障，因为紧接着重试就成功了）。
+#:
+#: 而这里的镜像轮换只对豆瓣有效（其它图床只有 1 个候选），于是**一次网络抖动
+#: 就直接 502**，前端退占位 → 表现为「新番日历随机几张裂图，刷新一下换成
+#: 另外几张裂」。加上重试后，抖动被吸收在后端，用户看不见。
+#:
+#: 只重试**连接层异常**，不重试 HTTP 状态码错误：403/404 重试多少次都一样，
+#: 白等而已。
+MAX_ATTEMPTS_PER_CANDIDATE = 3
 
 
 def douban_candidates(url: str) -> list[str]:
@@ -133,13 +156,21 @@ async def proxy(
     content_type = ""
     last_error = ""
     for candidate in candidates:
-        try:
-            async with async_client(timeout=15) as client:
-                response = await client.get(
-                    candidate, headers={"User-Agent": UA, "Referer": referer}
-                )
-        except Exception as exc:
-            last_error = f"请求异常 {exc}"
+        response = None
+        # 连接层抖动（实测 bgm.tv 的 TLS 会被间歇掐断）重试几次；
+        # 拿到 HTTP 响应就跳出——状态码错误重试没有意义。
+        for attempt in range(MAX_ATTEMPTS_PER_CANDIDATE):
+            try:
+                async with async_client(timeout=15) as client:
+                    response = await client.get(
+                        candidate, headers={"User-Agent": UA, "Referer": referer}
+                    )
+                break
+            except Exception as exc:
+                # 异常信息里带上第几次，便于从日志判断是"一直连不上"还是"抖了一下"
+                last_error = f"请求异常（第 {attempt + 1} 次）{exc}"
+                response = None
+        if response is None:
             continue
 
         if response.status_code != 200:

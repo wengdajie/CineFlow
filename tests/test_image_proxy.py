@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import httpx
+import pytest
+
+from app.api.routers import images as images_router
 from app.api.routers.images import douban_candidates, resolve_referer
 
 
@@ -113,3 +117,97 @@ def test_normalize_cover_rewrites_bad_mirror():
     assert _normalize_cover("https://img1.doubanio.com/x.jpg") == "https://img1.doubanio.com/x.jpg"
     assert _normalize_cover("") is None
     assert _normalize_cover(None) is None
+
+
+# --- 连接层抖动必须重试（bgm.tv 的 TLS 会被间歇掐断）-----------------------
+# 背景：实测同一个 bgm.tv 封面地址连续请求三次，结果是 EXC / EXC / 200，
+# 报错固定为 SSL: UNEXPECTED_EOF_WHILE_READING。镜像轮换只对豆瓣有效，
+# 其它图床只有 1 个候选，一次抖动就 502 → 前端退占位 → 封面随机裂图。
+
+
+class _FakeResponse:
+    def __init__(self, content=b"\xff\xd8\xff-jpeg-bytes", status_code=200,
+                 content_type="image/jpeg"):
+        self.content = content
+        self.status_code = status_code
+        self.headers = {"content-type": content_type}
+
+
+class _FakeClient:
+    """按脚本依次返回结果的假客户端；元素是异常类就抛，否则当响应返回。"""
+
+    def __init__(self, script):
+        self.script = script
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def get(self, url, headers=None):
+        outcome = self.script.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+
+@pytest.fixture
+def fake_upstream(monkeypatch):
+    """替掉 async_client，让我们能精确编排「第几次成功」。"""
+
+    def _install(script):
+        calls = {"n": 0}
+
+        def _factory(*args, **kwargs):
+            calls["n"] += 1
+            return _FakeClient(script)
+
+        monkeypatch.setattr(images_router, "async_client", _factory)
+        return calls
+
+    return _install
+
+
+BGM_URL = "https://lain.bgm.tv/pic/cover/c/16/a8/412144_39HJH.jpg"
+
+
+def test_proxy_retries_after_tls_drop(client, fake_upstream):
+    """前两次 TLS 被掐断、第三次成功 —— 用户必须拿到图片而不是 502。"""
+    tls_error = httpx.ConnectError("[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred")
+    calls = fake_upstream([tls_error, tls_error, _FakeResponse()])
+    response = client.get("/api/v1/images/proxy", params={"url": BGM_URL})
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"].startswith("image/")
+    assert calls["n"] == 3, "应当重试到第三次"
+
+
+def test_proxy_gives_up_after_max_attempts(client, fake_upstream):
+    """一直连不上就得如实报 502，不能无限重试把请求挂死。"""
+    tls_error = httpx.ConnectError("EOF occurred in violation of protocol")
+    calls = fake_upstream([tls_error] * 10)
+    response = client.get("/api/v1/images/proxy", params={"url": BGM_URL})
+    assert response.status_code == 502
+    assert calls["n"] == images_router.MAX_ATTEMPTS_PER_CANDIDATE
+
+
+def test_proxy_does_not_retry_http_errors(client, fake_upstream):
+    """403/404 重试多少次结果都一样，白等而已——必须只试一次。"""
+    calls = fake_upstream([_FakeResponse(status_code=403)] * 5)
+    response = client.get("/api/v1/images/proxy", params={"url": BGM_URL})
+    assert response.status_code == 502
+    assert calls["n"] == 1, "HTTP 状态码错误不该重试"
+
+
+def test_proxy_succeeds_first_try_without_retry(client, fake_upstream):
+    """正常情况必须只发一次请求，别把重试变成常态开销。"""
+    calls = fake_upstream([_FakeResponse()])
+    assert client.get("/api/v1/images/proxy", params={"url": BGM_URL}).status_code == 200
+    assert calls["n"] == 1
+
+
+def test_bgm_host_is_whitelisted_with_own_referer():
+    """bgm.tv 必须在白名单里且用自己的 Referer（豆瓣的 Referer 换不来 Bangumi 的图）。"""
+    referer = resolve_referer(BGM_URL)
+    assert referer is not None
+    assert "bangumi" in referer
