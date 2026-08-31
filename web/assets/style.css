@@ -834,9 +834,13 @@ tbody tr:last-child td { border-bottom: 0; }
 }
 .toast.ok { border-left-color: var(--ok); }
 .toast.err { border-left-color: var(--err); }
+/* warn：用于「没失败但也没真开始」的中间态，例如网盘任务缺账号停在 pending。
+   之前 toast(msg,"warn") 会渲染成无色边框，和普通信息提示混在一起看不出来。 */
+.toast.warn { border-left-color: var(--warn); }
 .toast .icon { margin-top: 2px; }
 .toast.ok .icon { color: var(--ok-text); }
 .toast.err .icon { color: var(--err-text); }
+.toast.warn .icon { color: var(--warn-text); }
 @keyframes slide { from { opacity: 0; transform: translateX(18px); } }
 
 /* ---------------- 日志 ---------------- */

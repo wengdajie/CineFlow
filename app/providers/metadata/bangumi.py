@@ -20,6 +20,9 @@
    统一升级成 ``https://`` —— 实测 ``lain.bgm.tv`` 支持 https。
 3. **约 10% 的条目没有 ``name_cn``**（冷门番/刚建条目），必须回退到日文
    原名 ``name``，否则卡片标题会是空的。
+4. **``images.large`` 是未压缩原图**（实测 300 KB ~ 3 MB、单张最慢 21 秒），
+   而卡片只有 ~120px 宽。用它会让图片代理超时返回 502、日历随机裂图。
+   改取 ``common``（11 KB / 230 ms），见 :data:`COVER_SIZE_PRIORITY`。
 
 反爬自保沿用 ``douban_chart`` 同策略：缓存 + 失败退避 + 任何异常都返回空，
 不让日历拉取失败演变成整页 500。
@@ -108,6 +111,46 @@ def normalize_cover(raw: object) -> str | None:
     return url or None
 
 
+#: 卡片封面的尺寸优先级。**刻意把 large 放在最后**。
+#:
+#: 实测（本轮，同一张封面的两个尺寸）：
+#:
+#: ===========  ==========  ========
+#: 尺寸          体积        耗时
+#: ===========  ==========  ========
+#: ``large``    937 KB      13216 ms
+#: ``common``    11 KB        600 ms
+#: ===========  ==========  ========
+#:
+#: ``large`` 是**未压缩原图**，实测区间 300 KB ~ 3 MB、单张最慢 **21 秒**。
+#: 而榜单卡片里封面的显示宽度只有 ~120px，原图的像素完全用不上。
+#:
+#: 后果不只是"慢一点"：图片代理的上游超时是 15s，30 张原图并发时会有一部分
+#: 直接超时 → 后端返回 **502** → 前端 onerror 退占位，表现为**新番日历随机裂图**
+#: （本轮 ui_check 抓到的那个 502 就是它，实测复现：并发拉 18 张原图，1 张 502）。
+#: 又因为这些图和 API **同源**，还会占满浏览器连接池（见 ADR-73）。
+#:
+#: ``common``（11 KB / 230~600 ms）对 120px 的卡片已经足够清晰。
+COVER_SIZE_PRIORITY = ("common", "medium", "large", "grid", "small")
+
+
+def pick_cover(images: object) -> str | None:
+    """从 Bangumi 的 ``images`` 里挑一个**适合卡片**的封面尺寸。
+
+    实测 113/113 条目 ``large/common/medium/small/grid`` 五个尺寸**全都有**，
+    所以按 :data:`COVER_SIZE_PRIORITY` 取几乎总能拿到 ``common``；
+    仍保留逐级回退，是因为接口没有承诺过字段必然存在，
+    真缺字段时应当降级到别的尺寸，而不是让卡片变成没有封面。
+    """
+    if not isinstance(images, dict):
+        return None
+    for size in COVER_SIZE_PRIORITY:
+        url = normalize_cover(images.get(size))
+        if url:
+            return url
+    return None
+
+
 def _rating(raw: object) -> float | None:
     """取评分；未开分/无人评价时返回 ``None`` 而不是 0。
 
@@ -130,12 +173,7 @@ def _normalize(item: dict[str, Any], weekday: int | None) -> dict[str, Any] | No
     title = str(item.get("name_cn") or "").strip() or str(item.get("name") or "").strip()
     if not title:
         return None
-    images = item.get("images") if isinstance(item.get("images"), dict) else {}
-    poster = normalize_cover(
-        (images or {}).get("large")
-        or (images or {}).get("common")
-        or (images or {}).get("medium")
-    )
+    poster = pick_cover(item.get("images"))
     subject_id = item.get("id")
     return {
         "source": "bangumi",

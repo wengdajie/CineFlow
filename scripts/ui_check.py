@@ -103,12 +103,19 @@ def main():
         page = context.new_page()
 
         page.on("pageerror", lambda exc: errors.append(f"[pageerror] {exc}"))
-        page.on(
-            "console",
-            lambda msg: errors.append(f"[console.{msg.type}] {msg.text}")
-            if msg.type == "error"
-            else None,
-        )
+        # 控制台报错要带上出处：子资源加载失败时 msg.text 只有
+        # "Failed to load resource: ... 502"，不带 URL，根本没法定位是谁挂了。
+        def _on_console(msg):
+            if msg.type != "error":
+                return
+            where = ""
+            try:
+                where = (msg.location or {}).get("url") or ""
+            except Exception:
+                where = ""
+            errors.append(f"[console.{msg.type}] {msg.text}" + (f" <- {where}" if where else ""))
+
+        page.on("console", _on_console)
         page.on(
             "requestfailed",
             lambda request: failed_requests.append(
@@ -1217,6 +1224,28 @@ main()
 print("\n" + "=" * 68)
 print("结论")
 print("=" * 68)
+#: 失败请求记成 "GET <url> -> <failure>"，只有中间那段是 URL。
+#: 拿整行去判后缀永远是 False（结尾是 failure 文本），这里必须先把 URL 切出来。
+def _request_url(lowered):
+    # 两种记法都要认：
+    #   失败请求  "GET <url> -> <failure>"
+    #   控制台报错 "[console.error] <文本> <- <url>"
+    if " <- " in lowered:
+        return lowered.split(" <- ")[-1].strip()
+    head = lowered.split(" -> ")[0]
+    return head.rsplit(" ", 1)[-1] if " " in head else head
+
+
+def _looks_like_image(lowered):
+    """这条请求是不是封面图。走代理的同源图片和直连的外站图床都要认。"""
+    url = _request_url(lowered)
+    if "/api/v1/images/proxy" in url:
+        return True
+    return url.split("?")[0].endswith(
+        (".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif")
+    )
+
+
 def _is_noise(item):
     """判断一条报错是否属于「与本项目无关」的噪声。
 
@@ -1224,9 +1253,15 @@ def _is_noise(item):
     - 第三方图片域：榜单封面来自资源站，本机没直连/走代理时必然失败，
       前端已用 onerror 退占位（画板点检里专门验过裂图数为 0）
     - 预期内的 400：付费墙拦截用例是我们主动触发的，返回 400 才是对的
+    - net::ERR_ABORTED：切页时前端会主动中止「已经不在文档里」的封面图请求
+      （abortDetachedPosters，见 ADR-73）。同源图片会把浏览器每域 ~6 条连接
+      占满，导致下一屏的 API 排在几十张图后面，实测要等约 10s 才出内容。
+      主动中止是修复手段而非故障，因此不能计入失败请求，否则门禁永远是红的。
     """
     lowered = item.lower()
     if "favicon" in lowered:
+        return True
+    if "err_aborted" in lowered and _looks_like_image(lowered):
         return True
     # ERR_CONNECTION_CLOSED 与前两者同类：外站图床挂了/被墙。
     # 只要不是本机地址就算噪声——本机连不上才是真问题。
@@ -1240,6 +1275,17 @@ def _is_noise(item):
     ):
         if signal in lowered:
             return BASE.replace("http://", "") not in lowered
+    # 外站图片返回 404/403：片源被下架或转私密就会这样（实测某个 YouTube 视频
+    # 四种缩略图尺寸全部 404，同批另外两个视频正常 —— 是上游数据陈旧，
+    # 不是我们的 bug，前端 onerror 已退占位）。
+    # **必须排除本机地址**：我们自己的 /api/v1/images/proxy 报错是真缺陷
+    # （本轮就是靠它抓出了 Bangumi 原图超时 502 和 TLS 抖动 502）。
+    if (
+        _looks_like_image(lowered)
+        and BASE.replace("http://", "") not in lowered
+        and ("status of 404" in lowered or "status of 403" in lowered)
+    ):
+        return True
     return "400 (bad request)" in lowered
 
 

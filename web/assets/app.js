@@ -196,7 +196,7 @@
   };
 
   const toast = (message, kind) => {
-    const name = kind === "ok" ? "check" : kind === "err" ? "alert" : "info";
+    const name = kind === "ok" ? "check" : kind === "err" || kind === "warn" ? "alert" : "info";
     const node = el("div", { class: "toast " + (kind || "") }, [
       icon(name, "sm"),
       el("div", { text: message }),
@@ -266,6 +266,77 @@
   const kindLabel = (value) =>
     ({ torrent: "种子", magnet: "磁力", pan: "网盘", direct: "直链" }[value] ||
       value);
+
+  //: 每站诊断状态 → [展示名, 标签色]。后端从 v1.6.0 就返回 sites 诊断，
+  //: 但界面一直没渲染 —— 于是「开了 8 个站却只看到 1 个站的资源」时，
+  //: 用户看不到到底是超时、被熔断跳过还是这个站真的没有，只能怀疑功能坏了。
+  const SITE_STATUS = {
+    ok: ["有结果", "ok"],
+    empty: ["无匹配", ""],
+    timeout: ["超时", "warn"],
+    skipped: ["已跳过", "warn"],
+    error: ["失败", "err"],
+  };
+
+  /** 搜索结果里的「站点情况」表：谁出了货、谁超时、谁被熔断跳过。 */
+  function siteReportCard(sites, onReset) {
+    const rows = (sites || []).slice();
+    if (!rows.length) return null;
+    const ORDER = { error: 0, timeout: 1, skipped: 2, empty: 3, ok: 4 };
+    rows.sort(function (a, b) {
+      const d = (ORDER[a.status] === undefined ? 9 : ORDER[a.status]) -
+                (ORDER[b.status] === undefined ? 9 : ORDER[b.status]);
+      return d !== 0 ? d : (b.kept || 0) - (a.kept || 0);
+    });
+    const hit = rows.filter(function (r) { return r.status === "ok"; }).length;
+    const skipped = rows.filter(function (r) { return r.status === "skipped"; }).length;
+    const slow = rows.filter(function (r) { return r.status === "timeout"; }).length;
+    return el("div", { class: "card flush" }, [
+      el("div", { class: "card-head" }, [
+        el("h3", {}, [icon("pulse", "sm"), el("span", { text: "站点情况（" + hit + "/" + rows.length + " 出货）" })]),
+        el("div", { class: "row tight center" }, [
+          slow ? el("span", { class: "tag warn", text: slow + " 个超时" }) : null,
+          skipped
+            ? iconButton("解除跳过", "refresh", async function () {
+                try {
+                  await api("/search/breaker/reset", { method: "POST" });
+                  toast("已解除熔断，下次搜索会重新尝试这些站点", "ok");
+                  if (onReset) onReset();
+                } catch (error) {
+                  toast(error.message, "err");
+                }
+              }, "sm ghost")
+            : null,
+        ]),
+      ]),
+      table(
+        [
+          { title: "站点", render: function (row) { return el("span", { class: "tag", text: row.site || "-" }); } },
+          {
+            title: "状态",
+            render: function (row) {
+              const pair = SITE_STATUS[row.status] || [row.status || "-", ""];
+              return el("span", { class: "tag dot " + pair[1], text: pair[0] });
+            },
+          },
+          {
+            title: "说明",
+            render: function (row) {
+              return el("div", { class: "truncate dim tiny", title: row.message || "", text: row.message || "-" });
+            },
+          },
+          { title: "命中", class: "num", render: function (row) { return String(row.kept || 0); } },
+          { title: "原始", class: "num", render: function (row) { return String(row.raw || 0); } },
+          { title: "耗时", class: "num", render: function (row) { return (row.elapsed_ms || 0) + "ms"; } },
+        ],
+        rows
+      ),
+      el("div", { class: "dim tiny", style: "padding:0 22px 18px" }, [
+        el("span", { text: "「已跳过」= 该站连续多次吃满超时预算且零结果，已被暂时熔断；" +
+          "聚合搜索要等最慢的站，跳过它能让整体立刻变快。到期自动恢复，也可点上方按钮立即解除。" }),
+      ]),
+    ]);
+  }
 
   const seasonEpisode = (season, episode) =>
     season !== null && season !== undefined && episode !== null && episode !== undefined
@@ -606,7 +677,8 @@
       );
     });
 
-    document.getElementById("app").replaceChildren(
+    const app = document.getElementById("app");
+    app.replaceChildren(
       el("div", { class: "layout" }, [
         el("aside", { class: "sidebar" }, [
           el("div", { class: "brand" }, [
@@ -642,6 +714,10 @@
         ]),
       ])
     );
+    // 整屏换完了：上一屏的封面已经脱离文档，把它们仍在占用的连接还回来。
+    // 这里是所有页面渲染的唯一出口（含 pageTrending 切分类时的自调用），
+    // 挂在 render() 上会漏掉这些不经过路由的重绘。
+    abortDetachedPosters();
   }
 
   /** 带图标的按钮。 */
@@ -847,7 +923,7 @@
   }
 
   // ---------------- 资源搜索 ----------------
-  const searchState = { items: [], keyword: "", sort: "score", kind: "" };
+  const searchState = { items: [], keyword: "", sort: "score", kind: "", sites: [] };
 
   const SORTERS = {
     score: (a, b) => (b.score || 0) - (a.score || 0),
@@ -915,7 +991,7 @@
       button.disabled = true;
       button.querySelector("span").textContent = "提交中…";
       try {
-        await api("/downloads", {
+        const res = await api("/downloads", {
           method: "POST",
           body: {
             title: row.title,
@@ -928,8 +1004,20 @@
             meta: row.meta || {},
           },
         });
+        // HTTP 200 不代表投递成功：下载器连不上时后端会落库成 failed 并回
+        // success=false。以前这里无条件弹绿色「已加入下载队列」，用户看到成功
+        // 提示、任务列表里却是红色失败，属于最难排查的那种误导。
+        if (res && res.success === false) {
+          toast(res.message || "投递失败，请检查下载器", "err");
+          button.disabled = false;
+          button.querySelector("span").textContent = "下载";
+          if (onDone) onDone();
+          return;
+        }
         button.querySelector("span").textContent = "已添加";
-        toast("已加入下载队列", "ok");
+        // pending（如网盘缺账号/aria2）不是失败，但也没真的开始下，给中性提示
+        if (res && res.message) toast(res.message, "warn");
+        else toast("已加入下载队列", "ok");
         if (onDone) onDone();
       } catch (error) {
         toast(error.message, "err");
@@ -1157,6 +1245,11 @@
           ),
         ])
       );
+      // 站点情况紧跟结果：结果少的时候，用户第一眼要看到的就是「谁没出货、为什么」
+      const report = siteReportCard(searchState.sites, function () {
+        if (searchState.keyword) doSearch(searchState.keyword);
+      });
+      if (report) results.appendChild(report);
     };
 
     const doSearch = async (value) => {
@@ -1179,9 +1272,17 @@
           },
         });
         searchState.items = data.items || [];
+        searchState.sites = data.sites || [];
         renderResults();
         loadHot();
-        toast("找到 " + data.total + " 条资源", data.total ? "ok" : "");
+        // 有站点异常时不能只报「找到 N 条」：那会让用户以为已经搜全了
+        const bad = searchState.sites.filter(function (row) {
+          return row.status === "timeout" || row.status === "error" || row.status === "skipped";
+        }).length;
+        toast(
+          "找到 " + data.total + " 条资源" + (bad ? "（" + bad + " 个站点未出货，见下方站点情况）" : ""),
+          data.total ? (bad ? "warn" : "ok") : "warn"
+        );
       } catch (error) {
         results.replaceChildren(el("div", { class: "card" }, [emptyBox(error.message, "alert")]));
       }
@@ -1405,8 +1506,44 @@
     image.addEventListener("error", () => {
       holder.replaceChildren(placeholder());
     });
+    // 登记进在飞清单：切页时要中止，见 abortDetachedPosters() 的说明
+    livePosters.push(image);
     holder.appendChild(image);
     return holder;
+  }
+
+  //: 正在加载中的封面 <img>。已经从页面上被换掉的，要主动中止。
+  const livePosters = [];
+
+  /** 中止「已经不在页面上」的封面图请求。
+
+      为什么必须做：走后端代理的封面（豆瓣/Bangumi）和 API 是**同源**的，
+      而浏览器对同一域名只开 ~6 条并发连接。发现榜一屏 30 张封面、
+      再切几个分类，就能攒下几十个在飞的图片请求，把连接池占满 ——
+      于是**下一屏要用的 /api/v1/... 得排在这些图片后面**。
+      实测：逛完热度排行的 7 个分类再进定时任务，页面要等约 10 秒才出内容，
+      而后端其实 8ms 就回了（基线 8~9ms，并发搜索时也只有 8~11ms）。
+
+      表现极具误导性：标题、侧边栏、页面副标题全都正常，只有内容区空着 ——
+      看起来像「这一页坏了」，实际是**上一屏的封面把网络占死了**。
+
+      判据用 `isConnected`（是否还挂在文档里）而不是「切页就全清」：
+      换掉的那一屏图片再也不会被看到，掐掉零损失；而当前这一屏正在加载的封面
+      必须留着，否则新页面的封面会全变占位块。
+  */
+  function abortDetachedPosters() {
+    for (let i = livePosters.length - 1; i >= 0; i -= 1) {
+      const image = livePosters[i];
+      if (!image || image.complete) {
+        livePosters.splice(i, 1);
+        continue;
+      }
+      if (!image.isConnected) {
+        // src="" 会让浏览器中止这次请求；元素已经被丢弃，不影响观感
+        image.src = "";
+        livePosters.splice(i, 1);
+      }
+    }
   }
 
   /**
@@ -1417,7 +1554,12 @@
    * 后端带正确 Referer 代拉后转发。其它图床（B 站/YouTube/TMDB）能直连，
    * 就不绕后端，省一次转发。
    */
-  const PROXY_HOSTS = ["doubanio.com", "douban.com"];
+  //: 必须走后端代理的图床。
+  //: bgm.tv（Bangumi 放送日历封面）是 v1.15.0 补的：后端 images.py 早就把它
+  //: 连同专用 Referer 一起写进了白名单——说明本意就是让它走代理——但前端
+  //: 这里一直没列，于是浏览器直连 lain.bgm.tv 拿到 ERR_HTTP2_PROTOCOL_ERROR，
+  //: 新番日历整片裂图退占位。实测走代理后 200 image/jpeg 正常。
+  const PROXY_HOSTS = ["doubanio.com", "douban.com", "bgm.tv"];
   function posterSrc(url) {
     const raw = String(url || "");
     if (!raw) return raw;
@@ -1908,6 +2050,8 @@
           ? discoverBoard(data, goSearch)
           : discoverTable(data, goSearch)
       );
+      // 榜单换视图/换分类只重绘 listBox，不经过 shell()，这里也要回收一次
+      abortDetachedPosters();
 
       // 加载更多：有更多才显示按钮，到底了给一句明确的「已到底」
       moreBox.replaceChildren();
@@ -7663,11 +7807,25 @@
     render();
   }
 
+  /** 关掉所有打开的弹窗。
+
+      切页时必须做：弹窗挂在 #modal-root（不属于任何页面容器），
+      换页只重绘页面容器，遮罩会**原地留下**。而 .modal-mask 是覆盖全屏的，
+      于是新页面看得见却点不动 —— 表现为「界面卡死」，且刷新一下就好了，
+      非常难联想到「上一页有个没关的弹窗」。
+      实测复现：订阅页开「新增订阅」→ 点侧边栏去设置页 → 设置页任何按钮都点不到。
+  */
+  function closeAllModals() {
+    const root = document.getElementById("modal-root");
+    if (root && root.childNodes.length) root.innerHTML = "";
+  }
+
   async function render() {
     if (!store.token) {
       renderLogin();
       return;
     }
+    closeAllModals();
     const handler = ROUTES[store.page] || pageDashboard;
     const epoch = ++navEpoch; // 记下本次导航的代次，供下面的错误分支比对
     try {

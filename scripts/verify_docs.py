@@ -127,8 +127,8 @@ try:
         for m in methods
         if m.lower() in ("get", "post", "patch", "delete", "put")
     )
-    check("API 端点 163 个", total == 163, f"实际 {total}")
-    check("README 声明 163 个端点", "163 个端点" in README and "共 163 个" in README)
+    check("API 端点 165 个", total == 165, f"实际 {total}")
+    check("README 声明 165 个端点", "165 个端点" in README and "共 165 个" in README)
     paths = set(spec["paths"])
     for path in ("/api/v1/users", "/api/v1/users/{user_id}",
                  "/api/v1/system/settings", "/api/v1/system/settings/reset",
@@ -235,8 +235,8 @@ check("README 说明定时任务可改期", "定时任务" in README and "cron" 
 
 # ---- 测试文件 ----
 test_files = sorted(p.name for p in pathlib.Path("tests").glob("test_*.py"))
-check("测试文件 49 个", len(test_files) == 49, str(test_files))
-check("README 声明 49 个测试文件", "49 个测试文件" in README)
+check("测试文件 50 个", len(test_files) == 50, str(test_files))
+check("README 声明 50 个测试文件", "50 个测试文件" in README)
 for name in ("test_custom_sites.py", "test_radar.py", "test_trending.py",
              "test_panstorage.py", "test_chatops.py", "test_nfo.py",
              "test_scraper.py", "test_webdav.py", "test_strm_sync.py",
@@ -251,10 +251,22 @@ for script in ("smoke_test.py", "ui_check.py", "demo_pipeline.py", "live_check.p
     check(f"脚本存在 {script}", pathlib.Path("scripts", script).exists())
     check(f"scripts/README 提及 {script}", script in SCRIPTS_README)
 check("文档声明七个验证脚本", "七个开发期验证工具" in README)
-check("README 测试徽章 1202", "tests-1202%20passed" in README_ONLY)
-check("README 版本号 1.14.0", "1.14.0" in README_ONLY)
+# 测试数写在两处（README 徽章 + 开发指南的注释），历史上更新时漏改过一处。
+# 与其把数字写死在门禁里，不如**要求两处一致**：这样以后改一处漏一处就会红，
+# 而不是每次都得再改门禁自己。
+_badge = re.search(r"tests-(\d+)%20passed", README_ONLY)
+check("README 有测试徽章", _badge is not None)
+# 这里 docs_dir 还没定义（在下方），直接用相对路径
+_guide = re.search(r"pytest -q\s+# (\d+) passed",
+                   pathlib.Path("docs/14-开发指南.md").read_text(encoding="utf-8"))
+check("开发指南写明测试数", _guide is not None)
+if _badge and _guide:
+    check("README 徽章与开发指南的测试数一致",
+          _badge.group(1) == _guide.group(1),
+          f"徽章 {_badge.group(1)} vs 指南 {_guide.group(1)}")
+check("README 版本号 1.15.0", "1.15.0" in README_ONLY)
 version_src = pathlib.Path("app/core/version.py").read_text(encoding="utf-8")
-check("代码版本号为 1.14.0", 'APP_VERSION = "1.14.0"' in version_src)
+check("代码版本号为 1.15.0", 'APP_VERSION = "1.15.0"' in version_src)
 check("README 声明 288 项接口用例", "288 项真实 HTTP 接口用例" in README)
 check("scripts/README 声明 288 项", "288 项接口用例" in SCRIPTS_README)
 
@@ -543,7 +555,7 @@ from app.services import config_store  # noqa: E402
 
 cfgstore_src = pathlib.Path("app/services/config_store.py").read_text(encoding="utf-8")
 check("可编辑配置白名单存在", "EDITABLE" in cfgstore_src)
-check("可编辑配置项 63 个", len(config_store.EDITABLE) == 63, f"实际 {len(config_store.EDITABLE)}")
+check("可编辑配置项 66 个", len(config_store.EDITABLE) == 66, f"实际 {len(config_store.EDITABLE)}")
 for func in ("coerce", "update", "reset", "apply_overrides", "describe"):
     check(f"配置仓库函数 {func}", f"def {func}" in cfgstore_src)
 # 不可热改的键绝不能进白名单：改了不生效比改不了更糟
@@ -1191,11 +1203,12 @@ check("变更日志含 v1.12.0", "## v1.12.0" in changelog_text)
 check("变更日志含 v1.12.1", "## v1.12.1" in changelog_text)
 check("变更日志含 v1.13.0", "## v1.13.0" in changelog_text)
 check("变更日志含 v1.14.0", "## v1.14.0" in changelog_text)
+check("变更日志含 v1.15.0", "## v1.15.0" in changelog_text)
 check("变更日志记录破坏性变更", "破坏性变更" in changelog_text)
 roadmap_all = (docs_dir / "03-升级路线图.md").read_text(encoding="utf-8")
 for milestone in ("M30", "M31", "M32", "M33", "M34", "M35", "M36",
                   "M37", "M38", "M39", "M40", "M41", "M42", "M43", "M44", "M45",
-                  "M46"):
+                  "M46", "M47"):
     check(f"路线图含里程碑 {milestone}", f"里程碑 {milestone}" in roadmap_all)
 
 
@@ -1256,6 +1269,157 @@ _zhuiju_docs = "\n".join(
 check("文档记录 ADR-70", "ADR-70" in (docs_dir / "04-决策记录.md").read_text(encoding="utf-8"))
 check("文档说明 reachable 不等于可搜索", "reachable" in _zhuiju_docs and "searchable" in _zhuiju_docs)
 check("文档致谢上游项目", "awesome-zhuiju-free" in _zhuiju_docs)
+
+# ---- v1.15.0：搜索熔断 + 下载「真实结局」 ----
+breaker_src = pathlib.Path("app/services/search_breaker.py").read_text(encoding="utf-8")
+search_src = pathlib.Path("app/services/search.py").read_text(encoding="utf-8")
+routing_src = pathlib.Path("app/services/download_routing.py").read_text(encoding="utf-8")
+dl_router_src = pathlib.Path("app/api/routers/downloads.py").read_text(encoding="utf-8")
+check("搜索熔断服务存在", pathlib.Path("app/services/search_breaker.py").exists())
+check("搜索熔断测试存在", pathlib.Path("tests/test_search_breaker.py").exists())
+
+# ① 下载必须如实回报结局：失败不能报 success:true
+check("下载按真实状态回报成败",
+      "ok = task.status != TaskStatus.FAILED.value" in dl_router_src)
+check("下载失败带出原因", 'payload["message"] = task.error' in dl_router_src)
+check("网盘 pending 给下一步提示", "pan_pending_hint()" in dl_router_src)
+check("前端按 success 分别提示", "res.success === false" in app_js)
+check("toast 支持 warn 变体", ".toast.warn" in
+      pathlib.Path("web/assets/style.css").read_text(encoding="utf-8"))
+
+# ② 前置检查要看连通性，判据必须是 down（写死 "error" 会静默失效）
+check("routing 检查下载器连通性", "downloader_reachability" in routing_src)
+check("连通性判据用 SiteHealthStatus.DOWN",
+      "SiteHealthStatus.DOWN.value" in routing_src)
+check("routing 带出 unreachable", '"unreachable": dead' in routing_src)
+
+# ③ 慢站熔断：只对「吃满预算且零结果」计数
+for token in ("record_timeout", "record_success", "is_open", "skip_reason", "snapshot"):
+    check(f"熔断器函数 {token}", f"def {token}" in breaker_src)
+check("熔断在搜索链路生效", "search_breaker.is_open(provider.site_name)" in search_src)
+check("命中后清零熔断计数",
+      "search_breaker.record_success(provider.site_name)" in search_src)
+check("跳过状态写进诊断", '"skipped"' in search_src)
+check("熔断只认超时且零结果", 'outcome.status == "timeout"' in search_src)
+for key in ("SEARCH_BREAKER_ENABLED", "SEARCH_BREAKER_THRESHOLD",
+            "SEARCH_BREAKER_COOLDOWN_MINUTES"):
+    check(f"熔断配置项 {key}", key in config_src and key in config_store.EDITABLE)
+for path in ("/api/v1/search/breaker", "/api/v1/search/breaker/reset"):
+    check(f"端点存在 {path}", path in paths)
+
+# ④ Docker 版本不一致：:latest 是可变 tag，必须 pull_policy: always
+for compose in ("docker-compose.yml", "docker-compose.fnos.yml"):
+    text = pathlib.Path(compose).read_text(encoding="utf-8")
+    check(f"{compose} 声明 pull_policy", "pull_policy: always" in text)
+    check(f"{compose} 说明为何需要", "可变 tag" in text)
+
+_v15_docs = "\n".join(
+    (docs_dir / f).read_text(encoding="utf-8")
+    for f in ("04-决策记录.md", "08-变更日志.md", "15-常见问题.md")
+)
+check("文档记录 ADR-71", "ADR-71" in (docs_dir / "04-决策记录.md").read_text(encoding="utf-8"))
+check("文档记录 ADR-72", "ADR-72" in (docs_dir / "04-决策记录.md").read_text(encoding="utf-8"))
+check("文档说明镜像不更新的原因", "pull_policy" in _v15_docs)
+check("文档说明熔断机制", "熔断" in _v15_docs)
+
+# ⑤ 静默缺口：白名单里能改的项，设置页必须有入口（本轮实测发现 4 项没挂分组）
+from app.api.routers.system import SETTING_GROUPS  # noqa: E402
+
+_shown_keys = {k for g in SETTING_GROUPS for k in g["keys"]}
+_orphan = sorted(k for k in config_store.EDITABLE if k not in _shown_keys)
+check("可改配置全部有设置页入口", _orphan == [], f"没挂分组：{_orphan}")
+check("设置页分组 17 组", len(SETTING_GROUPS) == 17, f"实际 {len(SETTING_GROUPS)}")
+
+# ⑥ 后端返回的每站诊断必须真的渲染出来（v1.6.0 就有数据，界面一直没用）
+# 判据要钉住「定义 + 真的被调用」：只查函数名前缀的话，改个名字照样能通过
+check("搜索页渲染站点情况卡片",
+      "function siteReportCard(sites, onReset)" in app_js
+      and "siteReportCard(searchState.sites" in app_js)
+# 只截固定字符数会把后面 ORDER 表里的同名 key 也算进来，必须严格切到对象结尾
+_status_body = app_js.split("const SITE_STATUS = {")[1].split("};")[0]
+check("站点情况覆盖五种状态",
+      all(f"{key}:" in _status_body
+          for key in ("ok", "empty", "timeout", "skipped", "error")),
+      _status_body.replace("\n", " ")[:80])
+check("搜索保存站点诊断", "searchState.sites = data.sites" in app_js)
+check("有站点未出货时提示不报全绿", "个站点未出货" in app_js)
+check("站点情况提供解除熔断入口", "/search/breaker/reset" in app_js)
+
+# ⑦ 后端白名单里带专用 Referer 的图床，前端必须真的走代理
+_img_src = pathlib.Path("app/api/routers/images.py").read_text(encoding="utf-8")
+check("Bangumi 图床在后端白名单", '"bgm.tv"' in _img_src)
+check("Bangumi 封面走图片代理", '"bgm.tv"' in app_js.split("const PROXY_HOSTS")[1][:200])
+
+# ⑧ 切页必须关掉遗留弹窗：遮罩留在 #modal-root 会让新页面「看得见点不动」
+check("存在关闭遗留弹窗的函数", "function closeAllModals()" in app_js)
+check("closeAllModals 在 render 里被调用",
+      "closeAllModals();" in app_js.split("async function render()")[1][:400])
+check("closeAllModals 清空 modal-root",
+      'getElementById("modal-root")' in
+      app_js.split("function closeAllModals()")[1][:260])
+
+# ⑨ 同源封面图会占满浏览器连接池，切屏后必须把脱离文档的图请求还回来
+check("存在封面在飞清单", "const livePosters = []" in app_js)
+# 判据不能只查子串：注释掉的 "// livePosters.push(image);" 也含这段文本，
+# 改坏验证会漏。必须确认存在一行**未被注释**的调用。
+check("封面登记进在飞清单",
+      any(line.strip().startswith("livePosters.push(image)")
+          for line in app_js.splitlines()))
+check("存在脱离文档的封面回收函数", "function abortDetachedPosters()" in app_js)
+# 判据必须是 isConnected（脱离文档）而不是「切页全清」：全清会把当前屏
+# 正在加载的封面一起掐掉，新页面封面会全变占位块
+check("回收判据用 isConnected",
+      "!image.isConnected" in app_js.split("function abortDetachedPosters()")[1][:600])
+# shell() 是所有页面渲染的唯一出口，挂在 render() 上会漏掉 pageTrending 的自调用
+check("shell 收尾回收封面连接",
+      "abortDetachedPosters();" in app_js.split("function shell(")[1].split("\n  }")[0])
+check("榜单重绘 listBox 后也回收",
+      app_js.count("abortDetachedPosters();") >= 2)
+# 钉死标题行本身："ADR-73" 这种裸子串被 "ADR-73X" 之类改名照样能过
+check("ADR-73 记录连接池取舍",
+      "## ADR-73 ·" in (docs_dir / "04-决策记录.md").read_text(encoding="utf-8"))
+_uic = pathlib.Path("scripts/ui_check.py").read_text(encoding="utf-8")
+check("ui_check 放行主动中止的封面请求",
+      'if "err_aborted" in lowered and _looks_like_image(lowered):' in _uic
+      and "def _looks_like_image(" in _uic)
+# 子资源报错不带 URL 的话根本没法定位是谁挂了，必须把 location 带出来
+check("ui_check 控制台报错带出处", 'msg.location or {}' in _uic)
+# 失败请求记成 "GET <url> -> <failure>"，拿整行判后缀永远是 False
+check("ui_check 从失败行里切出 URL 再判后缀", "def _request_url(" in _uic)
+# 控制台报错记成 "... <- url"，与失败请求的 "GET url -> failure" 格式不同，两种都要能切
+check("ui_check 认得控制台报错的出处格式", '" <- " in lowered' in _uic)
+# 外站图 404/403 是上游下架，属噪声；但**本机**的图片代理报错是真缺陷，
+# 本轮正是靠它抓出 Bangumi 原图超时 502 与 TLS 抖动 502，绝不能一起放行
+_noise_body = _uic.split("def _is_noise(")[1].split("\nreal_errors")[0]
+check("ui_check 放行外站图 404/403",
+      '"status of 404" in lowered' in _noise_body)
+check("ui_check 不放行本机图片代理报错",
+      'BASE.replace("http://", "") not in lowered' in _noise_body
+      and _noise_body.count('BASE.replace("http://", "") not in lowered') >= 2)
+
+# ⑩ Bangumi 卡片封面必须取 common 而不是原图 large（原图会把代理 15s 超时打爆 → 502 裂图）
+_bgm_src = pathlib.Path("app/providers/metadata/bangumi.py").read_text(encoding="utf-8")
+check("Bangumi 有封面尺寸优先级表", "COVER_SIZE_PRIORITY" in _bgm_src)
+check("Bangumi 封面优先 common", 'COVER_SIZE_PRIORITY = ("common"' in _bgm_src)
+# large 排在 medium 后面：谁把原图挪回第一位，这条就红
+_prio = _bgm_src.split("COVER_SIZE_PRIORITY = (")[1].split(")")[0]
+check("Bangumi 原图不得排在缩略图之前",
+      _prio.index('"large"') > _prio.index('"medium"'), _prio)
+check("Bangumi 用 pick_cover 取封面", "poster = pick_cover(item.get(\"images\"))" in _bgm_src)
+check("Bangumi 封面尺寸有实测依据", "13216 ms" in _bgm_src)
+
+# ⑪ 图片代理必须能吸收连接层抖动：bgm.tv 的 TLS 实测会被间歇掐断，
+# 而镜像轮换只对豆瓣有效（其它图床只有 1 个候选），一次抖动就 502 → 随机裂图
+check("图片代理声明单候选重试次数", "MAX_ATTEMPTS_PER_CANDIDATE = " in _img_src)
+_retry_block = _img_src.split("for candidate in candidates:")[1][:900]
+check("图片代理对连接异常重试",
+      "for attempt in range(MAX_ATTEMPTS_PER_CANDIDATE)" in _retry_block)
+# 拿到响应必须 break：403/404 重试多少次都一样，重试反而拖慢
+check("图片代理不重试 HTTP 状态码错误", "break" in _retry_block)
+check("重试次数有实测依据", "UNEXPECTED_EOF" in _img_src)
+check("图片代理重试有回归用例",
+      "def test_proxy_retries_after_tls_drop(" in
+      pathlib.Path("tests/test_image_proxy.py").read_text(encoding="utf-8"))
 
 print()
 print("=" * 60)

@@ -145,6 +145,14 @@ SETTING_GROUPS: list[dict[str, Any]] = [
             "SEARCH_TIMEOUT",
             "SEARCH_MAX_RESULTS",
             "SEARCH_CONCURRENCY",
+            # ⚠️ 这四项在 config_store.EDITABLE 里，却一直没被任何分组引用 ——
+            # 后端允许改、设置页却没有入口，用户只能去猜环境变量名（静默缺口）。
+            # v1.15.0 补上，并由 test_settings_groups_cover_every_editable_key 钉住：
+            # 以后往白名单加项忘了挂分组，测试直接转红。
+            "SEARCH_MAX_PER_SITE",
+            "SEARCH_BREAKER_ENABLED",
+            "SEARCH_BREAKER_THRESHOLD",
+            "SEARCH_BREAKER_COOLDOWN_MINUTES",
             "AUTO_DOWNLOAD_BEST",
             "PREFER_RESOLUTIONS",
             "EXCLUDE_KEYWORDS",

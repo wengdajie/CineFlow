@@ -226,3 +226,36 @@ def test_settings_api_rejects_non_whitelisted_key(client, auth_headers):
     )
     assert response.status_code == 400
     assert settings.SECRET_KEY != "hacked"
+
+
+def test_settings_groups_cover_every_editable_key() -> None:
+    """白名单里能改的项，设置页必须有入口。
+
+    实测踩过的静默缺口：``SEARCH_MAX_PER_SITE`` 与三个熔断项都在
+    ``EDITABLE`` 里（后端接受 PUT），但 ``SETTING_GROUPS`` 从没引用它们 ——
+    界面上根本找不到，用户只能去猜环境变量名。这类缺口不会抛异常、
+    也不影响任何既有用例，只能靠这条覆盖断言钉住。
+    """
+    from app.api.routers.system import SETTING_GROUPS
+
+    shown = {key for group in SETTING_GROUPS for key in group["keys"]}
+    missing = sorted(key for key in config_store.EDITABLE if key not in shown)
+    assert missing == [], f"这些项能在线改却没有设置页入口：{missing}"
+
+
+def test_settings_api_returns_breaker_keys(client, auth_headers) -> None:
+    """熔断三项要真的出现在接口返回里，且标记为可改。"""
+    response = client.get("/api/v1/system/settings", headers=auth_headers)
+    assert response.status_code == 200
+    items = {
+        item["key"]: item
+        for group in response.json()["groups"]
+        for item in group["items"]
+    }
+    for key in (
+        "SEARCH_BREAKER_ENABLED",
+        "SEARCH_BREAKER_THRESHOLD",
+        "SEARCH_BREAKER_COOLDOWN_MINUTES",
+    ):
+        assert key in items, key
+        assert items[key]["editable"] is True

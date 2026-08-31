@@ -115,6 +115,13 @@ class Settings(BaseSettings):
     #: 单站安全阀：防某站返回上万条拖死后续处理（0=不限）。公平性由轮转交错保证，不靠砍量
     SEARCH_MAX_PER_SITE: int = 300
     SEARCH_CONCURRENCY: int = 8
+    #: 搜索熔断：一个站连续 N 次「吃满超时预算且零结果」就冷却一段时间。
+    #: asyncio.gather 要等最慢的站，所以一个连不通的站会决定所有人的等待时间
+    #: （实测 YouTube 连不上时把 25s 预算吃满，其余站 5s 内全回来了）。
+    SEARCH_BREAKER_ENABLED: bool = True
+    SEARCH_BREAKER_THRESHOLD: int = 3
+    #: 冷却分钟数；0=只计数不熔断。到期自动半开，恢复后从零计数
+    SEARCH_BREAKER_COOLDOWN_MINUTES: int = 10
     AUTO_DOWNLOAD_BEST: bool = True
     PREFER_RESOLUTIONS: list[str] = Field(
         default_factory=lambda: ["2160p", "1080p", "720p"]

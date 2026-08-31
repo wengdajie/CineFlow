@@ -66,6 +66,9 @@ YAML 里的二级 key 会拍平成 `CF_<父>_<子>`，例如 `tmdb.api_key` → 
 | 告警去抖窗口 | `CF_NOTIFY_ALERT_COOLDOWN_MINUTES` | `360` | 分钟，`0`=不去抖。同一条告警（站点掉线/网盘失效）的最短重复间隔 |
 | 限速时段周期 | `CF_SPEED_LIMIT_INTERVAL_MINUTES` | `10` | 分钟，`0`=关闭。时段切换只需分钟级精度 |
 | 搜索超时 | `CF_SEARCH_TIMEOUT` | `25` | 秒。⚠️ v1.13.0 起是**单个站点的总预算**（旧版是每个关键词各一次），带季集的订阅最坏耗时不再翻 3 倍 |
+| 慢站熔断 | `CF_SEARCH_BREAKER_ENABLED` | `true` | v1.15.0。聚合搜索要等最慢的站，一个连不通的站会决定所有人的等待时间（实测吃满 25s 预算返回 0 条） |
+| 熔断阈值 | `CF_SEARCH_BREAKER_THRESHOLD` | `3` | 连续几次「吃满预算且零结果」才熔断。**慢但有结果的站不会被熔断**（盘搜 19s / 2529 条） |
+| 熔断冷却 | `CF_SEARCH_BREAKER_COOLDOWN_MINUTES` | `10` | 分钟，`0`=只计数不熔断。到期自动半开且从零计数；状态只在内存里，重启即清空 |
 | 内置 AI 开关 | `CF_AI_ENABLED` | `false` | **默认关闭**。开启后分析站点会把页面正文发给你配的模型，必须显式同意 |
 | AI 接口地址 | `CF_AI_BASE_URL` | `https://api.openai.com/v1` | OpenAI 兼容的 `/chat/completions`；Ollama 填 `http://主机:11434/v1` |
 | AI 密钥 | `CF_AI_API_KEY` | 空 | 本地模型可留空。设置页里**留空表示不修改**（脱敏不回显，防误清空） |
@@ -106,16 +109,16 @@ curl -X POST -H "X-API-Token: your-token" \
      http://127.0.0.1:6060/api/v1/subscribes/run-all
 ```
 
-主要端点分组（共 163 个端点）：
+主要端点分组（共 165 个端点）：
 
 | 前缀 | 用途 |
 |---|---|
 | `/api/v1/auth` | 登录、当前用户、改密 |
-| `/api/v1/search` | 聚合搜索（GET 快查 / POST 带完整过滤条件） |
+| `/api/v1/search` | 聚合搜索（GET 快查 / POST 带完整过滤条件）；**慢站熔断**（v1.15.0）：`GET /search/breaker` 看哪些站在冷却、还剩多久，`POST /search/breaker/reset` 手动解除（不传 `site` 则全部清空） |
 | `/api/v1/trending` | 热度排行 / 发现榜：总览、资源榜、实时榜、搜索热词、站点贡献榜、**豆瓣条目查询**、豆瓣四分类、B 站分区、YouTube 地区榜、**Bangumi 放送日历** |
 | `/api/v1/images` | **封面图代理**（绕过豆瓣图床防盗链，带白名单 SSRF 防护，匿名可用） |
 | `/api/v1/subscribes` | 订阅 CRUD、缺集查询、单个/全部巡检 |
-| `/api/v1/downloads` | 任务列表、手动添加、暂停恢复、删除、同步、**资源类型→下载方式路由**（`GET /downloads/routing`：每类资源该走哪个下载器、现在缺什么、缺了去哪儿加） |
+| `/api/v1/downloads` | 任务列表、手动添加、暂停恢复、删除、同步、**资源类型→下载方式路由**（`GET /downloads/routing`：每类资源该走哪个下载器、现在缺什么、缺了去哪儿加；v1.15.0 起还会带 `unreachable` —— 巡检显示连不上的下载器）。⚠️ v1.15.0 起 `POST /downloads` 的 `success` 表示**投递的真实结局**：下载器拒绝时为 `false` 且 `message` 写明原因（HTTP 仍是 200，任务可查可重试）；`pending` 为 `true` 但带下一步提示 |
 | `/api/v1/library` | 统计、文件列表、扫描、手动整理、整理记录、刷新 |
 | `/api/v1/media` | 资源名识别、TMDB 搜索/详情/分集/热榜 |
 | `/api/v1/sites` | 站点 CRUD、连通性测试、Provider 清单、预设模板、导航站发现；**社区清单**（v1.14.0）：`GET /sites/catalog` 查询候选（`?refresh=true` 强制拉取、`?probe=searchable` 只看可搜索的）、`POST /sites/catalog/probe` 真搜一次做可用性探测、`POST /sites/catalog/{entry_id}/apply` 一键添加（**仅 `searchable` 允许，其余返回 400 并说明原因**） |
@@ -152,7 +155,7 @@ cineflow/
 │   │                  pan_storage scraper strm_sync pan_subscribe upgrade
 │   │                  config_store site_health ranking rule_groups
 │   │                  video_subscribe speed_limit changelog
-│   │                  download_routing ai_site
+│   │                  download_routing ai_site zhuiju search_breaker
 │   │                  chatops/
 │   ├── plugins/       base manager
 │   ├── api/           deps router + routers/(24)
@@ -161,7 +164,7 @@ cineflow/
 │   └── main.py        应用入口（lifespan / CORS / 静态资源）
 ├── web/               index.html + assets/(app.js style.css)  ← 零依赖前端
 ├── plugins/           auto_cleanup pan_transfer daily_digest  ← 示例插件
-├── tests/             49 个测试文件
+├── tests/             50 个测试文件
 ├── scripts/           smoke_test / ui_check / demo_pipeline 验证脚本
 ├── docs/              16 篇维护文档（现状/架构/路线图/决策/运维/站点接入/变更日志/竞品对标…）
 ├── config/            config.yaml.example
