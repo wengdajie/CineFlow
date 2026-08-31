@@ -195,6 +195,17 @@ class Settings(BaseSettings):
     SITE_HEALTH_INTERVAL_MINUTES: int = 180
     #: 连续失败多少次后发出掉线告警
     SITE_HEALTH_FAIL_THRESHOLD: int = 3
+
+    # ---- 社区站点清单（awesome-zhuiju-free） ----
+    #: 是否自动同步社区维护的追剧站点清单（只拉 JSON，不外发任何本地数据）
+    ZHUIJU_SYNC_ENABLED: bool = True
+    #: 清单同步间隔（分钟），0 表示关闭。上游每天 01:00(UTC+8) 更新一次，1440 足够
+    ZHUIJU_SYNC_INTERVAL_MINUTES: int = 1440
+    #: 同步后是否顺带对候选站点做一次「真搜一次」探测。
+    #: 默认开：上游只探首页，`reachable` 里有大半其实搜不到东西（见 ADR-70）。
+    ZHUIJU_PROBE_ON_SYNC: bool = True
+    #: 单轮最多探测多少个候选站（探测要打别人的站，串行且留间隔，不宜太多）
+    ZHUIJU_PROBE_LIMIT: int = 20
     #: 达到告警阈值后是否自动停用该站点（默认不停用，只告警）
     SITE_AUTO_DISABLE: bool = False
 

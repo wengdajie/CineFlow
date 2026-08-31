@@ -73,6 +73,10 @@ YAML 里的二级 key 会拍平成 `CF_<父>_<子>`，例如 `tmdb.api_key` → 
 | AI 超时 | `CF_AI_TIMEOUT` | `60` | 秒。要读整页 HTML，别设太短 |
 | AI 正文上限 | `CF_AI_MAX_PAGE_CHARS` | `16000` | 发给模型的正文字符上限，超出则头尾各留一半 |
 | AI 温度 | `CF_AI_TEMPERATURE` | `0.0` | 分析结构要稳定输出，建议保持 0 |
+| 社区清单同步 | `CF_ZHUIJU_SYNC_ENABLED` | `true` | 定时拉取 awesome-zhuiju-free 站点清单。只更新候选目录与探测结论，**不会自动增删你的站点** |
+| 清单同步周期 | `CF_ZHUIJU_SYNC_INTERVAL_MINUTES` | `1440` | 分钟。上游每天更新一次，查更勤没有意义 |
+| 同步时顺带探测 | `CF_ZHUIJU_PROBE_ON_SYNC` | `true` | 用真实关键词逐站真搜一次判定可用性；关掉则只更新清单 |
+| 单次探测上限 | `CF_ZHUIJU_PROBE_LIMIT` | `20` | 探测是串行且带间隔的（约 20 秒/站），上限防止一次跑太久 |
 
 > 上表中**除密钥、目录、端口外的绝大多数项都能在设置页直接改并立即生效**，
 > 不必改文件重启。
@@ -102,7 +106,7 @@ curl -X POST -H "X-API-Token: your-token" \
      http://127.0.0.1:6060/api/v1/subscribes/run-all
 ```
 
-主要端点分组（共 160 个端点）：
+主要端点分组（共 163 个端点）：
 
 | 前缀 | 用途 |
 |---|---|
@@ -114,7 +118,7 @@ curl -X POST -H "X-API-Token: your-token" \
 | `/api/v1/downloads` | 任务列表、手动添加、暂停恢复、删除、同步、**资源类型→下载方式路由**（`GET /downloads/routing`：每类资源该走哪个下载器、现在缺什么、缺了去哪儿加） |
 | `/api/v1/library` | 统计、文件列表、扫描、手动整理、整理记录、刷新 |
 | `/api/v1/media` | 资源名识别、TMDB 搜索/详情/分集/热榜 |
-| `/api/v1/sites` | 站点 CRUD、连通性测试、Provider 清单、预设模板、导航站发现 |
+| `/api/v1/sites` | 站点 CRUD、连通性测试、Provider 清单、预设模板、导航站发现；**社区清单**（v1.14.0）：`GET /sites/catalog` 查询候选（`?refresh=true` 强制拉取、`?probe=searchable` 只看可搜索的）、`POST /sites/catalog/probe` 真搜一次做可用性探测、`POST /sites/catalog/{entry_id}/apply` 一键添加（**仅 `searchable` 允许，其余返回 400 并说明原因**） |
 | `/api/v1/radar` | 追新雷达：手动追新、预览匹配、最新流预览、任务状态 |
 | `/api/v1/ranking-rules` | 榜单自动订阅：规则 CRUD、试算候选、单条/全部执行 |
 | `/api/v1/rule-groups` | 过滤规则组：CRUD、设为默认、样例资源试算分层 |
@@ -157,7 +161,7 @@ cineflow/
 │   └── main.py        应用入口（lifespan / CORS / 静态资源）
 ├── web/               index.html + assets/(app.js style.css)  ← 零依赖前端
 ├── plugins/           auto_cleanup pan_transfer daily_digest  ← 示例插件
-├── tests/             48 个测试文件
+├── tests/             49 个测试文件
 ├── scripts/           smoke_test / ui_check / demo_pipeline 验证脚本
 ├── docs/              16 篇维护文档（现状/架构/路线图/决策/运维/站点接入/变更日志/竞品对标…）
 ├── config/            config.yaml.example

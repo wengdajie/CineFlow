@@ -35,6 +35,7 @@ JOB_SCRAPE = "cineflow.scrape"
 JOB_UPGRADE = "cineflow.upgrade"
 JOB_SITE_HEALTH = "cineflow.site_health"
 JOB_RANKING = "cineflow.ranking"
+JOB_ZHUIJU_SYNC = "cineflow.zhuiju_sync"
 _PLUGIN_PREFIX = "plugin."
 
 #: 间隔型任务允许的分钟范围
@@ -195,6 +196,17 @@ def builtin_specs() -> list[JobSpec]:
             enabled=bool(settings.RANKING_INTERVAL_MINUTES > 0),
         ),
         JobSpec(
+            key="zhuiju_sync",
+            job_id=JOB_ZHUIJU_SYNC,
+            name="社区站点清单同步（awesome-zhuiju-free）",
+            description="拉取社区维护的追剧站点清单，并真搜一次判定哪些站能拿到可下载链接",
+            trigger="interval",
+            minutes=settings.ZHUIJU_SYNC_INTERVAL_MINUTES or 1440,
+            enabled=bool(
+                settings.ZHUIJU_SYNC_ENABLED and settings.ZHUIJU_SYNC_INTERVAL_MINUTES > 0
+            ),
+        ),
+        JobSpec(
             key="scrape",
             job_id=JOB_SCRAPE,
             name="媒体库补刮（NFO + 图片）",
@@ -312,6 +324,7 @@ class SchedulerService:
         from app.services import subscribe as subscribe_service
         from app.services import upgrade as upgrade_service
         from app.services import video_subscribe as video_subscribe_service
+        from app.services import zhuiju as zhuiju_service
 
         targets: dict[str, tuple[Callable[..., Any], dict[str, Any]]] = {
             "subscribe": (subscribe_service.run_all, {}),
@@ -337,6 +350,7 @@ class SchedulerService:
             "site_health": (health_service.check_all, {}),
             "speed_limit": (speed_limit_service.apply_now, {}),
             "ranking": (ranking_service.run, {}),
+            "zhuiju_sync": (zhuiju_service.sync, {}),
         }
         if key not in targets:
             raise ValueError(f"未知任务: {key}")

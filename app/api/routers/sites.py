@@ -16,6 +16,7 @@ from app.schemas.models import Message, SiteCreate, SiteOut, SiteUpdate
 from app.services import discovery as discovery_service
 from app.services import presets as preset_service
 from app.services import sites as site_service
+from app.services import zhuiju as zhuiju_service
 
 router = APIRouter(prefix="/sites", tags=["站点管理"])
 
@@ -176,3 +177,114 @@ async def discover_sites(
 
     data["directories_builtin"] = discovery_service.DEFAULT_DIRECTORIES
     return {"success": True, "data": data}
+@router.get("/catalog", summary="社区站点清单（awesome-zhuiju-free）")
+async def zhuiju_catalog(
+    session: DbSession,
+    user: CurrentUser,
+    refresh: bool = False,
+    probe: str | None = None,
+) -> dict[str, Any]:
+    """列出社区维护的追剧站点候选清单。
+
+    数据来自 [awesome-zhuiju-free](https://github.com/laoma2053/awesome-zhuiju-free)
+    （CC-BY-4.0）。⚠️ `probe` 字段是**我们自己真搜一次**的结论，与上游的
+    `reachability`（只探首页状态码）不是一回事：实测 20 个候选里上游标
+    `reachable` 的有 14 个，而真能搜到可下载链接的只有 4 个（ADR-70）。
+    """
+    data = await zhuiju_service.refresh() if refresh else zhuiju_service.load()
+    entries = list(data.get("entries") or [])
+    if probe:
+        wanted = {p.strip() for p in probe.split(",") if p.strip()}
+        entries = [e for e in entries if str(e.get("probe") or "unknown") in wanted]
+
+    # 标注已添加过的站点，避免重复配置（同「站点发现」的做法）
+    existing = [
+        (row.url or "").lower() for row in session.execute(select(SiteConfig)).scalars()
+    ]
+    for item in entries:
+        domain = str(item.get("domain") or "")
+        item["already_added"] = bool(
+            domain and any(domain in configured for configured in existing)
+        )
+
+    return {
+        "success": True,
+        "data": {
+            "entries": entries,
+            "stats": zhuiju_service.stats(list(data.get("entries") or [])),
+            "updated_at": data.get("updated_at") or "",
+            "upstream_updated_at": data.get("upstream_updated_at") or "",
+            "probed_at": data.get("probed_at") or "",
+            "stale": bool(data.get("stale")),
+            "error": data.get("error"),
+            "upstream": {
+                "repo": zhuiju_service.UPSTREAM_REPO,
+                "url": zhuiju_service.UPSTREAM_URL,
+                "license": zhuiju_service.UPSTREAM_LICENSE,
+                "site": zhuiju_service.UPSTREAM_SITE,
+            },
+        },
+    }
+
+
+@router.post("/catalog/probe", summary="探测社区清单站点是否真能搜到资源")
+async def zhuiju_probe(
+    user: AdminUser,
+    limit: int = 20,
+    only_unknown: bool = False,
+) -> dict[str, Any]:
+    """对候选站点逐个「真搜一次」，判定能否拿到可下载链接。
+
+    串行执行且留间隔（别人的站，且实测个别站有搜索限流），20 个站约需 1~3 分钟。
+    """
+    result = await zhuiju_service.probe_all(limit=limit, only_unknown=only_unknown)
+    return {"success": True, "data": result}
+
+
+@router.post("/catalog/{entry_id}/apply", response_model=SiteOut, summary="从社区清单添加站点")
+def zhuiju_apply(
+    entry_id: str,
+    session: DbSession,
+    user: AdminUser,
+    enabled: bool = False,
+) -> SiteOut:
+    """把一个**通过本地探测**的候选站点落库为可用站点。
+
+    只允许 `searchable` 档：`reachable_only` 的站加进来也搜不到东西，
+    等于给用户一个「加了但没用」的坑（沿用 v1.13.0 AI 接站的立场）。
+    默认 `enabled=False`，由用户确认后再启用。
+    """
+    suggestion = zhuiju_service.suggest_site(entry_id)
+    if not suggestion:
+        raise HTTPException(status_code=404, detail="清单中没有该条目")
+    if not suggestion.get("ok"):
+        raise HTTPException(
+            status_code=400,
+            detail=str(suggestion.get("reason") or "该站点未通过本地搜索探测"),
+        )
+
+    url = str(suggestion.get("url") or "")
+    exists = session.execute(
+        select(SiteConfig).where(SiteConfig.url == url)
+    ).scalar_one_or_none()
+    if exists:
+        raise HTTPException(status_code=400, detail=f"站点已存在：{exists.name}")
+
+    site = SiteConfig(
+        name=str(suggestion.get("name") or entry_id),
+        kind=str(suggestion.get("kind") or ProviderKind.INDEXER.value),
+        provider=str(suggestion.get("provider") or "html_generic"),
+        url=url,
+        enabled=bool(enabled),
+        priority=40,
+        options={
+            **(suggestion.get("options") or {}),
+            "_from_zhuiju": entry_id,
+            "note": f"由社区清单 {zhuiju_service.UPSTREAM_REPO} 添加，已通过本地搜索探测",
+        },
+        updated_at=utcnow(),
+    )
+    session.add(site)
+    session.commit()
+    session.refresh(site)
+    return _to_out(site)

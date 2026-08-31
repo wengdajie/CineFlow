@@ -2,5 +2,5 @@
 
 APP_NAME = "CineFlow"
 APP_TITLE = "CineFlow 自动化观影追剧平台"
-APP_VERSION = "1.13.0"
+APP_VERSION = "1.14.0"
 API_PREFIX = "/api/v1"

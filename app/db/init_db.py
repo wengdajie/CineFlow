@@ -264,6 +264,46 @@ DEFAULT_SITES = [
         "options": {"note": "部署 pansou 服务后填写其地址"},
     },
     {
+        # v1.14.0：由 awesome-zhuiju-free 清单实测筛出的两个「搜索即能拿到
+        # 可用网盘链接」的站（20 个候选里只有这 4 个过关，另两个是我们已覆盖的
+        # acg.rip/nyaa 与 btsj6）。两站同模板，共用 kkso Provider。
+        # 默认启用：无需填地址账号，且实测稳定（庆余年 5/10 条、凡人 10/10 条）。
+        "name": "KK 网盘搜",
+        "kind": ProviderKind.PAN.value,
+        "provider": "kkso",
+        "url": "https://kkso.net",
+        "enabled": True,
+        "priority": 25,
+        "options": {"note": "开箱可用的网盘搜索（夸克/百度/迅雷）。"
+                            "来自 awesome-zhuiju-free 清单，经本地搜索探测实测可用"},
+    },
+    {
+        "name": "追剧 zhuiju.us",
+        "kind": ProviderKind.PAN.value,
+        "provider": "kkso",
+        "url": "https://www.zhuiju.us",
+        "enabled": True,
+        "priority": 26,
+        "options": {"note": "与 KK 网盘搜同模板，资源以百度/迅雷为主且更新更勤"
+                            "（实测提取码拼在链接 ?pwd= 上，已自动提取）"},
+    },
+    {
+        # 实测 ?s= 搜索页直出 20 条磁力且标题含季集信息；/s/ 形态是 404
+        "name": "BT 世界网",
+        "kind": ProviderKind.INDEXER.value,
+        "provider": "html_generic",
+        "url": "https://www.btsj6.com",
+        "enabled": False,
+        "priority": 48,
+        "options": {
+            "note": "来自 awesome-zhuiju-free 清单，实测「凡人修仙传」直出 20 条磁力；"
+                    "注意搜索路径是 ?s=（/s/ 会 404）。热门剧命中好，冷门片可能 0 条",
+            "search_url": "https://www.btsj6.com/?s={keyword}",
+            "magnet_only": True,
+            "max_rows": 60,
+        },
+    },
+    {
         "name": "qBittorrent",
         "kind": ProviderKind.DOWNLOADER.value,
         "provider": "qbittorrent",

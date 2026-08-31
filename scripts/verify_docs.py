@@ -46,8 +46,8 @@ from app.providers.registry import list_providers, load_builtin_providers  # noq
 load_builtin_providers()
 providers = list_providers()
 names = {p["name"] for p in providers}
-check("Provider 总数 30", len(providers) == 30, f"实际 {len(providers)}")
-check("README 声明 30 个 Provider", "30 个注册 Provider" in README)
+check("Provider 总数 31", len(providers) == 31, f"实际 {len(providers)}")
+check("README 声明 31 个 Provider", "31 个注册 Provider" in README)
 for expected in ("api_generic", "html_generic", "mukaku", "pan_generic",
                  "torznab", "rss", "nyaa", "pansou",
                  # v1.7.0 新增：两个视频站搜索 + 两个资源站
@@ -69,18 +69,24 @@ for table in ("audit_logs", "pan_saves", "pan_subscribes", "strm_records",
 # ---- 默认站点 ----
 from app.db.init_db import DEFAULT_SITES  # noqa: E402
 
-check("默认示例站点 24 条", len(DEFAULT_SITES) == 24, f"实际 {len(DEFAULT_SITES)}")
-check("README 声明 24 条示例站点", "写入 24 条" in README)
+check("默认示例站点 27 条", len(DEFAULT_SITES) == 27, f"实际 {len(DEFAULT_SITES)}")
+check("README 声明 27 条示例站点", "写入 27 条" in README)
 check("默认站点含 webdav", any(s["provider"] == "webdav" for s in DEFAULT_SITES))
-# 需要填地址/账号的站点必须默认禁用（示例值直接跑必然报错）；
-# yt-dlp 是本地库调用、装了依赖就能用，是唯一例外
+# 需要填地址/账号的站点必须默认禁用（示例值直接跑必然报错）。
+# 白名单：yt-dlp 是本地库调用；kkso 系（kkso.net / zhuiju.us）是 v1.14.0 从
+# awesome-zhuiju-free 清单实测筛出的公开网盘搜索站，不需要任何配置即可用。
+DEFAULT_ENABLED_PROVIDERS = {"ytdlp", "kkso"}
 check(
     "需配置的示例站点默认禁用",
     all(
         not s.get("enabled", False)
         for s in DEFAULT_SITES
-        if s["provider"] != "ytdlp"
+        if s["provider"] not in DEFAULT_ENABLED_PROVIDERS
     ),
+)
+check(
+    "测试与文档共用同一份默认启用白名单",
+    DEFAULT_ENABLED_PROVIDERS == __import__("tests.test_api", fromlist=["x"]).DEFAULT_ENABLED_PROVIDERS,
 )
 check(
     "yt-dlp 默认启用（本地库无需配置）",
@@ -103,12 +109,12 @@ for key, default in (("RADAR_ENABLED", True), ("RADAR_INTERVAL_MINUTES", 15),
 # ---- 调度任务 ----
 scheduler_src = pathlib.Path("app/services/scheduler.py").read_text(encoding="utf-8")
 job_ids = re.findall(r'^JOB_\w+ = "([^"]+)"', scheduler_src, re.M)
-check("内置调度任务 14 个", len(job_ids) == 14, str(job_ids))
-check("README 声明 14 内置任务", "14 内置任务" in README)
+check("内置调度任务 15 个", len(job_ids) == 15, str(job_ids))
+check("README 声明 15 内置任务", "15 内置任务" in README)
 for job in ("cineflow.radar", "cineflow.pan_transfer", "cineflow.pan_subscribe",
             "cineflow.pan_keepalive",
             "cineflow.strm_sync", "cineflow.scrape", "cineflow.upgrade",
-            "cineflow.site_health", "cineflow.ranking"):
+            "cineflow.site_health", "cineflow.ranking", "cineflow.zhuiju_sync"):
     check(f"任务已注册 {job}", job in job_ids)
 
 # ---- API 端点 ----
@@ -121,8 +127,8 @@ try:
         for m in methods
         if m.lower() in ("get", "post", "patch", "delete", "put")
     )
-    check("API 端点 160 个", total == 160, f"实际 {total}")
-    check("README 声明 160 个端点", "160 个端点" in README and "共 160 个" in README)
+    check("API 端点 163 个", total == 163, f"实际 {total}")
+    check("README 声明 163 个端点", "163 个端点" in README and "共 163 个" in README)
     paths = set(spec["paths"])
     for path in ("/api/v1/users", "/api/v1/users/{user_id}",
                  "/api/v1/system/settings", "/api/v1/system/settings/reset",
@@ -229,8 +235,8 @@ check("README 说明定时任务可改期", "定时任务" in README and "cron" 
 
 # ---- 测试文件 ----
 test_files = sorted(p.name for p in pathlib.Path("tests").glob("test_*.py"))
-check("测试文件 48 个", len(test_files) == 48, str(test_files))
-check("README 声明 48 个测试文件", "48 个测试文件" in README)
+check("测试文件 49 个", len(test_files) == 49, str(test_files))
+check("README 声明 49 个测试文件", "49 个测试文件" in README)
 for name in ("test_custom_sites.py", "test_radar.py", "test_trending.py",
              "test_panstorage.py", "test_chatops.py", "test_nfo.py",
              "test_scraper.py", "test_webdav.py", "test_strm_sync.py",
@@ -245,10 +251,10 @@ for script in ("smoke_test.py", "ui_check.py", "demo_pipeline.py", "live_check.p
     check(f"脚本存在 {script}", pathlib.Path("scripts", script).exists())
     check(f"scripts/README 提及 {script}", script in SCRIPTS_README)
 check("文档声明七个验证脚本", "七个开发期验证工具" in README)
-check("README 测试徽章 1148", "tests-1148%20passed" in README_ONLY)
-check("README 版本号 1.13.0", "1.13.0" in README_ONLY)
+check("README 测试徽章 1202", "tests-1202%20passed" in README_ONLY)
+check("README 版本号 1.14.0", "1.14.0" in README_ONLY)
 version_src = pathlib.Path("app/core/version.py").read_text(encoding="utf-8")
-check("代码版本号为 1.13.0", 'APP_VERSION = "1.13.0"' in version_src)
+check("代码版本号为 1.14.0", 'APP_VERSION = "1.14.0"' in version_src)
 check("README 声明 288 项接口用例", "288 项真实 HTTP 接口用例" in README)
 check("scripts/README 声明 288 项", "288 项接口用例" in SCRIPTS_README)
 
@@ -537,7 +543,7 @@ from app.services import config_store  # noqa: E402
 
 cfgstore_src = pathlib.Path("app/services/config_store.py").read_text(encoding="utf-8")
 check("可编辑配置白名单存在", "EDITABLE" in cfgstore_src)
-check("可编辑配置项 59 个", len(config_store.EDITABLE) == 59, f"实际 {len(config_store.EDITABLE)}")
+check("可编辑配置项 63 个", len(config_store.EDITABLE) == 63, f"实际 {len(config_store.EDITABLE)}")
 for func in ("coerce", "update", "reset", "apply_overrides", "describe"):
     check(f"配置仓库函数 {func}", f"def {func}" in cfgstore_src)
 # 不可热改的键绝不能进白名单：改了不生效比改不了更糟
@@ -1184,12 +1190,72 @@ check("变更日志含 v1.10.0", "## v1.10.0" in changelog_text)
 check("变更日志含 v1.12.0", "## v1.12.0" in changelog_text)
 check("变更日志含 v1.12.1", "## v1.12.1" in changelog_text)
 check("变更日志含 v1.13.0", "## v1.13.0" in changelog_text)
+check("变更日志含 v1.14.0", "## v1.14.0" in changelog_text)
 check("变更日志记录破坏性变更", "破坏性变更" in changelog_text)
 roadmap_all = (docs_dir / "03-升级路线图.md").read_text(encoding="utf-8")
 for milestone in ("M30", "M31", "M32", "M33", "M34", "M35", "M36",
-                  "M37", "M38", "M39", "M40", "M41", "M42", "M43", "M44", "M45"):
+                  "M37", "M38", "M39", "M40", "M41", "M42", "M43", "M44", "M45",
+                  "M46"):
     check(f"路线图含里程碑 {milestone}", f"里程碑 {milestone}" in roadmap_all)
 
+
+# ---- v1.14.0：awesome-zhuiju-free 社区站点清单接入 ----
+config_src = pathlib.Path("app/core/config.py").read_text(encoding="utf-8")
+#: /openapi.json 拉不到时 paths 不存在，退化成空集合让相关项显式 FAIL 而不是抛异常
+paths = globals().get("paths") or set()
+zhuiju_src = pathlib.Path("app/services/zhuiju.py").read_text(encoding="utf-8")
+kkso_src = pathlib.Path("app/providers/pan/kkso.py").read_text(encoding="utf-8")
+check("社区清单服务存在", pathlib.Path("app/services/zhuiju.py").exists())
+check("kkso Provider 存在", pathlib.Path("app/providers/pan/kkso.py").exists())
+check("kkso 已注册", "kkso" in names)
+check("社区清单测试存在", pathlib.Path("tests/test_zhuiju.py").exists())
+
+# CC-BY-4.0 要求署名：代码常量、接口返回、README 致谢三处都要有
+check("上游仓库常量正确", 'UPSTREAM_REPO = "laoma2053/awesome-zhuiju-free"' in zhuiju_src)
+check("上游许可证已声明", 'UPSTREAM_LICENSE = "CC-BY-4.0"' in zhuiju_src)
+check("README 致谢 awesome-zhuiju-free", "awesome-zhuiju-free" in README_ONLY)
+check("README 标注上游许可证", "CC-BY-4.0" in README_ONLY)
+check("前端展示上游署名", "awesome-zhuiju-free" in app_js and "CC-BY" in app_js)
+
+# ADR-70 的核心结论：上游只探首页状态码，reachable 不等于搜得到，
+# 所以我们自己「真搜一次」并四档判定，只有 searchable 允许一键落库
+for token in ("searchable", "reachable_only", "blocked", "unknown"):
+    check(f"探测状态 {token}", f'"{token}"' in zhuiju_src)
+check("只允许 searchable 落库", 'if str(row.get("probe")) != "searchable":' in zhuiju_src)
+check("探测用真实关键词", "PROBE_KEYWORDS" in zhuiju_src)
+check("清单缓存落盘", "zhuiju_catalog.json" in zhuiju_src)
+check("拉取失败回退缓存", "回退缓存" in zhuiju_src)
+
+# 三个新端点
+for path in ("/api/v1/sites/catalog", "/api/v1/sites/catalog/probe",
+             "/api/v1/sites/catalog/{entry_id}/apply"):
+    check(f"端点存在 {path}", path in paths)
+
+# 定时同步
+check("清单同步任务已注册", "JOB_ZHUIJU_SYNC" in scheduler_src)
+check("清单同步任务键", 'key="zhuiju_sync"' in scheduler_src)
+for key in ("ZHUIJU_SYNC_ENABLED", "ZHUIJU_SYNC_INTERVAL_MINUTES",
+            "ZHUIJU_PROBE_ON_SYNC", "ZHUIJU_PROBE_LIMIT"):
+    check(f"清单配置项 {key}", key in config_src and key in config_store.EDITABLE)
+check("设置页含社区清单分组",
+      "社区站点清单（awesome-zhuiju-free）" in pathlib.Path("app/api/routers/system.py").read_text(encoding="utf-8"))
+
+# 默认站点：kkso 系两站默认启用，btsj6 默认禁用
+_by_name = {s["name"]: s for s in DEFAULT_SITES}
+for site in ("KK 网盘搜", "追剧 zhuiju.us"):
+    check(f"默认站点含 {site}", site in _by_name)
+    check(f"{site} 默认启用", _by_name.get(site, {}).get("enabled") is True)
+check("默认站点含 BT 世界网", "BT 世界网" in _by_name)
+check("BT 世界网默认禁用", _by_name.get("BT 世界网", {}).get("enabled") is False)
+
+# 文档必须写清「上游 reachable 不等于能搜到」这个反直觉结论
+_zhuiju_docs = "\n".join(
+    (docs_dir / f).read_text(encoding="utf-8")
+    for f in ("04-决策记录.md", "10-站点接入指南.md", "08-变更日志.md")
+)
+check("文档记录 ADR-70", "ADR-70" in (docs_dir / "04-决策记录.md").read_text(encoding="utf-8"))
+check("文档说明 reachable 不等于可搜索", "reachable" in _zhuiju_docs and "searchable" in _zhuiju_docs)
+check("文档致谢上游项目", "awesome-zhuiju-free" in _zhuiju_docs)
 
 print()
 print("=" * 60)

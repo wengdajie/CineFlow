@@ -110,6 +110,23 @@ SITE_PRESETS: list[dict[str, Any]] = [
         "verified": True,
     },
     {
+        # v1.14.0：kkso / zhuiju.us 同模板的网盘搜索站。放进预设的理由同 maccms——
+        # 只要填域名就能接一批同模板站点，且这两站是 awesome-zhuiju-free 清单里
+        # 唯二通过「真搜一次」探测的网盘搜索站（20 个候选里仅 4 个过关）。
+        "id": "kkso",
+        "name": "KK 系网盘搜索（kkso / zhuiju.us）",
+        "kind": ProviderKind.PAN.value,
+        "provider": "kkso",
+        "url": "https://kkso.net",
+        "priority": 25,
+        "description": "开箱可用：只填域名即可，搜索路径 /s/{关键词} 内置。"
+                       "产出夸克/百度/迅雷分享链接，提取码会从链接的 ?pwd= 自动提取。"
+                       "已知同模板站点：kkso.net、www.zhuiju.us。",
+        "requires": ["url"],
+        "options": {},
+        "verified": True,
+    },
+    {
         "id": "pan_generic",
         "name": "自定义盘搜接口",
         "kind": ProviderKind.PAN.value,

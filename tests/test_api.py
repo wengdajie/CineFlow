@@ -79,18 +79,28 @@ def test_system_info(client, auth_headers):
     assert "library" in body["directories"]
 
 
-def test_default_sites_seeded(client, auth_headers):
-    """首次启动写入示例站点。
+# 默认启用的白名单：不需要用户填任何地址/账号，且经过实测能真正返回结果。
+# yt-dlp 是本地库调用；kkso 系（kkso.net / zhuiju.us）是 v1.14.0 从
+# awesome-zhuiju-free 清单里实测筛出的公开网盘搜索站，开箱即用。
+# 其余站点都要用户填地址或账号，示例值直接跑必然报错，因此一律默认禁用。
+DEFAULT_ENABLED_PROVIDERS = {"ytdlp", "kkso"}
 
-    凡是需要用户填地址/账号的站点一律默认禁用（示例值直接跑必然报错）；
-    yt-dlp 是本地库调用、装了依赖就能用，属于例外，默认启用。
+
+def test_default_sites_seeded(client, auth_headers):
+    """首次启动写入示例站点，且默认启用集合严格受白名单约束。
+
+    这条约束的意义：新增站点时若手滑把「要填地址/账号」的站设成 enabled=True，
+    用户一进来就会看到一片搜索报错，所以白名单必须显式扩容才允许默认启用。
     """
     sites = client.get("/api/v1/sites", headers=auth_headers).json()
     assert len(sites) >= 5
-    remote = [item for item in sites if item["provider"] != "ytdlp"]
-    assert all(item["enabled"] is False for item in remote)
-    local = [item for item in sites if item["provider"] == "ytdlp"]
-    assert local and all(item["enabled"] is True for item in local)
+    needs_config = [item for item in sites
+                    if item["provider"] not in DEFAULT_ENABLED_PROVIDERS]
+    assert needs_config and all(item["enabled"] is False for item in needs_config)
+    for provider in DEFAULT_ENABLED_PROVIDERS:
+        rows = [item for item in sites if item["provider"] == provider]
+        assert rows, f"白名单里的 {provider} 没有对应示例站点"
+        assert all(item["enabled"] is True for item in rows), provider
 
 
 def test_providers_listed(client, auth_headers):
