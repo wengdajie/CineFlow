@@ -68,7 +68,9 @@ def _pick_for_share(share_url: str) -> BasePanStorage | None:
         "quark": ("pan.quark.cn",),
         "alipan": ("alipan.com", "aliyundrive.com"),
         "baidu": ("pan.baidu.com",),
-        "115": ("115.com", "115cdn.com"),
+        # 键必须是 provider 的 name：115 的 Provider 叫 "pan115" 而不是 "115"，
+        # 写错的话 115 分享永远匹配不到 115 网盘，会被兜底分给别的盘
+        "pan115": ("115.com", "115cdn.com"),
         "xunlei": ("pan.xunlei.com",),
     }
     for item in candidates:
@@ -76,6 +78,23 @@ def _pick_for_share(share_url: str) -> BasePanStorage | None:
             if domains in lowered:
                 return item
     return candidates[0]
+
+
+def _unwrap(result: Any) -> tuple[bool, str]:
+    """把 Provider 的返回值统一成 ``(是否成功, 消息)``。
+
+    **为什么必须有它**：:class:`BasePanStorage` 声明 ``rename/move/copy``
+    返回 ``bool``，但 115 的实现返回的是 ``(bool, str)``。元组非空恒为真，
+    所以 ``if ok:`` 会把 ``(False, "目标目录不存在")`` 判成成功 ——
+    115 上改名/移动失败会如实地被回报成"已重命名"。
+    这里同时兼容两种形状，并优先采用 Provider 自己给出的原因说明
+    （比服务层那句笼统的"失败（检查权限）"有用得多）。
+    """
+    if isinstance(result, tuple):
+        ok = bool(result[0]) if result else False
+        message = str(result[1]) if len(result) > 1 and result[1] else ""
+        return ok, message
+    return bool(result), ""
 
 
 # ---------------- 只读查询 ----------------
@@ -281,10 +300,10 @@ async def delete_file(site_id: int, path: str, *, file_id: str | None = None) ->
         return {"success": False, "message": "网盘不存在或未启用"}
     if not storage.supports_delete:
         return {"success": False, "message": f"{storage.site_name} 不支持删除"}
-    ok = await storage.delete(path, file_id=file_id)
+    ok, detail = _unwrap(await storage.delete(path, file_id=file_id))
     return {
         "success": ok,
-        "message": "已删除" if ok else "删除失败（检查权限或路径）",
+        "message": detail or ("已删除" if ok else "删除失败（检查权限或路径）"),
     }
 
 
@@ -309,8 +328,9 @@ async def rename_file(
     name = str(new_name or "").strip()
     if not name:
         return {"success": False, "message": "新名称不能为空"}
-    ok = await storage.rename(path, name, file_id=file_id)
-    return {"success": ok, "message": "已重命名" if ok else "重命名失败（检查权限或同名冲突）"}
+    ok, detail = _unwrap(await storage.rename(path, name, file_id=file_id))
+    fallback = "已重命名" if ok else "重命名失败（检查权限或同名冲突）"
+    return {"success": ok, "message": detail or fallback}
 
 
 async def move_file(
@@ -330,12 +350,15 @@ async def move_file(
     if not str(target_dir or "").strip():
         return {"success": False, "message": "目标目录不能为空"}
     action = "复制" if copy else "移动"
-    ok = await (
-        storage.copy(path, target_dir, file_id=file_id)
-        if copy
-        else storage.move(path, target_dir, file_id=file_id)
+    ok, detail = _unwrap(
+        await (
+            storage.copy(path, target_dir, file_id=file_id)
+            if copy
+            else storage.move(path, target_dir, file_id=file_id)
+        )
     )
-    return {"success": ok, "message": f"已{action}" if ok else f"{action}失败（检查目标目录是否存在）"}
+    fallback = f"已{action}" if ok else f"{action}失败（检查目标目录是否存在）"
+    return {"success": ok, "message": detail or fallback}
 
 
 async def search_files(

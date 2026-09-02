@@ -617,3 +617,49 @@ async def test_xunlei_unreachable_degrades_without_raising(
     # 迅雷没有暂停/恢复接口，基类默认返回 False
     assert await dl.pause("T1") is False
     assert await dl.resume("T1") is False
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code", [500, 502, 503])
+async def test_qbittorrent_5xx_is_not_reported_as_wrong_password(
+    monkeypatch: pytest.MonkeyPatch, code: int
+) -> None:
+    """5xx 必须报「没启动」，**绝不能**报成密码错。
+
+    回归的是一个真实误诊：本机 8080 没有进程监听时，中间的代理仍回 502，
+    而旧代码 ``status_code != 200`` 一律归成"用户名或密码错误"，
+    于是界面催用户去查密码，真相却是 qB 根本没启动。
+    """
+    from app.providers.downloader import qbittorrent as mod
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(code, text="Bad Gateway")
+
+    _patch_transport(monkeypatch, mod, handler)
+    dl = mod.QbittorrentDownloader(
+        {"url": "http://127.0.0.1:8080", "username": "admin", "password": "pw"}
+    )
+    ok, message = await dl.health_check()
+    assert ok is False
+    assert "没启动" in message, f"5xx 没提示服务未启动：{message}"
+    assert str(code) in message, "消息里要带上状态码，方便用户判断是代理还是 qB"
+    # 注意：不能断言 "密码" 不出现 —— 正确消息里刻意带了一句"这不是密码问题"。
+    # 要断言的是没有把故障**归因**成密码错。
+    assert "用户名或密码错误" not in message, f"5xx 被误报成密码问题：{message}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code", [500, 502, 503])
+async def test_qbittorrent_5xx_not_reported_as_missing_account(
+    monkeypatch: pytest.MonkeyPatch, code: int
+) -> None:
+    """免密探测分支同理：5xx 不能说成"要填账号"。"""
+    from app.providers.downloader import qbittorrent as mod
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(code, text="Bad Gateway")
+
+    _patch_transport(monkeypatch, mod, handler)
+    dl = mod.QbittorrentDownloader({"url": "http://127.0.0.1:8080"})
+    ok, message = await dl.health_check()
+    assert ok is False
+    assert "没启动" in message, f"5xx 没提示服务未启动：{message}"
+    assert "账号" not in message, f"5xx 被误报成缺账号：{message}"

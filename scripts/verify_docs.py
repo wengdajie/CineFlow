@@ -46,8 +46,11 @@ from app.providers.registry import list_providers, load_builtin_providers  # noq
 load_builtin_providers()
 providers = list_providers()
 names = {p["name"] for p in providers}
-check("Provider 总数 31", len(providers) == 31, f"实际 {len(providers)}")
-check("README 声明 31 个 Provider", "31 个注册 Provider" in README)
+check("Provider 总数 32", len(providers) == 32, f"实际 {len(providers)}")
+check("README 声明 32 个 Provider", "32 个注册 Provider" in README)
+# v1.16.0：百度网盘的**扫码登录**早就有了，存储 Provider 却一直缺失，
+# 导致登录成功后建出的站点是「僵尸站点」（总览查不到、转存/保活全静默跳过）。
+check("baidu 存储 Provider 已注册", "baidu" in names)
 for expected in ("api_generic", "html_generic", "mukaku", "pan_generic",
                  "torznab", "rss", "nyaa", "pansou",
                  # v1.7.0 新增：两个视频站搜索 + 两个资源站
@@ -67,33 +70,61 @@ for table in ("audit_logs", "pan_saves", "pan_subscribes", "strm_records",
     check(f"新增表 {table} 存在", table in Base.metadata.tables)
 
 # ---- 默认站点 ----
-from app.db.init_db import DEFAULT_SITES  # noqa: E402
+from app.db.init_db import DEFAULT_SITES
+from app.services import presets as presets_service  # noqa: E402  # noqa: E402
 
-check("默认示例站点 27 条", len(DEFAULT_SITES) == 27, f"实际 {len(DEFAULT_SITES)}")
-check("README 声明 27 条示例站点", "写入 27 条" in README)
+check("默认示例站点 20 条", len(DEFAULT_SITES) == 20, f"实际 {len(DEFAULT_SITES)}")
+check("文档声明 20 条示例站点", "写入 20 条" in README)
+# v1.16.0：删站的判据是「详情页能否取到真链接」，不是首页状态码。
+# 这几个站实测搜不出东西（详见 docs/04 ADR-74），不该再出现在内置清单里。
+_REMOVED_SITES = ("yyets", "wp_film")
+for _p in _REMOVED_SITES:
+    check(
+        f"已下线的 provider {_p} 不再内置",
+        not any(s["provider"] == _p for s in DEFAULT_SITES),
+    )
 check("默认站点含 webdav", any(s["provider"] == "webdav" for s in DEFAULT_SITES))
 # 需要填地址/账号的站点必须默认禁用（示例值直接跑必然报错）。
 # 白名单：yt-dlp 是本地库调用；kkso 系（kkso.net / zhuiju.us）是 v1.14.0 从
 # awesome-zhuiju-free 清单实测筛出的公开网盘搜索站，不需要任何配置即可用。
-DEFAULT_ENABLED_PROVIDERS = {"ytdlp", "kkso"}
+DEFAULT_ENABLED_SITES = {
+    "yt-dlp 视频下载",
+    "KK 网盘搜",
+    "追剧 zhuiju.us",
+    "磁力熊 Cilixiong",
+}
 check(
     "需配置的示例站点默认禁用",
     all(
         not s.get("enabled", False)
         for s in DEFAULT_SITES
-        if s["provider"] not in DEFAULT_ENABLED_PROVIDERS
+        if s["name"] not in DEFAULT_ENABLED_SITES
     ),
+    str([s["name"] for s in DEFAULT_SITES
+         if s.get("enabled") and s["name"] not in DEFAULT_ENABLED_SITES]),
 )
 check(
     "测试与文档共用同一份默认启用白名单",
-    DEFAULT_ENABLED_PROVIDERS == __import__("tests.test_api", fromlist=["x"]).DEFAULT_ENABLED_PROVIDERS,
+    DEFAULT_ENABLED_SITES == __import__("tests.test_api", fromlist=["x"]).DEFAULT_ENABLED_SITES,
+)
+check(
+    "白名单里的站点确实都默认启用",
+    all(
+        any(s["name"] == name and s.get("enabled") for s in DEFAULT_SITES)
+        for name in DEFAULT_ENABLED_SITES
+    ),
 )
 check(
     "yt-dlp 默认启用（本地库无需配置）",
     any(s["provider"] == "ytdlp" and s.get("enabled") for s in DEFAULT_SITES),
 )
 check("默认站点含 mukaku", any(s["provider"] == "mukaku" for s in DEFAULT_SITES))
-check("默认站点含 api_generic", any(s["provider"] == "api_generic" for s in DEFAULT_SITES))
+# api_generic 的**示例站**已下线（example.com 占位，与 /sites/presets 重复），
+# 但适配器本身必须还在，且要能在预设模板里找到，否则用户没法自助接入 JSON API 站。
+check(
+    "api_generic 适配器仍可用（作为预设模板提供）",
+    any(p.get("provider") == "api_generic" for p in presets_service.list_presets()),
+)
 check("默认站点含 html_generic", any(s["provider"] == "html_generic" for s in DEFAULT_SITES))
 
 # ---- 配置项 ----
@@ -235,8 +266,8 @@ check("README 说明定时任务可改期", "定时任务" in README and "cron" 
 
 # ---- 测试文件 ----
 test_files = sorted(p.name for p in pathlib.Path("tests").glob("test_*.py"))
-check("测试文件 50 个", len(test_files) == 50, str(test_files))
-check("README 声明 50 个测试文件", "50 个测试文件" in README)
+check("测试文件 51 个", len(test_files) == 51, str(test_files))
+check("README 声明 51 个测试文件", "51 个测试文件" in README)
 for name in ("test_custom_sites.py", "test_radar.py", "test_trending.py",
              "test_panstorage.py", "test_chatops.py", "test_nfo.py",
              "test_scraper.py", "test_webdav.py", "test_strm_sync.py",
@@ -264,9 +295,9 @@ if _badge and _guide:
     check("README 徽章与开发指南的测试数一致",
           _badge.group(1) == _guide.group(1),
           f"徽章 {_badge.group(1)} vs 指南 {_guide.group(1)}")
-check("README 版本号 1.15.0", "1.15.0" in README_ONLY)
+check("README 版本号 1.16.0", "1.16.0" in README_ONLY)
 version_src = pathlib.Path("app/core/version.py").read_text(encoding="utf-8")
-check("代码版本号为 1.15.0", 'APP_VERSION = "1.15.0"' in version_src)
+check("代码版本号为 1.16.0", 'APP_VERSION = "1.16.0"' in version_src)
 check("README 声明 288 项接口用例", "288 项真实 HTTP 接口用例" in README)
 check("scripts/README 声明 288 项", "288 项接口用例" in SCRIPTS_README)
 
@@ -1203,7 +1234,7 @@ check("变更日志含 v1.12.0", "## v1.12.0" in changelog_text)
 check("变更日志含 v1.12.1", "## v1.12.1" in changelog_text)
 check("变更日志含 v1.13.0", "## v1.13.0" in changelog_text)
 check("变更日志含 v1.14.0", "## v1.14.0" in changelog_text)
-check("变更日志含 v1.15.0", "## v1.15.0" in changelog_text)
+check("变更日志含 v1.16.0", "## v1.16.0" in changelog_text)
 check("变更日志记录破坏性变更", "破坏性变更" in changelog_text)
 roadmap_all = (docs_dir / "03-升级路线图.md").read_text(encoding="utf-8")
 for milestone in ("M30", "M31", "M32", "M33", "M34", "M35", "M36",
