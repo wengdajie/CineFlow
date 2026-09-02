@@ -36,6 +36,7 @@ JOB_UPGRADE = "cineflow.upgrade"
 JOB_SITE_HEALTH = "cineflow.site_health"
 JOB_RANKING = "cineflow.ranking"
 JOB_ZHUIJU_SYNC = "cineflow.zhuiju_sync"
+JOB_RSS = "cineflow.rss"
 _PLUGIN_PREFIX = "plugin."
 
 #: 间隔型任务允许的分钟范围
@@ -207,6 +208,15 @@ def builtin_specs() -> list[JobSpec]:
             ),
         ),
         JobSpec(
+            key="rss",
+            job_id=JOB_RSS,
+            name="RSS 追新（多站点 RSS / 聚合流）",
+            description="拉取用户添加的 RSS 源，把新条目按订阅分流后直接投下载（番剧站不支持搜索，只能靠 RSS）",
+            trigger="interval",
+            minutes=settings.RSS_INTERVAL_MINUTES or 20,
+            enabled=bool(settings.RSS_INTERVAL_MINUTES > 0),
+        ),
+        JobSpec(
             key="scrape",
             job_id=JOB_SCRAPE,
             name="媒体库补刮（NFO + 图片）",
@@ -317,6 +327,7 @@ class SchedulerService:
         from app.services import pan_subscribe as pan_subscribe_service
         from app.services import radar as radar_service
         from app.services import ranking as ranking_service
+        from app.services import rss_feeds as rss_service
         from app.services import scraper as scraper_service
         from app.services import site_health as health_service
         from app.services import speed_limit as speed_limit_service
@@ -351,6 +362,10 @@ class SchedulerService:
             "speed_limit": (speed_limit_service.apply_now, {}),
             "ranking": (ranking_service.run, {}),
             "zhuiju_sync": (zhuiju_service.sync, {}),
+            "rss": (
+                rss_service.run,
+                {"limit": settings.RSS_MAX_FEEDS_PER_RUN},
+            ),
         }
         if key not in targets:
             raise ValueError(f"未知任务: {key}")

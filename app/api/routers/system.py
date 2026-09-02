@@ -27,6 +27,7 @@ from app.services import changelog as changelog_service
 from app.services import config_store
 from app.services import library as library_service
 from app.services import notify as notify_service
+from app.services import update_check as update_service
 from app.services.scheduler import scheduler_service
 
 router = APIRouter(prefix="/system", tags=["系统"])
@@ -192,6 +193,14 @@ SETTING_GROUPS: list[dict[str, Any]] = [
             "ZHUIJU_SYNC_INTERVAL_MINUTES",
             "ZHUIJU_PROBE_ON_SYNC",
             "ZHUIJU_PROBE_LIMIT",
+        ],
+    },
+    {
+        "title": "RSS 追新（多站点 RSS / 聚合流）",
+        "keys": [
+            "RSS_INTERVAL_MINUTES",
+            "RSS_MAX_FEEDS_PER_RUN",
+            "RSS_PER_HOST_DELAY",
         ],
     },
     {
@@ -377,6 +386,43 @@ def changelog(
         "total": len(items),
         "items": items[:limit] if limit else items,
     }
+
+
+@router.get("/update/check", summary="检查是否有新版本")
+async def update_check(
+    user: CurrentUser,
+    force: bool = Query(False, description="忽略缓存立即重查"),
+    include_prerelease: bool = Query(False, description="是否把预发布版计入"),
+) -> dict[str, Any]:
+    """检查上游是否有更新。
+
+    结果里的 ``source`` 说明结论**怎么来的**：仓库有 Release 时按 tag 比对
+    （``release``）；一个 Release 都没有时退回读主干的版本号与最新提交
+    （``branch``）。不做这个兜底的话，没发版的仓库会永远回答"已是最新版本"
+    —— 一个不报错的假功能。
+
+    结果缓存 30 分钟：GitHub 未鉴权只有 60 次/小时，连点几次就会被限流返回
+    403，用户看到的会是"更新检测坏了"。
+    """
+    return {"success": True, **(await update_service.check(
+        force=force, include_prerelease=include_prerelease
+    ))}
+
+
+@router.post("/update/apply", summary="执行更新（仅源码部署）")
+def update_apply(user: AdminUser) -> dict[str, Any]:
+    """源码部署时执行 ``git pull --ff-only``，容器部署只给出命令。
+
+    刻意**不做**这两件事：
+    * 不 ``git reset --hard`` / 不自动 merge —— 会丢掉或搅乱用户的本地修改；
+    * 不通过挂载 docker.sock 重建自己的容器 —— 那等于把宿主机控制权
+      交给本进程，一个追剧工具不该要这种权限。
+
+    容器部署时返回 ``success=false`` 并附上可复制的 compose 命令，
+    而不是假装成功。
+    """
+    result = update_service.apply_update()
+    return {"success": bool(result.get("success")), **result}
 
 
 @router.get("/logs", summary="最近日志")

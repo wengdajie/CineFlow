@@ -27,8 +27,8 @@
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)](#-docker-部署推荐)
-[![Tests](https://img.shields.io/badge/tests-1335%20passed-brightgreen)](docs/14-开发指南.md)
-[![Version](https://img.shields.io/badge/version-1.17.0-blue)](docs/08-变更日志.md)
+[![Tests](https://img.shields.io/badge/tests-1357%20passed-brightgreen)](docs/14-开发指南.md)
+[![Version](https://img.shields.io/badge/version-1.18.0-blue)](docs/08-变更日志.md)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 </div>
@@ -106,6 +106,8 @@ CineFlow 是一个**从零实现**的 NAS 影视自动化项目，设计上参�
 | 🔥 **当前最热** | 豆瓣电影/电视剧/动漫/综艺 + **Bilibili 分区** + **YouTube 地区** + **新番放送日历**共七个榜，画板式封面墙，首屏 30 条下拉加载；B 站/YouTube 条目**直接选画质下载**，影视条目跳搜资源并**记住回来的位置** |
 | 🎯 **智能择优** | 硬过滤（枪版/做种不足/错剧）+ 加权打分（分辨率/字幕/季包/站点权重）+ 分层规则组 |
 | 🔁 **自动追新** | 定时巡检、多级关键词降级、缺集收敛、洗版替换、榜单自动订阅 |
+| 📡 **RSS 追新** | 贴 Mikan / Nyaa / 动漫花园 / PT 个人订阅地址即可追番；**聚合流按标题匹配你的订阅、只下命中的**，逐站方言适配（Nyaa 的体积与做种数藏在 `nyaa:` 命名空间里，只读 `enclosure` 会让整站结果变 0 条）；guid 增量去重、首次拉取只记账不补历史 |
+| ⬆️ **更新检测** | 一键查上游有没有新版；**仓库还没发 Release 时退回读主干版本号与最新提交**，不谎称「已是最新」；源码部署可一键 `git pull --ff-only`（不 merge、不 reset，绝不动你的改动），容器部署如实给出 compose 命令 |
 | 📺 **追番日历** | Bangumi 放送表：这周**哪天更新第几话**，今天那一列高亮（热度榜答不了这个问题） |
 | 🎥 **视频追更** | 盯住 B 站 UP 主 / YouTube 频道 / 播放列表，有新投稿就自动下载（可限画质、限每轮条数） |
 | ☁️ **网盘管理** | 115/百度/夸克/AList/WebDAV，**扫码登录 + Cookie 保活**、转存、在线浏览、分享追更 |
@@ -115,7 +117,7 @@ CineFlow 是一个**从零实现**的 NAS 影视自动化项目，设计上参�
 | 🧩 **可扩展** | 插件系统 + 事件订阅 + 不写代码接入任意站点（`api_generic` / `html_generic`） |
 | ⬇️ **按资源选下载器** | 磁力/种子 → qB/TR/迅雷，网页视频 → yt-dlp，网盘直链 → aria2；**缺对应下载器时直接说明去哪儿加什么**，而不是投给一个必然失败的下载器 |
 | 🤖 **AI 分析站点** | 填个网址，AI 判断该用哪种适配器并填好字段；**只出建议，本地试搜通过后你确认才落库**（默认关闭，开启才会外发页面正文） |
-| 🎨 **界面** | 暗色 / 浅色一键切换，设置页**多列布局**（59 项在线可改、改完即生效；14 项需重启的收进折叠卡片），**下载器在设置页按真实表单配置**（含**限速时段**：白天限速、夜里跑满），多用户三档权限 |
+| 🎨 **界面** | 暗色 / 浅色一键切换，设置页**多列布局**（69 项在线可改、改完即生效；14 项需重启的收进折叠卡片），**下载器在设置页按真实表单配置**（含**限速时段**：白天限速、夜里跑满），多用户三档权限 |
 
 > 📖 **每一项的完整说明、字段解释与实现细节** → **[docs/12-功能特性详解.md](docs/12-功能特性详解.md)**
 
@@ -230,6 +232,11 @@ python -m app.main
 
 - [MoviePilot](https://github.com/jxxghp/MoviePilot) · [T3FAP](https://github.com/qq85423296/T3FAP)
   —— 本项目的设计思路参考自这两个项目。
+- [Auto_Bangumi](https://github.com/EstrellaXD/Auto_Bangumi)
+  —— **RSS 追新引擎**的设计思路参考自该项目：`aggregate` 聚合流开关、
+  同站请求间隔（同一站点多条 feed 并发拉取会被 429）、以及「先识别每条是什么、
+  再看它是否命中订阅」的分流流程，都是它先验证过的做法。
+  本项目在此之上补了**逐站 RSS 方言层**（见 [ADR-80](docs/04-决策记录.md)）。
 - [awesome-zhuiju-free](https://github.com/laoma2053/awesome-zhuiju-free)
   —— **社区站点清单**数据源（许可证 **CC-BY-4.0**）。
   「站点管理 → 社区清单」的候选站目录来自该项目。

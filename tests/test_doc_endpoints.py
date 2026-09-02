@@ -39,6 +39,12 @@ THIRD_PARTY = {
     "/share/sharepage/detail",
     "/share/sharepage/save",
     "/e/search/index.php",
+    # GitHub REST API 的路径，ADR-81/变更日志里讨论更新检测时会写到，
+    # 它们属于 api.github.com，不是本项目端点
+    "/releases/latest",
+    "/releases",
+    "/tags",
+    "/repos/{repo}/releases/latest",
 }
 
 def _is_absolute(path: str) -> bool:

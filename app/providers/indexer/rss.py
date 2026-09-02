@@ -1,15 +1,30 @@
-"""通用 RSS 索引器：适配各类 BT 站点的 RSS/种子订阅源。"""
+"""通用 RSS 索引器：适配各类 BT 站点的 RSS/种子订阅源。
+
+v1.18.0 起字段提取交给 :mod:`app.core.rss_dialects`（各站点方言差异见该模块），
+本类只负责"取 URL → 请求 → 转成 :class:`Resource`"。
+
+**聚合 RSS**（``aggregate``）：一条 RSS 里混着多部作品（Mikan 的「我的番组」、
+dmhy 的分类流都是这种）。它与"单番 RSS"的区别不在解析，而在**用法**：
+
+* 单番 RSS：整条流都是同一部作品，可以直接全量下载；
+* 聚合 RSS：必须先识别每条属于哪部作品，再交给订阅匹配，
+  否则会把整站新番都下回来。
+
+所以这里只把 ``aggregate`` 如实标进 ``extra``，真正的分流在
+:mod:`app.services.rss_feeds` 做（那里能看到订阅表）。
+"""
 
 from __future__ import annotations
 
-import feedparser
+from urllib.parse import quote
 
 from app.core.logger import get_logger
+from app.core.rss_dialects import RssEntry, parse_feed
 from app.providers.base import Resource, SearchProvider
 from app.providers.registry import register
 from app.schemas.enums import ProviderKind, ResourceKind
 from app.utils.http import fetch_text
-from app.utils.strings import match_keywords, parse_datetime, parse_size
+from app.utils.strings import match_keywords
 
 logger = get_logger(__name__)
 
@@ -26,7 +41,30 @@ class RssIndexer(SearchProvider):
     kind = ProviderKind.INDEXER.value
     display_name = "通用 RSS 订阅源"
 
-    async def _load(self, url: str) -> list[Resource]:
+    def _to_resource(self, entry: RssEntry) -> Resource:
+        """把方言层的条目转成统一资源。"""
+        return Resource(
+            title=entry.title,
+            link=entry.link,
+            site=self.site_name,
+            kind=(
+                ResourceKind.MAGNET.value
+                if entry.is_magnet
+                else ResourceKind.TORRENT.value
+            ),
+            page_url=entry.homepage,
+            description=entry.description,
+            size=entry.size,
+            seeders=entry.seeders,
+            leechers=entry.leechers,
+            grabs=entry.grabs,
+            publish_at=entry.publish_at,
+            priority=self.priority,
+            extra=dict(entry.extra),
+        )
+
+    async def _entries(self, url: str) -> list[RssEntry]:
+        """请求并解析成方言层条目（失败返回空列表）。"""
         text = await fetch_text(
             url,
             headers={"Cookie": self.config.get("cookie") or ""},
@@ -34,59 +72,16 @@ class RssIndexer(SearchProvider):
         )
         if not text:
             return []
-        try:
-            parsed = feedparser.parse(text)
-        except Exception as exc:
-            logger.warning("RSS 解析失败 %s: %s", self.site_name, exc)
-            return []
-
-        resources: list[Resource] = []
-        for entry in parsed.entries:
-            title = str(getattr(entry, "title", "") or "").strip()
-            if not title:
-                continue
-
-            link = ""
-            for enclosure in getattr(entry, "enclosures", []) or []:
-                href = enclosure.get("href") or enclosure.get("url")
-                if href:
-                    link = href
-                    break
-            link = link or str(getattr(entry, "link", "") or "")
-            if not link:
-                continue
-
-            size = 0
-            for enclosure in getattr(entry, "enclosures", []) or []:
-                size = parse_size(enclosure.get("length") or 0)
-                if size:
-                    break
-            if not size:
-                size = parse_size(getattr(entry, "size", 0))
-
-            kind = (
-                ResourceKind.MAGNET.value
-                if link.startswith("magnet:")
-                else ResourceKind.TORRENT.value
+        feed_title, dialect, entries = parse_feed(text, url=url)
+        if entries:
+            logger.debug(
+                "RSS %s：方言 %s，%d 条（%s）",
+                self.site_name, dialect, len(entries), feed_title,
             )
-            published = getattr(entry, "published", None) or getattr(
-                entry, "updated", None
-            )
+        return entries
 
-            resources.append(
-                Resource(
-                    title=title,
-                    link=link,
-                    site=self.site_name,
-                    kind=kind,
-                    page_url=str(getattr(entry, "link", "") or "") or None,
-                    description=str(getattr(entry, "summary", "") or "")[:500] or None,
-                    size=size,
-                    publish_at=parse_datetime(published),
-                    priority=self.priority,
-                )
-            )
-        return resources
+    async def _load(self, url: str) -> list[Resource]:
+        return [self._to_resource(entry) for entry in await self._entries(url)]
 
     async def search(
         self,
@@ -102,8 +97,6 @@ class RssIndexer(SearchProvider):
             return []
 
         if "{keyword}" in url:
-            from urllib.parse import quote
-
             resources = await self._load(url.replace("{keyword}", quote(keyword)))
         else:
             resources = await self._load(url)
@@ -126,7 +119,7 @@ class RssIndexer(SearchProvider):
         url = str(self.config.get("url") or "")
         if not url:
             return False, "未配置 url"
-        resources = await self._load(url.replace("{keyword}", ""))
-        if not resources:
+        entries = await self._entries(url.replace("{keyword}", ""))
+        if not entries:
             return False, "RSS 无有效条目"
-        return True, f"连接正常，获取 {len(resources)} 条"
+        return True, f"连接正常，获取 {len(entries)} 条"

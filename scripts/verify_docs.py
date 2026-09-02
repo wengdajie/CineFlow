@@ -63,8 +63,8 @@ for expected in ("api_generic", "html_generic", "mukaku", "pan_generic",
 # ---- 数据库表 ----
 from app.db.models import Base  # noqa: E402
 
-check("20 张表", len(Base.metadata.tables) == 20, f"实际 {len(Base.metadata.tables)}")
-check("README 声明 20 张表", "20 张表" in README)
+check("21 张表", len(Base.metadata.tables) == 21, f"实际 {len(Base.metadata.tables)}")
+check("README 声明 21 张表", "21 张表" in README)
 for table in ("audit_logs", "pan_saves", "pan_subscribes", "strm_records",
               "site_health", "ranking_rules", "filter_rule_groups"):
     check(f"新增表 {table} 存在", table in Base.metadata.tables)
@@ -171,8 +171,8 @@ for key, default in (("RADAR_ENABLED", True), ("RADAR_INTERVAL_MINUTES", 15),
 # ---- 调度任务 ----
 scheduler_src = pathlib.Path("app/services/scheduler.py").read_text(encoding="utf-8")
 job_ids = re.findall(r'^JOB_\w+ = "([^"]+)"', scheduler_src, re.M)
-check("内置调度任务 15 个", len(job_ids) == 15, str(job_ids))
-check("README 声明 15 内置任务", "15 内置任务" in README)
+check("内置调度任务 16 个", len(job_ids) == 16, str(job_ids))
+check("README 声明 16 内置任务", "16 内置任务" in README)
 for job in ("cineflow.radar", "cineflow.pan_transfer", "cineflow.pan_subscribe",
             "cineflow.pan_keepalive",
             "cineflow.strm_sync", "cineflow.scrape", "cineflow.upgrade",
@@ -189,8 +189,8 @@ try:
         for m in methods
         if m.lower() in ("get", "post", "patch", "delete", "put")
     )
-    check("API 端点 169 个", total == 169, f"实际 {total}")
-    check("README 声明 169 个端点", "169 个端点" in README and "共 169 个" in README)
+    check("API 端点 179 个", total == 179, f"实际 {total}")
+    check("README 声明 179 个端点", "179 个端点" in README and "共 179 个" in README)
     paths = set(spec["paths"])
     for path in ("/api/v1/users", "/api/v1/users/{user_id}",
                  "/api/v1/system/settings", "/api/v1/system/settings/reset",
@@ -230,8 +230,8 @@ except Exception as exc:
 # ---- router 数量 ----
 router_src = pathlib.Path("app/api/router.py").read_text(encoding="utf-8")
 router_count = router_src.count("api_router.include_router(")
-check("router 24 个", router_count == 24, f"实际 {router_count}")
-check("README 声明 24 个 router", "24 个 router" in README)
+check("router 25 个", router_count == 25, f"实际 {router_count}")
+check("README 声明 25 个 router", "25 个 router" in README)
 for name in ("trending", "schedules", "pan", "chatops", "strm", "pan_subscribes",
              "users", "site_health", "ranking", "rule_groups"):
     check(f"router {name} 已挂载", f"{name}.router" in router_src)
@@ -240,12 +240,12 @@ for name in ("trending", "schedules", "pan", "chatops", "strm", "pan_subscribes"
 app_js = pathlib.Path("web/assets/app.js").read_text(encoding="utf-8")
 pages_block = app_js[app_js.index("const PAGES"): app_js.index("];", app_js.index("const PAGES"))]
 page_count = pages_block.count("{ key:")
-check("前端页面 22 个", page_count == 22, f"实际 {page_count}")
-check("README 声明点检 22 个页面", "22 个页面" in README)
-check("scripts/README 声明 22 个页面", "22 个前端页面" in SCRIPTS_README)
+check("前端页面 23 个", page_count == 23, f"实际 {page_count}")
+check("README 声明点检 23 个页面", "23 个页面" in README)
+check("scripts/README 声明 23 个页面", "23 个前端页面" in SCRIPTS_README)
 check("前端含热度排行页", '"trending"' in app_js and "pageTrending" in app_js)
 check("前端含定时任务页", '"schedules"' in app_js and "pageSchedules" in app_js)
-check("README 声明 22 个功能页", "22 个功能页" in README)
+check("README 声明 23 个功能页", "23 个功能页" in README)
 check("前端含追新雷达页", '"radar"' in app_js and "pageRadar" in app_js)
 check("前端含站点发现弹窗", "discoverDialog" in app_js)
 check("前端含预设选择器", "presetPicker" in app_js)
@@ -297,8 +297,8 @@ check("README 说明定时任务可改期", "定时任务" in README and "cron" 
 
 # ---- 测试文件 ----
 test_files = sorted(p.name for p in pathlib.Path("tests").glob("test_*.py"))
-check("测试文件 53 个", len(test_files) == 53, str(test_files))
-check("README 声明 53 个测试文件", "53 个测试文件" in README)
+check("测试文件 54 个", len(test_files) == 54, str(test_files))
+check("README 声明 54 个测试文件", "54 个测试文件" in README)
 for name in ("test_custom_sites.py", "test_radar.py", "test_trending.py",
              "test_panstorage.py", "test_chatops.py", "test_nfo.py",
              "test_scraper.py", "test_webdav.py", "test_strm_sync.py",
@@ -326,11 +326,11 @@ if _badge and _guide:
     check("README 徽章与开发指南的测试数一致",
           _badge.group(1) == _guide.group(1),
           f"徽章 {_badge.group(1)} vs 指南 {_guide.group(1)}")
-check("README 版本号 1.17.0", "1.17.0" in README_ONLY)
+check("README 版本号 1.18.0", "1.18.0" in README_ONLY)
 version_src = pathlib.Path("app/core/version.py").read_text(encoding="utf-8")
-check("代码版本号为 1.17.0", 'APP_VERSION = "1.17.0"' in version_src)
-check("README 声明 288 项接口用例", "288 项真实 HTTP 接口用例" in README)
-check("scripts/README 声明 288 项", "288 项接口用例" in SCRIPTS_README)
+check("代码版本号为 1.18.0", 'APP_VERSION = "1.18.0"' in version_src)
+check("README 声明 314 项接口用例", "314 项真实 HTTP 接口用例" in README)
+check("scripts/README 声明 314 项", "314 项接口用例" in SCRIPTS_README)
 
 # ---- 服务模块 ----
 for module in ("radar", "discovery", "presets", "trending", "settings_store",
@@ -617,7 +617,7 @@ from app.services import config_store  # noqa: E402
 
 cfgstore_src = pathlib.Path("app/services/config_store.py").read_text(encoding="utf-8")
 check("可编辑配置白名单存在", "EDITABLE" in cfgstore_src)
-check("可编辑配置项 66 个", len(config_store.EDITABLE) == 66, f"实际 {len(config_store.EDITABLE)}")
+check("可编辑配置项 69 个", len(config_store.EDITABLE) == 69, f"实际 {len(config_store.EDITABLE)}")
 for func in ("coerce", "update", "reset", "apply_overrides", "describe"):
     check(f"配置仓库函数 {func}", f"def {func}" in cfgstore_src)
 # 不可热改的键绝不能进白名单：改了不生效比改不了更糟
@@ -1266,6 +1266,7 @@ check("变更日志含 v1.12.1", "## v1.12.1" in changelog_text)
 check("变更日志含 v1.13.0", "## v1.13.0" in changelog_text)
 check("变更日志含 v1.14.0", "## v1.14.0" in changelog_text)
 check("变更日志含 v1.17.0", "## v1.17.0" in changelog_text)
+check("变更日志含 v1.18.0 节", "## v1.18.0" in changelog_text)
 check("变更日志记录破坏性变更", "破坏性变更" in changelog_text)
 roadmap_all = (docs_dir / "03-升级路线图.md").read_text(encoding="utf-8")
 for milestone in ("M30", "M31", "M32", "M33", "M34", "M35", "M36",
@@ -1390,7 +1391,7 @@ from app.api.routers.system import SETTING_GROUPS  # noqa: E402
 _shown_keys = {k for g in SETTING_GROUPS for k in g["keys"]}
 _orphan = sorted(k for k in config_store.EDITABLE if k not in _shown_keys)
 check("可改配置全部有设置页入口", _orphan == [], f"没挂分组：{_orphan}")
-check("设置页分组 17 组", len(SETTING_GROUPS) == 17, f"实际 {len(SETTING_GROUPS)}")
+check("设置页分组 18 组", len(SETTING_GROUPS) == 18, f"实际 {len(SETTING_GROUPS)}")
 
 # ⑥ 后端返回的每站诊断必须真的渲染出来（v1.6.0 就有数据，界面一直没用）
 # 判据要钉住「定义 + 真的被调用」：只查函数名前缀的话，改个名字照样能通过
@@ -1603,6 +1604,113 @@ check("FAQ 解释 Jackett 导入的站搜不到", "Jackett" in _faq)
 check("API 文档列出流式端点", "/search/stream" in API_DOC)
 check("API 文档列出 Jackett 端点", "/sites/jackett/import" in API_DOC)
 check("路线图含里程碑 M50", "里程碑 M50" in roadmap_all)
+
+# ---- v1.18.0：多站点 RSS 追新（聚合流分流）+ 更新检测 ----
+_rssd = pathlib.Path("app/core/rss_dialects.py")
+check("RSS 方言层存在", _rssd.exists())
+_rssd_src = _rssd.read_text(encoding="utf-8") if _rssd.exists() else ""
+# Nyaa 的 enclosure 是空的，体积与做种数只在 nyaa: 命名空间里。
+# 只读 enclosure 会让整站结果 size=0/seeders=0 —— 不报错、只是被整站滤光。
+check("方言层提取 nyaa:size", "nyaa_size" in _rssd_src)
+check("方言层提取 nyaa:seeders", "nyaa_seeders" in _rssd_src)
+# dmhy 写成 <strong>Size</strong>: 456.7MB，不剥标签的正则匹配不上
+check("方言层先剥 HTML 标签再抠体积", "_HTML_TAG" in _rssd_src)
+# 镜像域名极多，只看 URL 会让镜像站全退化成 generic 然后继续静默丢字段
+check("方言判定看 feed 自述优先于 URL",
+      "feed_title, feed_link, url" in _rssd_src)
+check("方言层有字段差异说明（界面要能解释为什么没有做种数）",
+      "DIALECT_NOTES" in _rssd_src)
+check("方言覆盖 mikan/nyaa/dmhy",
+      all(k in _rssd_src for k in ('"mikan"', '"nyaa"', '"dmhy"')))
+
+_rsssvc = pathlib.Path("app/services/rss_feeds.py")
+check("RSS 追新服务存在", _rsssvc.exists())
+_rsssvc_src = _rsssvc.read_text(encoding="utf-8") if _rsssvc.exists() else ""
+# pubDate 不可靠（重发/修种刷新时间），按时间判增量会重复下载或漏下
+check("RSS 增量用 guid 而非发布时间", "handled_guids" in _rsssvc_src)
+check("RSS guid 有上限不会无限膨胀", "MAX_HANDLED" in _rsssvc_src)
+# 同站多条 feed 并发拉取会被 429（Auto_Bangumi 踩过）
+check("RSS 同站请求留间隔", "_per_host_delay" in _rsssvc_src)
+check("RSS 首次拉取只记账不补历史", "skip_existing" in _rsssvc_src)
+check("RSS 复用雷达的订阅匹配口径（避免两套规则漂移）",
+      "radar_service.match_subscribe" in _rsssvc_src)
+
+_models_src = pathlib.Path("app/db/models.py").read_text(encoding="utf-8")
+check("rss_feeds 表存在", '__tablename__ = "rss_feeds"' in _models_src)
+# 推断错的代价是把整站新番下回来，所以做成用户可配开关
+check("RssFeed 有 aggregate 开关", "aggregate: Mapped[bool]" in _models_src)
+
+_upd = pathlib.Path("app/services/update_check.py")
+check("更新检测服务存在", _upd.exists())
+_upd_src = _upd.read_text(encoding="utf-8") if _upd.exists() else ""
+# 本仓库至今没有任何 Release，只按 Release 实现会永远回答"已是最新版本"
+check("更新检测在无 Release 时读主干兜底", "_latest_from_branch" in _upd_src)
+check("更新检测返回判定依据 source", '"source": "branch"' in _upd_src)
+check("更新只做 --ff-only", '"--ff-only"' in _upd_src)
+# 自动 merge 产生看不懂的冲突，reset --hard 直接丢用户改动
+check("更新不 reset --hard / 不 merge",
+      '"--hard"' not in _upd_src and '_git("merge"' not in _upd_src)
+# 挂 docker.sock 等于把宿主机控制权交给本进程。
+# 这里用 AST 而不是全文计数：模块 docstring 里**必须**能解释"为什么不碰它"，
+# 计数法会把这段解释本身当成违规（实测踩到）。要禁的是代码里真去用它。
+_upd_docstrings = set()
+_upd_literals = []
+if _upd_src:
+    import ast as _ast
+
+    _upd_tree = _ast.parse(_upd_src)
+    for _node in _ast.walk(_upd_tree):
+        if isinstance(_node, (_ast.Module, _ast.FunctionDef,
+                              _ast.AsyncFunctionDef, _ast.ClassDef)):
+            _doc = _ast.get_docstring(_node, clean=False)
+            if _doc:
+                _upd_docstrings.add(_doc)
+        if isinstance(_node, _ast.Constant) and isinstance(_node.value, str):
+            _upd_literals.append(_node.value)
+_sock_in_code = [
+    s for s in _upd_literals if "docker.sock" in s and s not in _upd_docstrings
+]
+check("自更新不碰 docker.sock（仅文档里解释原因）",
+      not _sock_in_code, str(_sock_in_code)[:80])
+check("容器部署不假装能更新", 'mode == "source"' in _upd_src)
+
+try:
+    check("端点存在 /api/v1/rss-feeds", "/api/v1/rss-feeds" in paths)
+    check("端点存在 /api/v1/rss-feeds/preview", "/api/v1/rss-feeds/preview" in paths)
+    check("端点存在 /api/v1/rss-feeds/dialects", "/api/v1/rss-feeds/dialects" in paths)
+    check("端点存在 /api/v1/rss-feeds/check-all", "/api/v1/rss-feeds/check-all" in paths)
+    check("端点存在 /api/v1/rss-feeds/{feed_id}/check",
+          "/api/v1/rss-feeds/{feed_id}/check" in paths)
+    check("端点存在 /api/v1/system/update/check",
+          "/api/v1/system/update/check" in paths)
+    check("端点存在 /api/v1/system/update/apply",
+          "/api/v1/system/update/apply" in paths)
+except NameError:
+    check("v1.18.0 端点校验（需先起服务）", False, "openapi 未取到")
+
+check("前端有 RSS 追新页", '"rssfeeds"' in app_js and "pageRssFeeds" in app_js)
+check("前端有检查更新入口", "checkUpdate" in app_js)
+# 图标名写错不报错、只会静默画成占位点
+check("前端注册 rss/eye 图标", "rss: '<path" in app_js and "eye: '<path" in app_js)
+check("前端 RSS 页给出常用地址样例", "RSS_SAMPLES" in app_js)
+check("前端标注方言字段差异", "RSS_DIALECT_LABEL" in app_js)
+
+check("回归用例文件存在", pathlib.Path("tests/test_rss_feeds.py").exists())
+_chg118 = (docs_dir / "08-变更日志.md").read_text(encoding="utf-8")
+check("变更日志含 v1.18.0", "## v1.18.0" in _chg118)
+check("ADR-80 记录 RSS 方言层",
+      "## ADR-80 ·" in (docs_dir / "04-决策记录.md").read_text(encoding="utf-8"))
+check("ADR-81 记录更新检测取舍",
+      "## ADR-81 ·" in (docs_dir / "04-决策记录.md").read_text(encoding="utf-8"))
+check("路线图含里程碑 M51", "里程碑 M51" in roadmap_all)
+check("功能文档含 RSS 追新章节", "RSS 追新" in (docs_dir / "12-功能特性详解.md").read_text(encoding="utf-8"))
+check("功能文档说明聚合流取舍", "聚合流" in (docs_dir / "12-功能特性详解.md").read_text(encoding="utf-8"))
+check("站点指南区分搜索型 RSS 与追新型 RSS", "RSS 追新" in _site_doc)
+check("FAQ 解释 RSS 加了没反应", "首次拉取" in _faq)
+check("FAQ 解释 Docker 怎么更新", "docker compose pull" in _faq)
+check("API 文档列出 RSS 端点", "/rss-feeds/preview" in API_DOC)
+check("API 文档列出更新检测端点", "/system/update/check" in API_DOC)
+check("README 致谢 Auto_Bangumi", "Auto_Bangumi" in README_ONLY)
 
 print()
 print("=" * 60)

@@ -444,6 +444,63 @@ class VideoSubscribeUpdate(BaseModel):
     reset_failures: bool = Field(default=False, description="清零失败计数，被自动暂停的订阅会一并恢复")
 
 
+# ---------------- RSS 追新 ----------------
+class RssFeedCreate(BaseModel):
+    """新建 RSS 追新源。
+
+    ``aggregate`` 是最关键的一项：一条 RSS 里混着多部作品（Mikan「我的番组」、
+    dmhy 分类流）必须开着，它会逐条识别再与订阅匹配；关掉表示"整条流都是同一部
+    作品"，会全量下载。**推断错的代价是把整站新番下回来**，所以交给用户明确指定，
+    并提供 ``/rss-feeds/preview`` 先看一眼再决定。
+    """
+
+    name: str = Field(min_length=1, description="源名称，仅用于界面识别")
+    url: str = Field(min_length=1, description="RSS/Atom 地址（不是网页地址）")
+    dialect: str | None = Field(default=None, description="站点方言，留空按 feed 自述自动识别")
+    aggregate: bool = Field(default=True, description="是否聚合流（一条 RSS 混着多部作品）")
+    enabled: bool = Field(default=True, description="是否参与定时巡检")
+    cookie: str | None = Field(default=None, description="需要登录的源（部分 PT 站个人订阅地址）")
+    include_regex: str | None = Field(default=None, description="只要标题匹配该正则的条目")
+    exclude_regex: str | None = Field(default=None, description="排除标题匹配该正则的条目（排除优先于包含）")
+    save_path: str | None = Field(default=None, description="落地目录，留空用订阅或全局配置")
+    subscribe_id: int | None = Field(default=None, description="非聚合流可直接绑定到某个订阅")
+    max_per_run: int = Field(default=5, ge=1, le=50, description="单轮最多投递几个下载")
+    skip_existing: bool = Field(
+        default=True, description="首次拉取只记账不补历史（推荐，否则新加一个源会瞬间投出几十个任务）"
+    )
+
+
+class RssFeedUpdate(BaseModel):
+    """更新 RSS 追新源，只提交需要改的字段。"""
+
+    name: str | None = None
+    url: str | None = None
+    dialect: str | None = None
+    aggregate: bool | None = None
+    enabled: bool | None = None
+    cookie: str | None = None
+    include_regex: str | None = None
+    exclude_regex: str | None = None
+    save_path: str | None = None
+    subscribe_id: int | None = None
+    max_per_run: int | None = Field(default=None, ge=1, le=50)
+    skip_existing: bool | None = None
+    reset_history: bool = Field(
+        default=False, description="清空已处理 guid，下轮把流里全部条目当作新增"
+    )
+    reset_failures: bool = Field(
+        default=False, description="清零失败计数，被自动停用的源会一并恢复启用"
+    )
+
+
+class RssPreviewRequest(BaseModel):
+    """试拉一条 RSS 看能解析出什么（落库前必须先能看）。"""
+
+    url: str = Field(min_length=1, description="RSS/Atom 地址")
+    cookie: str | None = Field(default=None, description="需要登录的源填 Cookie")
+    limit: int = Field(default=20, ge=1, le=100, description="最多返回多少条")
+
+
 # ---------------- 刮削与洗版 ----------------
 class ScrapeRequest(BaseModel):
     """批量补刮 NFO 与图片。"""
