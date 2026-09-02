@@ -12,8 +12,17 @@ from app.db.base import utcnow
 from app.db.models import SiteConfig
 from app.providers.registry import list_providers
 from app.schemas.enums import ProviderKind
-from app.schemas.models import Message, SiteCreate, SiteOut, SiteUpdate
+from app.schemas.models import (
+    JackettConnect,
+    JackettImport,
+    JackettTest,
+    Message,
+    SiteCreate,
+    SiteOut,
+    SiteUpdate,
+)
 from app.services import discovery as discovery_service
+from app.services import jackett as jackett_service
 from app.services import presets as preset_service
 from app.services import sites as site_service
 from app.services import zhuiju as zhuiju_service
@@ -65,6 +74,117 @@ def create_site(payload: SiteCreate, session: DbSession, user: AdminUser) -> Sit
     session.commit()
     session.refresh(site)
     return _to_out(site)
+
+
+# ---------------- Jackett / Prowlarr 批量接入 ----------------
+@router.post("/jackett/indexers", summary="列出 Jackett 上已配置的索引器")
+async def jackett_indexers(
+    payload: JackettConnect,
+    session: DbSession,
+    user: AdminUser,
+) -> dict[str, Any]:
+    """连一次 Jackett，把它上面**已经配好**的站点列出来供勾选导入。
+
+    这是「站点添加更符合日常使用」的关键一步：用户心里的操作是
+    「我 Jackett 里配好一堆站了，拿过来」，而不是逐个手工拼
+    `indexers/<id>/results/torznab` 地址（20 个站要填 20 次）。
+    """
+    result = await jackett_service.list_indexers(
+        payload.url, payload.api_key, timeout=payload.timeout
+    )
+    # 标注哪些已经导入过，避免重复添加（同「站点发现 / 社区清单」的做法）
+    existing = {
+        str((row.options or {}).get("jackett_indexer_id") or "")
+        for row in session.execute(select(SiteConfig)).scalars()
+    }
+    existing.discard("")
+    for item in result.get("items") or []:
+        item["already_added"] = item["id"] in existing
+    return {"success": result.get("ok", False), "data": result}
+
+
+@router.post("/jackett/import", summary="批量导入 Jackett 索引器为站点")
+async def jackett_import(
+    payload: JackettImport,
+    session: DbSession,
+    user: AdminUser,
+) -> dict[str, Any]:
+    """把勾选的索引器批量落库。
+
+    **逐条落库而不是整批失败**：一次导入十几个站，其中一个撞了重名
+    就把整批回滚，用户得自己找出是哪个再重来 —— 所以这里对每条单独处理，
+    最后如实汇报「成功 N 个、跳过 M 个（原因）」。
+    """
+    listing = await jackett_service.list_indexers(
+        payload.url, payload.api_key, timeout=payload.timeout
+    )
+    if not listing.get("ok"):
+        raise HTTPException(status_code=400, detail=str(listing.get("message") or "无法读取索引器列表"))
+
+    available = {item["id"]: item for item in listing.get("items") or []}
+    wanted = payload.indexer_ids or list(available)
+    if payload.aggregate:
+        # 聚合端点不在 indexers 列表里（它是 Jackett 的虚拟索引器），单独构造
+        available[jackett_service.ALL_INDEXER] = {
+            "id": jackett_service.ALL_INDEXER,
+            "name": "全部索引器（聚合）",
+        }
+        wanted = [jackett_service.ALL_INDEXER]
+
+    created: list[SiteOut] = []
+    skipped: list[dict[str, str]] = []
+    for indexer_id in wanted:
+        indexer = available.get(indexer_id)
+        if not indexer:
+            skipped.append({"id": indexer_id, "reason": "Jackett 上没有这个索引器"})
+            continue
+        data = jackett_service.build_site_payload(
+            payload.url,
+            payload.api_key,
+            indexer,
+            name_prefix=payload.name_prefix,
+            enabled=payload.enabled,
+            priority=payload.priority,
+        )
+        dup = session.execute(
+            select(SiteConfig).where(SiteConfig.name == data["name"])
+        ).scalar_one_or_none()
+        if dup is not None:
+            # 已存在就**更新地址与 Key**：用户重装 Jackett 或换了 Key 时，
+            # 报「已存在」让他先删再加是没必要的折腾
+            dup.url = data["url"]
+            dup.api_key = data["api_key"]
+            dup.options = data["options"]
+            session.commit()
+            session.refresh(dup)
+            skipped.append({"id": indexer_id, "reason": "已存在，已更新地址与 API Key"})
+            continue
+        site = SiteConfig(**data)
+        session.add(site)
+        session.commit()
+        session.refresh(site)
+        created.append(_to_out(site))
+
+    return {
+        "success": True,
+        "created": [item.model_dump() for item in created],
+        "created_count": len(created),
+        "skipped": skipped,
+        "message": f"已导入 {len(created)} 个站点"
+        + (f"，跳过 {len(skipped)} 个" if skipped else ""),
+    }
+
+
+@router.post("/jackett/test", summary="测试单个 Jackett 索引器")
+async def jackett_test(
+    payload: JackettTest,
+    user: AdminUser,
+) -> dict[str, Any]:
+    """用 Torznab ``t=caps`` 探测，不消耗站点搜索配额。"""
+    ok, message = await jackett_service.test_indexer(
+        payload.url, payload.api_key, payload.indexer_id, timeout=payload.timeout
+    )
+    return {"success": ok, "message": message}
 
 
 @router.patch("/{site_id}", response_model=SiteOut, summary="更新站点")

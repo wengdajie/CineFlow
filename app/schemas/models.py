@@ -171,6 +171,32 @@ class SiteUpdate(BaseModel):
     options: dict[str, Any] | None = None
 
 
+class JackettConnect(BaseModel):
+    """Jackett/Prowlarr 连接参数。"""
+
+    url: str = Field(min_length=1, description="Jackett 地址，如 http://127.0.0.1:9117")
+    api_key: str = Field(default="", description="Jackett 界面右上角的 API Key")
+    timeout: float | None = None
+
+
+class JackettImport(JackettConnect):
+    """批量导入参数。"""
+
+    #: 要导入的索引器 ID；为空表示导入全部已配置的索引器
+    indexer_ids: list[str] = Field(default_factory=list)
+    #: 只建一条聚合站点（indexers/all）。省事但无法按站诊断，默认关闭
+    aggregate: bool = False
+    name_prefix: str = "Jackett"
+    #: 默认直接启用：用户是从 Jackett 导进来的，说明那些站在 Jackett 侧
+    #: 已经配好并能用了，再要求手工逐个启用属于多余步骤
+    enabled: bool = True
+    priority: int = 15
+
+
+class JackettTest(JackettConnect):
+    indexer_id: str = Field(min_length=1)
+
+
 class SiteOut(ORMModel):
     id: int
     name: str
