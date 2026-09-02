@@ -493,6 +493,87 @@ def create_default_sites() -> None:
         logger.info("已写入 %d 条示例站点配置（默认禁用，共 %d 条内置示例）", added, len(DEFAULT_SITES))
 
 
+#: v1.16.0 下线的内置示例站点：``站点名 -> (历史上随版本发布过的地址, 下线原因)``
+#:
+#: 为什么需要这张表：``create_default_sites`` 只会**新增**同名不存在的站点，
+#: 从来不删。于是老用户升级后，v1.14.0 写进库里的这些站点会**继续留在界面上**，
+#: 并可能处于启用状态，表现为「搜索很慢，而且这些站永远 0 条」。
+#: 判据是「详情页能否取到真链接」，不是首页状态码（详见 docs/04 ADR-75）。
+_RETIRED_SITES: dict[str, tuple[tuple[str, ...], str]] = {
+    "人人影视 YYeTs": (("https://yyets.click",), "搜索页不含关键词，只有站点元数据"),
+    "BD电影首发站": (("https://www.bdflixs.com",), "详情页抓到的全是 css 链接"),
+    "CZ4K（在线）": (("https://www.cz4k.com",), "SafeLine WAF 拦截，返回 468"),
+    "MJF 美剧站": (("https://www.mjf2020.com",), "搜索页不含关键词"),
+    "电影天堂 DyGod": (("https://www.dygod.vip",), "搜索页不含关键词"),
+    "聚合BD": (("https://www.juhebd.com",), "84 个详情页全部零链接（公众号墙）"),
+    "蓝光影视 LDYSG": (("https://www.ldysg.top",), "搜索页不含关键词"),
+    "HDZU 高清组": (("https://hdzu.org",), "详情页 403"),
+    "自定义 JSON API 站点（示例）": (("https://example.com",), "纯占位示例，已由站点预设模板替代"),
+    "自定义网页站点（示例）": (("https://example.com",), "纯占位示例，已由站点预设模板替代"),
+}
+
+#: 已执行过的下线清理（记住站点名，避免用户手工重建后又被反复删掉）
+KEY_RETIRED_SEEDS = "retired_seed_sites"
+
+
+def _looks_untouched(site: SiteConfig, shipped_urls: tuple[str, ...]) -> bool:
+    """判断这条站点是否还是「出厂状态」。
+
+    只有出厂状态才允许自动删除。用户一旦改过地址（例如换成了能用的镜像域名）
+    或者填过账号 / Cookie / API Key，就说明他在这条记录上投入过配置，
+    这时删掉属于**擅自丢弃用户数据**，只能保留并在日志里提示。
+    """
+    shipped = tuple((item or "").rstrip("/") for item in shipped_urls)
+    if (site.url or "").rstrip("/") not in shipped:
+        return False
+    return not any((site.api_key, site.cookie, site.username, site.password))
+
+
+def retire_removed_sites() -> None:
+    """清理已下线的内置示例站点（一次性，幂等）。
+
+    ``create_default_sites`` 只增不删，所以「下线」必须单独做一次迁移，
+    否则只有全新安装的用户能得到干净的站点清单，升级用户会一直留着一堆
+    「启用了也永远搜不到东西」的站 —— 这正是 v1.16.0 清单瘦身没覆盖到的场景。
+
+    只删**没被用户碰过**的记录，并把已处理过的站点名记进 ``settings`` 表，
+    这样用户日后自己手工重建同名站点时不会被反复删除。
+    """
+    from app.services import settings_store
+
+    done = settings_store.get_setting(KEY_RETIRED_SEEDS, []) or []
+    if not isinstance(done, list):
+        done = []
+    pending = {name: spec for name, spec in _RETIRED_SITES.items() if name not in done}
+    if not pending:
+        return
+
+    removed: list[str] = []
+    kept: list[str] = []
+    with session_scope() as session:
+        for name, (shipped_urls, reason) in pending.items():
+            site = (
+                session.query(SiteConfig).filter(SiteConfig.name == name).one_or_none()
+            )
+            if site is None:
+                continue
+            if _looks_untouched(site, shipped_urls):
+                session.delete(site)
+                removed.append(f"{name}（{reason}）")
+            else:
+                kept.append(name)
+
+    settings_store.set_setting(KEY_RETIRED_SEEDS, sorted(set(done) | set(pending)))
+    if removed:
+        logger.info("已清理 %d 个下线的示例站点：%s", len(removed), "；".join(removed))
+    if kept:
+        logger.warning(
+            "以下示例站点已被下线（实测取不到可用链接），但检测到你改过配置，"
+            "因此保留，请自行确认是否还需要：%s",
+            "、".join(kept),
+        )
+
+
 def init_db() -> None:
     """初始化数据库。"""
     create_tables()
@@ -500,4 +581,5 @@ def init_db() -> None:
     create_superuser()
     sync_user_roles()
     create_default_sites()
+    retire_removed_sites()
     create_default_rule_groups()
