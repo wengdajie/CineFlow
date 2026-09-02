@@ -33,21 +33,54 @@ def _clean():
 
 @pytest.fixture
 def cleanup_pan_sites():
-    """用完删掉本用例建出来的网盘站点。
+    """把网盘站点表**快照-还原**，抹掉本用例造成的一切改动。
 
-    ``apply_cookie`` 会往库里写一条**已启用**的网盘站点。测试库是 session 级共享的，
-    留着它会让别的用例（比如 ``/pan/save`` 的降级断言）拿到完全不同的错误信息——
-    这种跨文件的隐式依赖排查起来最费时间，所以在源头清掉。
+    ``apply_cookie`` 会往库里写/改一条**已启用**的网盘站点。测试库是 session 级
+    共享的，留下痕迹会让别的用例（比如 ``/pan/save`` 的"无可用网盘 → 400"降级
+    断言）拿到完全不同的结果——这种跨文件的隐式依赖排查起来最费时间。
+
+    这里不再"按 provider 删几条"：那种写法漏掉任何一个 provider 就会留下
+    一个**已启用**的网盘，让后续用例莫名其妙地失败（实测被 quark 坑过一次）。
+    改成整表快照 + 还原，新增网盘时零维护。
     """
-    yield
     from app.db.models import SiteConfig
     from app.db.session import session_scope
+    from app.schemas.enums import ProviderKind
 
+    def snapshot():
+        with session_scope() as session:
+            return {
+                row.id: {
+                    "name": row.name,
+                    "provider": row.provider,
+                    "url": row.url,
+                    "enabled": row.enabled,
+                    "cookie": row.cookie,
+                    "options": dict(row.options or {}),
+                    "last_status": row.last_status,
+                }
+                for row in session.execute(
+                    select(SiteConfig).where(
+                        SiteConfig.kind == ProviderKind.PANSTORAGE.value
+                    )
+                ).scalars()
+            }
+
+    before = snapshot()
+    yield
     with session_scope() as session:
-        for site in session.execute(
-            select(SiteConfig).where(SiteConfig.provider.in_(("pan115", "baidu")))
-        ).scalars():
-            session.delete(site)
+        rows = session.execute(
+            select(SiteConfig).where(
+                SiteConfig.kind == ProviderKind.PANSTORAGE.value
+            )
+        ).scalars().all()
+        for row in rows:
+            original = before.get(row.id)
+            if original is None:
+                session.delete(row)  # 用例新建的，删掉
+                continue
+            for field, value in original.items():
+                setattr(row, field, value)
 
 
 class _FakeResponse:
@@ -355,21 +388,63 @@ def test_apply_cookie_rejects_empty():
     assert result["success"] is False
 
 
-def test_apply_cookie_creates_site(client, cleanup_pan_sites):
-    """没有对应站点时自动创建并启用，省得用户再去手工建。"""
+def test_apply_cookie_reuses_seed_site(client, cleanup_pan_sites):
+    """有同 provider 的站点（含内置预设）时**复用**它，不再建重复的一条。
+
+    v1.16.0 起 ``pan115`` / ``baidu`` 有了内置预设站点，所以这里命中的是
+    "更新已有记录"这条路径 —— 这正是期望行为：否则用户扫码一次就多出一条
+    同名网盘，站点列表越用越脏。
+    """
     result = run(
         pan_login.apply_cookie(
             "pan115", "UID=abc", site_name="测试115", verify=False
         )
     )
     assert result["success"] is True
-    assert result["data"]["created"] is True
+    assert result["data"]["created"] is False, "有预设站点时不该另建一条"
     site_id = result["data"]["site_id"]
 
-    # 第二次应更新同一条而不是再建一条
+    # 第二次仍然更新同一条
     again = run(pan_login.apply_cookie("pan115", "UID=def", verify=False))
     assert again["data"]["created"] is False
     assert again["data"]["site_id"] == site_id
+
+    # 凭据确实写进去了，且站点被启用（否则登录了却不生效）
+    from app.db.models import SiteConfig
+    from app.db.session import session_scope
+
+    with session_scope() as session:
+        site = session.get(SiteConfig, site_id)
+        assert site.cookie == "UID=def"
+        assert (site.options or {}).get("cookie") == "UID=def"
+        assert site.enabled is True
+
+
+def test_apply_cookie_creates_site_when_absent(client, cleanup_pan_sites):
+    """没有任何同 provider 站点时才新建（用一个不存在预设的 provider 验证）。"""
+    from app.db.models import SiteConfig
+    from app.db.session import session_scope
+
+    # 先把 quark 预设站点挪走，制造"无同 provider 站点"的场景
+    with session_scope() as session:
+        rows = session.execute(
+            select(SiteConfig).where(SiteConfig.provider == "quark")
+        ).scalars().all()
+        moved = [(row.id, row.provider) for row in rows]
+        for row in rows:
+            row.provider = "quark_parked"
+    try:
+        result = run(
+            pan_login.apply_cookie(
+                "quark", "cookie=abc", site_name="新建夸克", verify=False
+            )
+        )
+        assert result["success"] is True
+        assert result["data"]["created"] is True
+        assert result["data"]["site_name"] == "新建夸克"
+    finally:
+        # 还原由 cleanup_pan_sites 的整表快照负责，这里只保证异常也能走到它
+        del moved
 
 
 def test_complete_qrcode_requires_success_state():

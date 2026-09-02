@@ -116,7 +116,13 @@ class TestRegistration:
         assert "maccms" in names
         assert names["maccms"]["kind"] == ProviderKind.INDEXER.value
 
-    def test_两个在线站已作为预设内置(self):
+    def test_在线站已作为预设内置(self):
+        """在线站预设：只保留实测可访问的。
+
+        CZ4K 曾经内置，后被移除：实测首页返回 **HTTP 468**（SafeLine WAF
+        拦截），搜索永远拿不到东西。留着一个必然失败的站点，只会让用户
+        以为是自己配错了 —— 站点清单的价值在于"列出来的都能用"。
+        """
         from app.db.init_db import DEFAULT_SITES
 
         urls = {
@@ -125,7 +131,7 @@ class TestRegistration:
             if item.get("provider") == "maccms"
         }
         assert "https://www.bzzdyy.com" in urls
-        assert "https://www.cz4k.com" in urls
+        assert "https://www.cz4k.com" not in urls, "CZ4K 被 WAF 拦截，不应再内置"
         # 需要用户确认才启用，且必须写清"大部分是会员正片"这个预期
         for item in DEFAULT_SITES:
             if item.get("provider") == "maccms":

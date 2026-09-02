@@ -47,33 +47,6 @@ DEFAULT_SITES = [
         },
     },
     {
-        # 实测：/api/resource?keyword= 搜剧集，再按 id 取详情，含电驴/磁力/网盘
-        "name": "人人影视 YYeTs",
-        "kind": ProviderKind.INDEXER.value,
-        "provider": "yyets",
-        "url": "https://yyets.click",
-        "enabled": False,
-        "priority": 25,
-        "options": {
-            "note": "内置解析，启用即可用；站点常换域名，失效时改上面的地址即可",
-            "detail_limit": 5,
-        },
-    },
-    {
-        # 实测：WordPress 搜索 RSS + 详情页抓磁力（单页可达上百条）
-        "name": "BD电影首发站",
-        "kind": ProviderKind.INDEXER.value,
-        "provider": "wp_film",
-        "url": "https://www.bdflixs.com",
-        "enabled": False,
-        "priority": 30,
-        "options": {
-            "note": "WordPress 站：RSS 搜索 + 详情页抓磁力，已实测可用",
-            "article_limit": 5,
-            "per_article_limit": 12,
-        },
-    },
-    {
         # MacCMS 在线影视站。实测首页 30 部片 / 53 个播放源的分布：
         # qq 21 / qiyi 12 / youku 10 / mgtv 6 / bilibili 3 / rrmj 1
         # → 约 92% 是长视频平台会员正片，按 ADR-24 会在下载入口如实拒绕。
@@ -91,137 +64,6 @@ DEFAULT_SITES = [
                     "这部分会被如实拒绕（不接入任何 VIP 解析网关）；"
                     "能下的主要是 B 站与官方免费内容",
             "max_items": 6,
-        },
-    },
-    {
-        # 同为 MacCMS 结构；实测被 SafeLine WAF 拦在门外（HTTP 468），
-        # 换 UA / Accept-Language 均无效，故仅作预设：用户自备代理时可用。
-        # 不对抗 WAF（与 ADR-24 同口径：不做风控对抗）。
-        "name": "CZ4K（在线）",
-        "kind": ProviderKind.INDEXER.value,
-        "provider": "maccms",
-        "url": "https://www.cz4k.com",
-        "enabled": False,
-        "priority": 65,
-        "options": {
-            "note": "实测被 SafeLine WAF 拦截（HTTP 468），直连不可用；"
-                    "需自备代理。本项目不做 WAF 对抗，故仅保留预设",
-            "max_items": 6,
-        },
-    },
-    {
-        # 与 bdflixs 同为 WordPress 结构；实测首页 200 但疑似限流，故仅作预设
-        "name": "MJF 美剧站",
-        "kind": ProviderKind.INDEXER.value,
-        "provider": "wp_film",
-        "url": "https://www.mjf2020.com",
-        "enabled": False,
-        "priority": 35,
-        "options": {
-            "note": "实测存在限流/SSL 握手超时，建议配代理或降低搜索频率；"
-                    "搜索路径为 /ss/?s={keyword}",
-            "search_url": "https://www.mjf2020.com/ss/?s={keyword}",
-            "article_limit": 3,
-        },
-    },
-    {
-        # 电影天堂系：GB2312 编码，搜索走 POST，故用 html_generic + encoding
-        "name": "电影天堂 DyGod",
-        "kind": ProviderKind.INDEXER.value,
-        "provider": "wp_film",
-        "url": "https://www.dygod.vip",
-        "enabled": False,
-        "priority": 40,
-        "options": {
-            "note": "GB2312 老站：搜索接口为 POST /e/search/index.php（需 gb2312 编码），"
-                    "本预设先用 RSS/栏目页兜底；如搜不到请改用「自定义网页站点」配正则",
-            "encoding": "gb2312",
-            "latest_url": "https://www.dygod.vip/html/gndy/dyzz/index.html",
-            "article_limit": 3,
-        },
-    },
-    {
-        # 聚合BD：真实搜索路径 /q/?k=（从 /js/front.js 里挖出）
-        "name": "聚合BD",
-        "kind": ProviderKind.INDEXER.value,
-        "provider": "html_generic",
-        "url": "https://www.juhebd.com",
-        "enabled": False,
-        "priority": 45,
-        "options": {
-            "note": "搜索页可解析条目，但下载链接需关注公众号才显示；"
-                    "适合当「有没有这部片」的探针，实际下载请配合其它站点",
-            "search_url": "https://www.juhebd.com/q/?k={keyword}",
-            "row_pattern": "<a[^>]+href=\"(/(?:mv|tv|acg)/[^\"]+)\"[^>]*title=\"([^\"]+)\"",
-            "field_patterns": {
-                "page_url": "href=\"(/(?:mv|tv|acg)/[^\"]+)\"",
-                "title": "title=\"([^\"]+)\"",
-            },
-            "max_rows": 40,
-        },
-    },
-    {
-        # 蓝光影视：POST /api.php fun=get_video 返回豆瓣级元数据（无直链）
-        "name": "蓝光影视 LDYSG",
-        "kind": ProviderKind.INDEXER.value,
-        "provider": "api_generic",
-        "url": "https://www.ldysg.top",
-        "enabled": False,
-        "priority": 50,
-        "options": {
-            "note": "注意域名是 .top（.win 已 404）。接口返回单条影片元数据"
-                    "（封面/年份/导演），主要用于补元数据而非直链下载",
-            "api_base": "https://www.ldysg.top",
-            "search_path": "api.php",
-            "method": "POST",
-            "query_key": "title",
-            "fixed_params": {"fun": "get_video"},
-            "list_path": "data",
-            "item_map": {"title": "title", "year": "year", "poster": "pic"},
-        },
-    },
-    {
-        # hdzu 有自定义反爬（非 Cloudflare），必须用户提供登录后 Cookie
-        "name": "HDZU 高清组",
-        "kind": ProviderKind.INDEXER.value,
-        "provider": "html_generic",
-        "url": "https://hdzu.org",
-        "enabled": False,
-        "priority": 55,
-        "options": {
-            "note": "站点有自定义反爬，直连返回 403。必须在下方 cookie 字段填入"
-                    "浏览器登录后的完整 Cookie 才能使用",
-            "search_url": "https://hdzu.org/search?q={keyword}",
-            "magnet_only": True,
-        },
-    },
-    {
-        "name": "自定义 JSON API 站点（示例）",
-        "kind": ProviderKind.INDEXER.value,
-        "provider": "api_generic",
-        "url": "https://example.com",
-        "enabled": False,
-        "priority": 40,
-        "options": {
-            "note": "参考 README「自定义站点接入」填写 api_base/search_path/字段映射",
-            "api_base": "https://example.com/api/v1",
-            "search_path": "search",
-            "query_key": "keyword",
-            "list_path": "data.list",
-            "item_map": {"title": "name", "link": "magnet", "size": "size"},
-        },
-    },
-    {
-        "name": "自定义网页站点（示例）",
-        "kind": ProviderKind.INDEXER.value,
-        "provider": "html_generic",
-        "url": "https://example.com",
-        "enabled": False,
-        "priority": 45,
-        "options": {
-            "note": "用正则描述行与字段；只需磁力可开 magnet_only",
-            "search_url": "https://example.com/search?q={keyword}",
-            "magnet_only": True,
         },
     },
     {
@@ -304,6 +146,42 @@ DEFAULT_SITES = [
         },
     },
     {
+        # v1.16.0：awesome-zhuiju-free 清单里 `reachable_only` 的 12 个站，
+        # 上游只探首页状态码，因此全部标成"仅可达"。逐站跟到**详情页**实测后，
+        # 只有这两个真能产出可用链接（其余是搜索页有片名、详情页零链接，
+        # 或链接被公众号/登录墙挡住 —— 详见 ADR-74）。
+        #
+        # 两站的共同点：搜索页**只有详情页地址**，磁力在详情页里。
+        # 所以必须用 detail_link_field 做二段抓取；只配 magnet_only 会得 0 条
+        # （这正是最初写错的地方，实测 raw=0 才发现）。
+        "name": "磁力熊 Cilixiong",
+        "kind": ProviderKind.INDEXER.value,
+        "provider": "html_generic",
+        "url": "https://www.cilixiong.org",
+        "enabled": True,
+        "priority": 46,
+        "options": {
+            "note": "来自 awesome-zhuiju-free。⚠️ 搜索必须走 POST（EmpireCMS）："
+                    "GET ?s= 会静默返回首页，于是任何关键词都返回同一批结果、"
+                    "连乱码关键词都有 20 条（这个坑实测才发现）。"
+                    "磁力在详情页，用 detail_link_field 二段抓取；"
+                    "实测「流浪地球」命中 3 部，逐部拿到 4~8 条真实磁力",
+            "search_url": "https://www.cilixiong.org/e/search/index.php",
+            "search_method": "POST",
+            "search_data": {
+                "keyboard": "{keyword}",
+                "classid": "1,2",
+                "show": "title",
+                "tempid": "1",
+            },
+            "detail_link_field": "href=\"(/(?:movie|tv)/\\d+\\.html)\"",
+            "max_detail_items": 6,
+            # 站内 POST 搜索已按片名匹配，标题取自详情页真实片名；
+            # 再按关键词过一遍会把「流浪地球2」这类合法结果误杀
+            "local_filter": False,
+        },
+    },
+    {
         "name": "qBittorrent",
         "kind": ProviderKind.DOWNLOADER.value,
         "provider": "qbittorrent",
@@ -355,6 +233,34 @@ DEFAULT_SITES = [
         "priority": 20,
         "options": {
             "note": "在 cookie 字段填浏览器里的完整 Cookie；支持分享链接直接转存",
+            "cookie": "",
+            "root_path": "/",
+        },
+    },
+    {
+        "name": "115 网盘",
+        "kind": ProviderKind.PANSTORAGE.value,
+        "provider": "pan115",
+        "url": "https://115.com",
+        "enabled": False,
+        "priority": 21,
+        "options": {
+            "note": "在「网盘管理 → 登录网盘」扫码即可自动填 Cookie（115 官方扫码接口，"
+                    "本项目支持得最好的网盘）；也可手工粘贴 Cookie",
+            "cookie": "",
+            "root_path": "/",
+        },
+    },
+    {
+        "name": "百度网盘",
+        "kind": ProviderKind.PANSTORAGE.value,
+        "provider": "baidu",
+        "url": "https://pan.baidu.com",
+        "enabled": False,
+        "priority": 22,
+        "options": {
+            "note": "在「网盘管理 → 登录网盘」扫码登录（passport 通道）；"
+                    "百度风控较严，扫码换不到 Cookie 时改用 Cookie 导入",
             "cookie": "",
             "root_path": "/",
         },

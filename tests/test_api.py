@@ -79,11 +79,22 @@ def test_system_info(client, auth_headers):
     assert "library" in body["directories"]
 
 
-# 默认启用的白名单：不需要用户填任何地址/账号，且经过实测能真正返回结果。
+# 默认启用的白名单（**站点名**粒度）：不需要用户填任何地址/账号，
+# 且经过实测能真正返回结果的站点。
+#
+# 为什么是站点名而不是 provider：``html_generic`` 下既有开箱可用的（磁力熊，
+# 地址与正则都已内置）也有必须用户填地址的（BT 世界网），provider 粒度
+# 表达不了这种区分。
+#
 # yt-dlp 是本地库调用；kkso 系（kkso.net / zhuiju.us）是 v1.14.0 从
-# awesome-zhuiju-free 清单里实测筛出的公开网盘搜索站，开箱即用。
-# 其余站点都要用户填地址或账号，示例值直接跑必然报错，因此一律默认禁用。
-DEFAULT_ENABLED_PROVIDERS = {"ytdlp", "kkso"}
+# awesome-zhuiju-free 清单里实测筛出的公开网盘搜索站；磁力熊在 v1.16.0
+# 改走站内 POST 搜索后实测可用（GET 会静默返回首页）。
+DEFAULT_ENABLED_SITES = {
+    "yt-dlp 视频下载",
+    "KK 网盘搜",
+    "追剧 zhuiju.us",
+    "磁力熊 Cilixiong",
+}
 
 
 def test_default_sites_seeded(client, auth_headers):
@@ -94,13 +105,17 @@ def test_default_sites_seeded(client, auth_headers):
     """
     sites = client.get("/api/v1/sites", headers=auth_headers).json()
     assert len(sites) >= 5
-    needs_config = [item for item in sites
-                    if item["provider"] not in DEFAULT_ENABLED_PROVIDERS]
-    assert needs_config and all(item["enabled"] is False for item in needs_config)
-    for provider in DEFAULT_ENABLED_PROVIDERS:
-        rows = [item for item in sites if item["provider"] == provider]
-        assert rows, f"白名单里的 {provider} 没有对应示例站点"
-        assert all(item["enabled"] is True for item in rows), provider
+    needs_config = [
+        item for item in sites if item["name"] not in DEFAULT_ENABLED_SITES
+    ]
+    assert needs_config and all(item["enabled"] is False for item in needs_config), (
+        "有站点默认启用却不在白名单里："
+        + str([i["name"] for i in needs_config if i["enabled"]])
+    )
+    for name in DEFAULT_ENABLED_SITES:
+        rows = [item for item in sites if item["name"] == name]
+        assert rows, f"白名单里的 {name} 没有对应示例站点"
+        assert all(item["enabled"] is True for item in rows), name
 
 
 def test_providers_listed(client, auth_headers):

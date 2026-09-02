@@ -91,8 +91,26 @@ class QbittorrentDownloader(BaseDownloader):
                     logger.error("%s: %s", self._last_error, self.base_url)
                     await client.aclose()
                     return None
+                # ⚠️ 5xx 必须与"密码错"分开报。
+                #
+                # 实测：本机 8080 **没有任何进程监听**时，中间的代理/端口转发
+                # 仍会回 502（不是连接被拒），旧代码 `status_code != 200` 一律
+                # 归成"用户名或密码错误"，于是界面让用户去查密码 ——
+                # 而真相是 qB 根本没启动。这类"把 A 故障报成 B 故障"的提示
+                # 比不报更糟：它会让排查方向整体跑偏（ADR-20）。
+                if response.status_code >= 500:
+                    self._last_error = (
+                        f"qBittorrent 无响应（HTTP {response.status_code}）："
+                        "服务可能没启动，或地址/端口填错了（当前 "
+                        f"{self.base_url}）。这不是密码问题"
+                    )
+                    logger.error("%s", self._last_error)
+                    await client.aclose()
+                    return None
                 if response.status_code != 200 or "Fails" in response.text:
-                    self._last_error = "用户名或密码错误"
+                    self._last_error = (
+                        f"用户名或密码错误（HTTP {response.status_code}）"
+                    )
                     logger.error("qBittorrent 登录失败（账号或密码错误）: %s", self.base_url)
                     await client.aclose()
                     return None
@@ -101,6 +119,16 @@ class QbittorrentDownloader(BaseDownloader):
                 # 容器/跨主机访问仍需认证。先探一次，403 就明确告诉用户要填账号，
                 # 而不是等后面每个业务请求都 403、日志里全是无意义的报错。
                 probe = await client.get("/api/v2/app/version")
+                # 同上：5xx 是"没启动/地址错"，不能说成"要填账号"
+                if probe.status_code >= 500:
+                    self._last_error = (
+                        f"qBittorrent 无响应（HTTP {probe.status_code}）："
+                        "服务可能没启动，或地址/端口填错了（当前 "
+                        f"{self.base_url}）"
+                    )
+                    logger.error("%s", self._last_error)
+                    await client.aclose()
+                    return None
                 if probe.status_code in (401, 403):
                     self._last_error = (
                         "qBittorrent 需要认证：请填写用户名和密码，"

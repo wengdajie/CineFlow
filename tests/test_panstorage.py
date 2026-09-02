@@ -588,14 +588,46 @@ def test_pan_transfer_job_registered():
 
 
 def test_pan_storage_sites_seeded(client):
-    """init_db 要预置三个网盘存储示例站点（默认关闭）。"""
+    """init_db 要预置网盘存储示例站点（默认关闭）。
+
+    ``pan115`` / ``baidu`` 是后补的：两者的**扫码登录**早就实现了，却一直
+    没有对应的存储站点预设，用户登录成功后在网盘管理里找不到入口。
+    """
     from app.db.init_db import DEFAULT_SITES
 
     pan_sites = [
         item for item in DEFAULT_SITES if item["kind"] == ProviderKind.PANSTORAGE.value
     ]
-    assert {item["provider"] for item in pan_sites} == {"alist", "quark", "local_dir", "webdav"}
+    assert {item["provider"] for item in pan_sites} == {
+        "alist",
+        "quark",
+        "local_dir",
+        "webdav",
+        "pan115",
+        "baidu",
+    }
     assert all(item["enabled"] is False for item in pan_sites)
+
+
+def test_every_pan_storage_seed_has_a_provider():
+    """每个网盘预设都必须能被 create_provider 造出来。
+
+    回归的是「僵尸站点」：``baidu`` 的扫码登录先落地、存储 Provider 却缺失，
+    于是站点建好了、启用了，网盘总览里却查不到它，转存/浏览/保活全静默跳过。
+    """
+    from app.db.init_db import DEFAULT_SITES
+    from app.providers.panstorage.base import BasePanStorage
+    from app.providers.registry import create_provider, load_builtin_providers
+
+    load_builtin_providers()
+    for item in DEFAULT_SITES:
+        if item["kind"] != ProviderKind.PANSTORAGE.value:
+            continue
+        provider = create_provider(item["provider"], {"name": item["name"]})
+        assert isinstance(provider, BasePanStorage), (
+            f"网盘预设 {item['name']} 的 provider={item['provider']} 造不出实例，"
+            "会变成僵尸站点"
+        )
 
 
 # ------------------------------------------- 分享增量能力（v1.4.0 分享追更用）

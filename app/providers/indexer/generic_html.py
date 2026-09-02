@@ -19,6 +19,26 @@
 
 若站点把磁力链直接写在页面里，也可以只配 ``magnet_only: true``，
 本 Provider 会自动抓取页面内所有磁力链接。
+
+**POST 表单搜索**（``search_method: "POST"``）：不少国内老站（EmpireCMS/帝国
+后台居多）的搜索入口只接受 POST，GET 带参数会被无声地返回**首页**。这种站如果
+按 GET 配，就会出现「任何关键词都返回同一批结果」——包括乱码关键词也有结果，
+因为抓的其实是首页。配置示例::
+
+    {
+      "search_url": "https://site/e/search/index.php",
+      "search_method": "POST",
+      "search_data": {"keyboard": "{keyword}", "classid": "1,2",
+                      "show": "title", "tempid": "1"},
+      "detail_link_field": "href=\"(/movie/\\d+\\.html)\""
+    }
+
+**详情页二段抓取的标题**：``detail_link_field`` 命中后会进详情页抓磁力。
+详情页里的磁力多数**不带 ``dn=`` 参数**，此时标题会退化成 ``fallback_title``。
+不要把 ``fallback_title`` 设成用户输入的关键词——那会让每条结果的标题都变成
+搜索词本身（"流浪地球"搜出 20 条全叫"流浪地球"），既看不出版本/清晰度，
+也让「本地关键词过滤」形同虚设。本 Provider 改为从详情页的
+``<h1>``/``<title>`` 提取真实片名，配置项 ``detail_title_field`` 可覆盖。
 """
 
 from __future__ import annotations
@@ -97,13 +117,43 @@ class GenericHtmlIndexer(SearchProvider):
             url = urljoin(self._root(), url.lstrip("/"))
         return url
 
-    async def _load(self, url: str) -> str:
+    async def _load(self, url: str, *, data: dict[str, str] | None = None) -> str:
+        """取页面。给了 ``data`` 就走 POST 表单提交。
+
+        为什么需要 POST：EmpireCMS 一类站点的搜索只认 POST，用 GET 带参数
+        会**静默返回首页**（HTTP 200、内容看着正常），于是"任何关键词都有结果"。
+        这种失败模式比报错更危险，所以必须支持按站点声明的方法提交。
+        """
         if not url:
             return ""
         text = await fetch_text(
-            url, headers=self._headers(), timeout=self.config.get("timeout")
+            url,
+            method="POST" if data else "GET",
+            data=data or None,
+            headers=self._headers(),
+            timeout=self.config.get("timeout"),
         )
         return text or ""
+
+    def _search_form(self, keyword: str, page: int) -> dict[str, str] | None:
+        """按 ``search_method``/``search_data`` 组装 POST 表单。"""
+        method = str(self.option("search_method", "GET") or "GET").upper()
+        if method != "POST":
+            return None
+        raw = self.option("search_data", {}) or {}
+        if not isinstance(raw, dict):
+            return None
+        form: dict[str, str] = {}
+        for key, value in raw.items():
+            form[str(key)] = (
+                str(value)
+                .replace("{keyword}", keyword)
+                .replace("{page}", str(page + int(self.option("page_base", 1))))
+            )
+        # 没写 search_data 时给个最常见的默认键，省去逐站猜字段
+        if not form:
+            form = {"keyboard": keyword}
+        return form
 
     def _absolute(self, link: str) -> str:
         """把相对链接补全为绝对地址（磁力链保持原样）。"""
@@ -210,11 +260,14 @@ class GenericHtmlIndexer(SearchProvider):
             return []
 
         url = self._format_url(template, keyword, page)
-        resources = self._parse(await self._load(url), fallback_title=keyword)
+        form = self._search_form(keyword, page)
+        # POST 搜索时 search_url 就是表单 action，不需要把关键词拼进 query
+        html_text = await self._load(url, data=form)
+        resources = self._parse(html_text, fallback_title=keyword)
 
         # 需要进详情页才能拿到磁力的站点
         if self.option("detail_link_field") and not resources:
-            resources = await self._follow_details(url, keyword)
+            resources = await self._follow_details(url, keyword, form=form)
 
         if self.option("local_filter", True) and keyword:
             resources = [
@@ -224,12 +277,14 @@ class GenericHtmlIndexer(SearchProvider):
             ] or resources
         return resources
 
-    async def _follow_details(self, list_url: str, keyword: str) -> list[Resource]:
+    async def _follow_details(
+        self, list_url: str, keyword: str, *, form: dict[str, str] | None = None
+    ) -> list[Resource]:
         """从列表页提取详情页地址，再进详情页抓磁力。"""
         pattern = _compile(str(self.option("detail_link_field")))
         if pattern is None:
             return []
-        html_text = await self._load(list_url)
+        html_text = await self._load(list_url, data=form)
         links = [
             self._absolute(clean_text(m.group(1) if m.groups() else m.group(0)))
             for m in list(pattern.finditer(html_text))[: int(self.option("max_detail_items", 5))]
@@ -241,10 +296,32 @@ class GenericHtmlIndexer(SearchProvider):
         for link, page_html in zip(links, pages, strict=False):
             if isinstance(page_html, BaseException) or not page_html:
                 continue
-            for resource in self._parse_bare_links(page_html, keyword):
+            # 用详情页的真实片名兜底，**不要用搜索关键词**：详情页磁力普遍不带
+            # dn= 参数，拿关键词兜底会让所有结果标题都等于搜索词，
+            # 用户既看不出清晰度/版本，本地关键词过滤也变成恒真。
+            title = self._detail_title(page_html) or keyword
+            for resource in self._parse_bare_links(page_html, title):
                 resource.page_url = link
                 collected.append(resource)
         return collected
+
+    def _detail_title(self, html_text: str) -> str:
+        """从详情页取真实片名（``detail_title_field`` 可覆盖，默认 h1 → title）。"""
+        custom = self.option("detail_title_field")
+        if custom:
+            found = _first_group(_compile(str(custom)), html_text)
+            if found:
+                return strip_tags(found)
+        for pattern in (r"<h1[^>]*>(.{0,200}?)</h1>", r"<title>(.{0,200}?)</title>"):
+            found = _first_group(_compile(pattern), html_text)
+            if found:
+                # 站点常在 <title> 里挂后缀（"片名(2023) ... - 站名"），切掉
+                text = strip_tags(found)
+                for sep in (" - ", " | ", " – "):
+                    if sep in text:
+                        text = text.split(sep)[0].strip()
+                return text
+        return ""
 
     async def fetch_latest(self, limit: int = 100) -> list[Resource]:
         template = str(self.option("latest_url", "") or "")
