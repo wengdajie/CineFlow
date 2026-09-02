@@ -1148,6 +1148,94 @@ for item in maccms_sites:
     assert not item.get("enabled"), f"{item.get('name')} 必须默认禁用"
 
 print("\n" + "=" * 70)
+print("9s) RSS 追新：方言 / 预览 / CRUD / 增量与试运行（v1.18.0）")
+print("=" * 70)
+# 方言清单必须逐站说明字段差异 —— 界面靠它告诉用户"这个站为什么没有做种数"，
+# 否则用户只会以为是程序坏了
+dialects = call("GET", "/rss-feeds/dialects", token=token)
+dialect_keys = [item.get("key") for item in dialects.get("items") or []]
+print(f"       支持方言 {len(dialect_keys)} 种：{dialect_keys}")
+for expected in ("mikan", "nyaa", "dmhy", "generic"):
+    ok = expected in dialect_keys
+    results.append((ok, "CHECK", f"RSS 方言「{expected}」已适配", 200 if ok else 0))
+    print(f"{'PASS' if ok else 'FAIL'} 200 CHECK  RSS 方言「{expected}」已适配")
+for item in dialects.get("items") or []:
+    assert item.get("note"), f"方言 {item.get('key')} 缺字段差异说明"
+
+# 预览拉不通时必须如实 success=false 并给可操作提示，
+# 不能"空列表 + success=true"让用户以为源是好的
+bad_preview = call("POST", "/rss-feeds/preview", token=token,
+                   body={"url": "https://example.invalid/none.xml"})
+print(f"       坏地址预览：success={bad_preview.get('success')} msg={str(bad_preview.get('message'))[:40]}")
+assert bad_preview.get("success") is False, "拉不通的 RSS 不能报成功"
+assert bad_preview.get("message"), "预览失败必须给出原因"
+
+rss_id = None
+created_rss = call("POST", "/rss-feeds", token=token,
+                   body={"name": "冒烟 RSS 源", "url": "https://example.invalid/smoke-feed.xml",
+                         "aggregate": True, "max_per_run": 3})
+rss_id = (created_rss.get("data") or {}).get("id")
+print(f"       新建 RSS 源 id={rss_id} dialect={(created_rss.get('data') or {}).get('dialect')}")
+
+# 同一地址重复添加要返回既有记录，而不是 500（唯一约束撞库）
+dup = call("POST", "/rss-feeds", token=token,
+           body={"name": "重复", "url": "https://example.invalid/smoke-feed.xml"})
+same = (dup.get("data") or {}).get("id") == rss_id
+results.append((same, "CHECK", "重复 RSS 地址返回既有记录", 200 if same else 0))
+print(f"{'PASS' if same else 'FAIL'} 200 CHECK  重复 RSS 地址返回既有记录")
+
+rss_list = call("GET", "/rss-feeds", token=token)
+print(f"       RSS 源共 {rss_list.get('total')} 个，统计 {rss_list.get('stats')}")
+
+# 拉不通的源要计失败次数，而不是静默"成功但 0 条"
+checked = call("POST", f"/rss-feeds/{rss_id}/check", token=token)
+print(f"       巡检结果：success={checked.get('success')} msg={str(checked.get('message'))[:50]}")
+assert checked.get("success") is False, "拉不通的源不能报成功"
+
+# reset_failures 必须一并恢复启用，否则用户点了重置发现还是不跑
+call("PATCH", f"/rss-feeds/{rss_id}", token=token, body={"enabled": False})
+restored = call("PATCH", f"/rss-feeds/{rss_id}", token=token,
+                body={"reset_failures": True, "aggregate": False, "max_per_run": 7})
+rdata = restored.get("data") or {}
+ok = rdata.get("enabled") is True and rdata.get("failure_count") == 0 and rdata.get("max_per_run") == 7
+results.append((ok, "CHECK", "reset_failures 清零并恢复启用", 200 if ok else 0))
+print(f"{'PASS' if ok else 'FAIL'} 200 CHECK  reset_failures 清零并恢复启用")
+
+# 试运行不能写回 guid（否则试跑一次真巡检就什么都不下了）
+dry = call("POST", "/rss-feeds/check-all?dry_run=true", token=token)
+print(f"       试运行全部：检查 {dry.get('checked')} 个源，dry_run={dry.get('dry_run')}")
+assert dry.get("dry_run") is True, "check-all?dry_run=true 必须标记为试运行"
+
+# 404 边界
+call("POST", "/rss-feeds/999999/check", token=token, expect=(404,))
+call("PATCH", "/rss-feeds/999999", token=token, body={"name": "x"}, expect=(404,))
+call("DELETE", "/rss-feeds/999999", token=token, expect=(404,))
+
+print("\n" + "=" * 70)
+print("9t) 更新检测：结论必须可核对（v1.18.0）")
+print("=" * 70)
+# 仓库没有任何 Release 时必须退回读主干，否则会永远回答"已是最新版本"
+upd = call("GET", "/system/update/check", token=token)
+print(f"       当前 {upd.get('current')} / 上游 {upd.get('latest') or '未知'}"
+      f" / 依据 {upd.get('source')} / 形态 {upd.get('mode')}")
+print(f"       结论：{upd.get('message')}")
+for field in ("current", "mode", "source", "has_update", "can_apply"):
+    ok = field in upd
+    results.append((ok, "CHECK", f"更新结果含 {field}", 200 if ok else 0))
+    print(f"{'PASS' if ok else 'FAIL'} 200 CHECK  更新结果含 {field}")
+assert upd.get("mode") in ("source", "docker"), upd.get("mode")
+# 容器部署不能声称能自更新（我们刻意不挂 docker.sock）
+if upd.get("mode") == "docker":
+    assert upd.get("can_apply") is False, "容器部署不能声称可一键更新"
+
+applied = call("POST", "/system/update/apply", token=token)
+print(f"       执行更新：success={applied.get('success')} msg={str(applied.get('message'))[:60]}")
+# 无论成败都必须给出下一步：源码部署说清为什么没执行，容器部署给出 compose 命令
+assert applied.get("message"), "更新结果必须带说明"
+if applied.get("success") is False and upd.get("mode") == "docker":
+    assert applied.get("commands"), "容器部署必须给出可复制的更新命令"
+
+print("\n" + "=" * 70)
 print("10) 清理测试数据")
 print("=" * 70)
 if dl_id:
@@ -1158,6 +1246,8 @@ if ps_id:
     call("DELETE", f"/pan-subscribes/{ps_id}", token=token)
 if rank_id:
     call("DELETE", f"/ranking-rules/{rank_id}", token=token)
+if rss_id:
+    call("DELETE", f"/rss-feeds/{rss_id}", token=token)
 if group_id:
     call("DELETE", f"/rule-groups/{group_id}", token=token)
 # 测试账号必须删掉，否则下次跑冒烟会撞用户名

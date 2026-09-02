@@ -120,6 +120,11 @@ def _spec_list() -> list[FieldSpec]:
                   minimum=0, maximum=10080, reschedule=True),
         FieldSpec("STRM_CLEAN_INVALID", "bool", "清理失效 STRM"),
         FieldSpec("STRM_SYNC_METADATA", "bool", "同步随行文件"),
+        # ---- RSS 追新 ----
+        FieldSpec("RSS_INTERVAL_MINUTES", "int", "RSS 巡检间隔(分)",
+                  minimum=0, maximum=10080, reschedule=True),
+        FieldSpec("RSS_MAX_FEEDS_PER_RUN", "int", "单轮最多巡检源数", minimum=0, maximum=200),
+        FieldSpec("RSS_PER_HOST_DELAY", "float", "同站请求间隔(秒)", minimum=0, maximum=60),
         # ---- 洗版 ----
         FieldSpec("UPGRADE_ENABLED", "bool", "启用洗版",
                   hint="⚠️ 会删除已入库文件", reschedule=True),

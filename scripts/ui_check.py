@@ -27,6 +27,7 @@ PAGES = [
     ("storage", "网盘管理"),
     ("pansub", "分享追更"),
     ("videosub", "视频追更"),
+    ("rssfeeds", "RSS 追新"),
     ("strm", "STRM 同步"),
     ("sites", "站点管理"),
     ("sitehealth", "站点健康"),
@@ -1204,6 +1205,92 @@ def main():
                             f"（实际 {disabled} 期望 {should_disable}）"
                         )
                 page.screenshot(path=str(SHOTS / "47-ai-site.png"))
+            close_modal(page)
+
+        print("\n" + "=" * 68)
+        print("6u) 交互测试：RSS 追新页与检查更新（v1.18.0）")
+        print("=" * 68)
+        # 这一页用了两个本轮新注册的图标（rss / eye）。图标名写错不报 JS 错，
+        # 只会静默画成占位点（ICONS.dot），得真点开数一下路径。
+        page.goto(f"{BASE}/#rssfeeds", wait_until="networkidle")
+        page.wait_for_timeout(1500)
+        rss_text = page.inner_text("body")
+        print(f"   页面渲染文本长度：{len(rss_text)}")
+        for keyword in ("RSS 源", "聚合流", "常用 RSS 地址", "巡检节奏"):
+            hit = keyword in rss_text
+            print(f"   含「{keyword}」：{hit}")
+            if not hit:
+                errors.append(f"[rss] RSS 追新页缺少「{keyword}」")
+
+        nav_rss = page.locator("aside .nav-item", has_text="RSS 追新")
+        if not nav_rss.count():
+            errors.append("[rss] 侧边导航没有 RSS 追新入口")
+        else:
+            icon_paths = nav_rss.first.locator("svg.icon path").count()
+            print(f"   导航图标路径数：{icon_paths}")
+            if icon_paths < 2:
+                errors.append("[rss] rss 图标未注册（回落成占位点）")
+
+        # 「字段差异说明」是解释"这个站为什么没有做种数"的唯一入口，
+        # 缺了用户只会以为是程序坏了
+        help_btn = page.get_by_role("button", name="字段差异说明", exact=True)
+        if not help_btn.count():
+            errors.append("[rss] 缺少「字段差异说明」入口")
+        else:
+            help_btn.first.click()
+            page.wait_for_timeout(1200)
+            help_text = page.inner_text(".modal") if page.locator(".modal").count() else ""
+            print(f"   方言说明弹窗：{bool(help_text)}")
+            for keyword in ("Nyaa", "蜜柑", "命名空间"):
+                if keyword not in help_text:
+                    errors.append(f"[rss] 方言说明缺少「{keyword}」")
+            page.screenshot(path=str(SHOTS / "48-rss-dialects.png"))
+            close_modal(page)
+
+        # 新建表单：聚合流开关是本页最关键的一项（判断错会把整站新番拖回来），
+        # 必须默认勾选且带解释
+        new_btn = page.get_by_role("button", name="新建 RSS 源", exact=True)
+        if not new_btn.count():
+            errors.append("[rss] 缺少「新建 RSS 源」入口")
+        else:
+            new_btn.first.click()
+            page.wait_for_timeout(1000)
+            if not page.locator(".modal").count():
+                errors.append("[rss] 新建 RSS 源弹窗没有渲染")
+            else:
+                modal_text = page.inner_text(".modal")
+                agg = page.locator(".modal input[type=checkbox]").first
+                checked = agg.is_checked() if agg.count() else None
+                print(f"   聚合流默认勾选：{checked}（期望 True）")
+                if checked is not True:
+                    errors.append("[rss] 聚合流开关默认未勾选（会把整条流全量下载）")
+                print(f"   含首次记账说明：{'首次拉取' in modal_text}")
+                if "首次拉取" not in modal_text:
+                    errors.append("[rss] 新建表单未说明首次拉取只记账")
+                page.screenshot(path=str(SHOTS / "49-rss-form.png"))
+            close_modal(page)
+        page.screenshot(path=str(SHOTS / "50-rss-feeds.png"))
+
+        # 检查更新：结论必须带「判定依据」，否则"已是最新"无从核对
+        page.goto(f"{BASE}/#changelog", wait_until="networkidle")
+        page.wait_for_timeout(1200)
+        upd_btn = page.get_by_role("button", name="检查更新", exact=True)
+        if not upd_btn.count():
+            errors.append("[update] 更新日志页缺少「检查更新」入口")
+        else:
+            upd_btn.first.click()
+            page.wait_for_timeout(6000)
+            upd_text = page.inner_text(".modal") if page.locator(".modal").count() else ""
+            print(f"   检查更新弹窗：{bool(upd_text)}")
+            if not upd_text:
+                errors.append("[update] 检查更新弹窗没有渲染（或请求失败）")
+            else:
+                for keyword in ("当前版本", "判定依据", "部署形态"):
+                    hit = keyword in upd_text
+                    print(f"   含「{keyword}」：{hit}")
+                    if not hit:
+                        errors.append(f"[update] 更新结果缺少「{keyword}」")
+                page.screenshot(path=str(SHOTS / "51-update-check.png"))
             close_modal(page)
 
         print("\n" + "=" * 68)

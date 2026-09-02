@@ -187,6 +187,15 @@ class Settings(BaseSettings):
     #: 查太勤只是白白增加被风控的概率
     VIDEO_SUBSCRIBE_INTERVAL_MINUTES: int = 120
 
+    # ---------- RSS 追新（多站点 RSS / 聚合流） ----------
+    #: RSS 巡检间隔（分钟），0 表示关闭。默认 20：RSS 是追新时效性最好的源
+    #: （发布即出现在流里），但拉太勤对小站是无谓压力
+    RSS_INTERVAL_MINUTES: int = 20
+    #: 单轮最多巡检多少个 RSS 源，0 表示不限。防止源很多时一轮跑几分钟
+    RSS_MAX_FEEDS_PER_RUN: int = 0
+    #: 同一站点的多条 feed 之间的间隔（秒）。同站并发拉取会被 429
+    RSS_PER_HOST_DELAY: float = 2.0
+
     # ---------- 洗版 ----------
     #: 是否启用洗版（发现明显更优的版本时替换已入库文件）
     UPGRADE_ENABLED: bool = False

@@ -80,6 +80,9 @@ YAML 里的二级 key 会拍平成 `CF_<父>_<子>`，例如 `tmdb.api_key` → 
 | 清单同步周期 | `CF_ZHUIJU_SYNC_INTERVAL_MINUTES` | `1440` | 分钟。上游每天更新一次，查更勤没有意义 |
 | 同步时顺带探测 | `CF_ZHUIJU_PROBE_ON_SYNC` | `true` | 用真实关键词逐站真搜一次判定可用性；关掉则只更新清单 |
 | 单次探测上限 | `CF_ZHUIJU_PROBE_LIMIT` | `20` | 探测是串行且带间隔的（约 20 秒/站），上限防止一次跑太久 |
+| RSS 巡检周期 | `CF_RSS_INTERVAL_MINUTES` | `20` | 分钟，`0`=关闭。RSS 是追新时效性最好的源（发布即出现在流里），但拉太勤对小站是无谓压力 |
+| RSS 单轮源数上限 | `CF_RSS_MAX_FEEDS_PER_RUN` | `0` | `0`=不限。源很多时防止一轮跑几分钟 |
+| RSS 同站间隔 | `CF_RSS_PER_HOST_DELAY` | `2.0` | 秒。同一站点的多条 feed 一次性并发拉取会被 429 |
 
 > 上表中**除密钥、目录、端口外的绝大多数项都能在设置页直接改并立即生效**，
 > 不必改文件重启。
@@ -109,7 +112,7 @@ curl -X POST -H "X-API-Token: your-token" \
      http://127.0.0.1:6060/api/v1/subscribes/run-all
 ```
 
-主要端点分组（共 169 个端点）：
+主要端点分组（共 179 个端点）：
 
 | 前缀 | 用途 |
 |---|---|
@@ -135,7 +138,8 @@ curl -X POST -H "X-API-Token: your-token" \
 | `/api/v1/schedules` | 定时任务：查看、改期（interval/cron）、重置、立即执行 |
 | `/api/v1/plugins` | 列表、启停、配置、执行动作 |
 | `/api/v1/users` | 用户与权限：CRUD、三档角色（仅管理员可访问） |
-| `/api/v1/system` | 仪表盘、系统信息、生效配置、**在线改配置/恢复默认**、调度任务、日志、通知 |
+| `/api/v1/rss-feeds` | **RSS 追新**（v1.18.0）：源 CRUD、`POST /rss-feeds/preview` 落库前先真拉一次看解析结果（返回方言、识别出的作品名、`suggest_aggregate` 建议）、`GET /rss-feeds/dialects` 各站字段差异说明、`POST /rss-feeds/{id}/check` 与 `POST /rss-feeds/check-all` 巡检（均支持 `?dry_run=true` 只算不下**且不写回 guid**）。⚠️ 与 `/sites` 里 `provider="rss"` 的站点**分工不同**：那些参与聚合搜索，本表是纯追新流（番剧 RSS 不支持关键词查询）；`PATCH` 的 `reset_history` 清空已处理 guid、`reset_failures` 清零失败计数**并一并恢复启用** |
+| `/api/v1/system` | 仪表盘、系统信息、生效配置、**在线改配置/恢复默认**、调度任务、日志、通知；**更新检测**（v1.18.0）：`GET /system/update/check`（`?force=true` 忽略 30 分钟缓存）返回 `source`=`release`/`branch` 说明结论怎么来的 —— 仓库没有 Release 时退回读主干版本号与最新提交，不谎称已是最新；`POST /system/update/apply` 仅**源码部署**可用，只执行 `git pull --ff-only`（不 merge、不 reset），容器部署返回 `can_apply=false` + 可复制的 compose 命令 |
 | `/api/v1/ai` | **内置 AI 站点分析**（默认关闭，仅管理员）：`GET /ai/config` 配置状态与可选方案、`POST /ai/analyze` 出建议、`POST /ai/verify` 本地真跑一次搜索验证、`POST /ai/apply` 确认后落库 |
 
 ---
@@ -164,7 +168,7 @@ cineflow/
 │   └── main.py        应用入口（lifespan / CORS / 静态资源）
 ├── web/               index.html + assets/(app.js style.css)  ← 零依赖前端
 ├── plugins/           auto_cleanup pan_transfer daily_digest  ← 示例插件
-├── tests/             53 个测试文件
+├── tests/             54 个测试文件
 ├── scripts/           smoke_test / ui_check / demo_pipeline 验证脚本
 ├── docs/              16 篇维护文档（现状/架构/路线图/决策/运维/站点接入/变更日志/竞品对标…）
 ├── config/            config.yaml.example

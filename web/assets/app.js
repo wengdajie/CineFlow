@@ -108,6 +108,8 @@
     history: '<path d="M12 7.5V12l3.5 2"/><path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1"/><path d="M3.5 4v4.5H8"/>',
     back: '<path d="M20 12H4.5"/><path d="M10.5 6 4.5 12l6 6"/>',
     user: '<circle cx="12" cy="8" r="4"/><path d="M4.5 20.5c0-4 3.4-6.5 7.5-6.5s7.5 2.5 7.5 6.5"/>',
+    rss: '<path d="M5 19.5h.01"/><path d="M4.5 13.5a6.5 6.5 0 0 1 6.5 6.5"/><path d="M4.5 8a12 12 0 0 1 12 12"/>',
+    eye: '<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/>',
     sparkles: '<path d="M11 3.5 12.6 8 17 9.6 12.6 11.2 11 15.6 9.4 11.2 5 9.6 9.4 8z"/><path d="M17.5 15 18.3 17.2 20.5 18l-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z"/>',
   };
 
@@ -707,6 +709,7 @@
     { key: "trending", label: "热度排行", icon: "flame", group: "发现" },
     { key: "subscribes", label: "订阅追新", icon: "star", group: "追剧" },
     { key: "radar", label: "追新雷达", icon: "radar", group: "追剧" },
+    { key: "rssfeeds", label: "RSS 追新", icon: "rss", group: "追剧" },
     { key: "ranking", label: "榜单订阅", icon: "trophy", group: "追剧" },
     { key: "rules", label: "过滤规则组", icon: "layers", group: "追剧" },
     { key: "schedules", label: "定时任务", icon: "clock", group: "追剧" },
@@ -4546,10 +4549,13 @@
       ]),
       "更新日志",
       data.total + " 个版本 · 数据来自 docs/08-变更日志.md",
-      [iconButton("全部展开", "layers", () => {
-        changelogState.open = changelogState.open === "*" ? "" : "*";
-        pageChangelog();
-      })]
+      [
+        iconButton("检查更新", "refresh", () => checkUpdate(false), "primary"),
+        iconButton("全部展开", "layers", () => {
+          changelogState.open = changelogState.open === "*" ? "" : "*";
+          pageChangelog();
+        }),
+      ]
     );
   }
 
@@ -6330,6 +6336,556 @@
     );
   }
 
+  // ---------------- RSS 追新 ----------------
+  //: 方言 key → 界面短标签。RSS 各站的字段差异很大（见后端 rss_dialects），
+  //: 界面上标出来用户才知道"这个站为什么没有做种数"。
+  const RSS_DIALECT_LABEL = {
+    mikan: "蜜柑计划",
+    nyaa: "Nyaa",
+    dmhy: "动漫花园",
+    acgnx: "acgnx",
+    generic: "通用解析",
+  };
+
+  //: RSS 地址示例。贴错地址（贴网页而不是 RSS）是这类订阅最常见的失败，
+  //: 直接把可用样例摆在表单里比写一句"请填 RSS 地址"有用得多。
+  const RSS_SAMPLES = [
+    { label: "蜜柑「我的番组」（推荐，只含你追的番）", url: "https://mikanani.me/RSS/MyBangumi?token=你的Token" },
+    { label: "蜜柑全站最新（聚合流，务必配合订阅过滤）", url: "https://mikanani.me/RSS/Classic" },
+    { label: "Nyaa 动画分类（英文源，有做种数）", url: "https://nyaa.si/?page=rss&c=1_2&f=0" },
+    { label: "动漫花园全站（磁力链）", url: "https://share.dmhy.org/topics/rss/rss.xml" },
+  ];
+
+  /** 新建/编辑 RSS 源。row 为空表示新建。
+
+      与另外几种追新的分工：「订阅追新」按片名去各站**搜索**，
+      「追新雷达」拉各站最新流，本页处理的是用户自己贴的 **RSS 地址** ——
+      番剧站的 RSS 根本不支持关键词查询，只能靠定时拉流。
+  */
+  function rssFeedForm(row, onDone) {
+    const current = row || {};
+    modal(
+      row ? "编辑 RSS 源 · " + row.name : "新建 RSS 源",
+      [
+        { key: "name", label: "源名称", value: current.name || "", placeholder: "如：蜜柑我的番组" },
+        {
+          key: "url",
+          label: "RSS / Atom 地址",
+          value: current.url || "",
+          placeholder: "https://mikanani.me/RSS/MyBangumi?token=...",
+          hint: "必须是 RSS 地址而不是网页地址。填好后先点「预览」确认能解析出条目",
+        },
+        {
+          key: "aggregate",
+          label: "这是聚合流（一条 RSS 混着多部作品）",
+          type: "checkbox",
+          value: row ? !!current.aggregate : true,
+          hint: "开着：逐条识别再与订阅匹配，只下命中订阅的。关掉表示整条流都是同一部作品，会全量下载——判断错会把整站新番拖回来",
+        },
+        {
+          key: "subscribe_id",
+          label: "绑定订阅 ID（仅非聚合流需要，留空自动匹配）",
+          type: "number",
+          value: current.subscribe_id || "",
+          hint: "单番 RSS 可以直接绑定到某个订阅，省掉标题匹配这一步",
+        },
+        { key: "save_path", label: "保存目录（留空用订阅或默认目录）", value: current.save_path || "" },
+        {
+          key: "include_regex",
+          label: "只要匹配（正则）",
+          value: current.include_regex || "",
+          placeholder: "1080p|简体",
+        },
+        {
+          key: "exclude_regex",
+          label: "排除匹配（正则）",
+          value: current.exclude_regex || "",
+          placeholder: "生肉|繁体|720p",
+          hint: "两者同时命中时判为不要 —— 排除词的意图通常更明确",
+        },
+        {
+          key: "cookie",
+          label: "Cookie（仅需要登录的 PT 个人订阅地址）",
+          value: "",
+          hint: current.has_cookie ? "已保存过 Cookie，留空表示不修改" : "多数公开番剧 RSS 不需要",
+        },
+        {
+          key: "max_per_run",
+          label: "单轮最多下载几个",
+          type: "number",
+          value: current.max_per_run || 5,
+          hint: "1~50。聚合流一轮可能命中很多条，这个上限防止一次把下载器打满",
+        },
+        {
+          key: "skip_existing",
+          label: "首次拉取只记账不补历史",
+          type: "checkbox",
+          value: row ? !!current.skip_existing : true,
+          hint: "建议保持勾选：老 RSS 里躺着几十条历史条目，不勾会立刻投出几十个下载任务",
+        },
+        row ? { key: "enabled", label: "启用（参与定时巡检）", type: "checkbox", value: !!current.enabled } : null,
+        row ? { key: "reset_failures", label: "清除失败计数", type: "checkbox", value: false, hint: "被自动停用的源会一并恢复启用" } : null,
+        row ? { key: "reset_history", label: "清空已处理记录", type: "checkbox", value: false, hint: "下轮会把流里全部条目当作新增" } : null,
+      ].filter(Boolean),
+      async (values) => {
+        const payload = {
+          name: values.name,
+          url: values.url,
+          aggregate: !!values.aggregate,
+          save_path: values.save_path || null,
+          include_regex: values.include_regex || null,
+          exclude_regex: values.exclude_regex || null,
+          subscribe_id: values.subscribe_id ? Number(values.subscribe_id) : null,
+          max_per_run: Number(values.max_per_run) || 5,
+          skip_existing: !!values.skip_existing,
+        };
+        // Cookie 留空表示"不修改"，不能提交 null 把已保存的擦掉
+        if (values.cookie) payload.cookie = values.cookie;
+        if (row) {
+          payload.enabled = !!values.enabled;
+          payload.reset_failures = !!values.reset_failures;
+          payload.reset_history = !!values.reset_history;
+          await api("/rss-feeds/" + row.id, { method: "PATCH", body: payload });
+          toast("已保存", "ok");
+        } else {
+          if (!payload.name || !payload.url) throw new Error("源名称与地址必填");
+          const result = await api("/rss-feeds", { method: "POST", body: payload });
+          toast(result.message || "RSS 源已添加", "ok");
+        }
+        if (onDone) onDone();
+      },
+      row ? "保存" : "创建",
+      {
+        wide: true,
+        lead: "番剧站的 RSS 不支持关键词搜索，只能靠定时拉流追新。聚合流会按标题匹配你的订阅，只下命中的。",
+      }
+    );
+  }
+
+  /** 预览一条 RSS 能解析出什么。
+
+      贴进来的地址对不对、是不是聚合流、能否拿到体积与做种数，
+      只有真拉一次才知道；不预览就只能"先存下来，等下一轮定时任务过去了才发现不对"。
+  */
+  async function rssPreview(defaultUrl) {
+    modal(
+      "预览 RSS",
+      [
+        { key: "url", label: "RSS 地址", value: defaultUrl || "", placeholder: "https://mikanani.me/RSS/Classic" },
+        { key: "cookie", label: "Cookie（需要登录的源才填）", value: "" },
+        { key: "limit", label: "取前几条", type: "number", value: 20 },
+      ],
+      async (values) => {
+        if (!values.url) throw new Error("请填 RSS 地址");
+        const result = await api("/rss-feeds/preview", {
+          method: "POST",
+          body: {
+            url: values.url,
+            cookie: values.cookie || null,
+            limit: Number(values.limit) || 20,
+          },
+        });
+        const items = result.items || [];
+        const titles = result.distinct_titles || [];
+        panelModal(
+          "预览结果",
+          (RSS_DIALECT_LABEL[result.dialect] || result.dialect || "通用解析") +
+            " · " + (result.title || "未命名源") + " · " + items.length + " 条",
+          el("div", {}, [
+            el("div", { class: "pad" }, [
+              result.success
+                ? el("div", { class: "row tight center wrap" }, [
+                    el("span", { class: "tag dot ok", text: "解析成功" }),
+                    el("span", {
+                      class: "tag " + (result.suggest_aggregate ? "warn" : ""),
+                      text: result.suggest_aggregate
+                        ? "建议按聚合流处理（识别出 " + titles.length + " 部作品）"
+                        : "看起来是单番流",
+                    }),
+                    el("span", { class: "dim tiny", text: result.message || "" }),
+                  ])
+                : emptyBox(result.message || "解析失败", "alert"),
+            ]),
+            titles.length
+              ? el("div", { class: "pad" }, [
+                  el("div", { class: "kv-label", text: "识别出的作品" }),
+                  el("div", { class: "row tight wrap" }, titles.map((name) =>
+                    el("span", { class: "tag tiny", text: name })
+                  )),
+                ])
+              : null,
+            items.length
+              ? el("div", { class: "list" }, items.map((item) =>
+                  el("div", { class: "list-row" }, [
+                    el("span", {}, [
+                      el("div", { class: "truncate", title: item.title, text: item.title }),
+                      el("div", { class: "cell-sub tiny" }, [
+                        el("span", { text: item.parsed_title || "未识别片名" }),
+                        el("span", {
+                          text: " · " +
+                            (item.season ? "S" + item.season : "无季") +
+                            " · " +
+                            ((item.episodes || []).length ? "E" + item.episodes.join(",") : "无集号"),
+                        }),
+                      ]),
+                    ]),
+                    el("span", { class: "row tight center" }, [
+                      item.resolution ? el("span", { class: "tag tiny", text: item.resolution }) : null,
+                      el("span", { class: "tag tiny", text: item.kind === "magnet" ? "磁力" : "种子" }),
+                      // 体积/做种数为 0 多半是方言没认出来，如实显示"未提供"而不是 0
+                      el("span", {
+                        class: "dim tiny mono",
+                        text: item.size ? fmtSize(item.size) : "体积未提供",
+                      }),
+                      el("span", {
+                        class: "dim tiny",
+                        text: item.seeders ? item.seeders + " 做种" : "无做种数",
+                      }),
+                    ].filter(Boolean)),
+                  ])
+                ))
+              : null,
+          ].filter(Boolean)),
+          true
+        );
+      },
+      "预览",
+      { lead: "先确认能解析出条目再添加。解析不出条目通常是贴了网页地址，或该源需要登录。" }
+    );
+  }
+
+  /** 各站方言的字段差异说明（帮用户理解"为什么这个站没有做种数"）。 */
+  async function rssDialectHelp() {
+    const data = await api("/rss-feeds/dialects").catch(() => ({ items: [] }));
+    panelModal(
+      "支持的 RSS 站点方言",
+      "各站把有用字段放在自己的命名空间里，本项目逐站适配",
+      el("div", { class: "list" }, (data.items || []).map((item) =>
+        el("div", { class: "list-row" }, [
+          el("span", {}, [
+            el("div", { class: "row tight center" }, [
+              el("span", { text: RSS_DIALECT_LABEL[item.key] || item.key }),
+              el("span", { class: "tag tiny mono", text: item.key }),
+            ]),
+            el("div", { class: "cell-sub", text: item.note || "" }),
+          ]),
+        ])
+      )),
+      true
+    );
+  }
+
+  async function pageRssFeeds() {
+    shell(loading(), "RSS 追新", "贴 RSS 地址自动追新，聚合流按订阅分流");
+    const [data, schedules] = await Promise.all([
+      api("/rss-feeds"),
+      api("/schedules").catch(() => ({ items: [] })),
+    ]);
+    const list = data.items || [];
+    const stats = data.stats || {};
+    const job = (schedules.items || []).find((item) => item.key === "rss");
+
+    const statsRow = el("div", { class: "grid cols-4" }, [
+      statCard("RSS 源", String(stats.total || 0), "已添加的追新流", "link"),
+      statCard("启用中", String(stats.enabled || 0), "会被定时巡检的源", "play"),
+      statCard("聚合流", String(stats.aggregate || 0), "混着多部作品、需按订阅分流", "layers"),
+      statCard("累计下载", String(stats.downloaded || 0), "历史新增的下载任务", "download"),
+    ]);
+
+    const jobCard = el("div", { class: "card" }, [
+      el("div", { class: "card-head" }, [
+        el("h3", {}, [icon("clock", "sm"), el("span", { text: "巡检节奏" })]),
+        job && job.enabled
+          ? el("span", { class: "tag dot ok", text: "已启用" })
+          : el("span", { class: "tag dot warn", text: job ? "已关闭" : "未注册" }),
+      ]),
+      job
+        ? el("div", { class: "kv" }, [
+            el("div", { class: "kv-item" }, [
+              el("div", { class: "kv-label", text: "当前规则" }),
+              el("div", { class: "mono", text: job.trigger === "cron" ? job.cron : "每 " + job.minutes + " 分钟" }),
+            ]),
+            el("div", { class: "kv-item" }, [
+              el("div", { class: "kv-label", text: "下次执行" }),
+              el("div", {}, [
+                el("div", { text: fmtRelative(job.next_run_time) }),
+                el("div", { class: "cell-sub", text: fmtTime(job.next_run_time) }),
+              ]),
+            ]),
+          ])
+        : emptyBox("调度器未运行，RSS 源只能手动巡检", "clock"),
+      job
+        ? el("div", { class: "row tight", style: "margin-top:16px" }, [
+            iconButton("修改周期", "edit", () => scheduleForm(job, pageRssFeeds), "sm primary"),
+            iconButton("立即执行", "play", () => runSchedule(job, pageRssFeeds), "sm"),
+          ])
+        : null,
+    ]);
+
+    const sampleCard = el("div", { class: "card" }, [
+      el("div", { class: "card-head" }, [
+        el("h3", {}, [icon("info", "sm"), el("span", { text: "常用 RSS 地址" })]),
+        iconButton("字段差异说明", "layers", () => rssDialectHelp(), "sm ghost"),
+      ]),
+      el("div", { class: "list" }, RSS_SAMPLES.map((sample) =>
+        el("div", { class: "list-row" }, [
+          el("span", {}, [
+            el("div", { text: sample.label }),
+            el("div", { class: "cell-sub mono tiny truncate", title: sample.url, text: sample.url }),
+          ]),
+          el("span", { class: "row tight" }, [
+            iconButton("预览", "search", () => rssPreview(sample.url), "sm ghost"),
+            iconButton("添加", "plus", () => rssFeedForm({ url: sample.url, name: sample.label, aggregate: true, skip_existing: true, max_per_run: 5 }, pageRssFeeds), "sm"),
+          ]),
+        ])
+      )),
+    ]);
+
+    const listCard = el("div", { class: "card flush" }, [
+      el("div", { class: "card-head" }, [
+        el("h3", {}, [icon("inbox", "sm"), el("span", { text: "RSS 源（" + list.length + "）" })]),
+        el("div", { class: "row tight center" }, [
+          iconButton("试运行全部", "eye", async () => {
+            try {
+              const result = await api("/rss-feeds/check-all?dry_run=true", { method: "POST" });
+              toast("试运行完成：检查 " + (result.checked || 0) + " 个源（未实际下载）", "ok");
+              pageRssFeeds();
+            } catch (error) {
+              toast(error.message, "err");
+            }
+          }, "sm ghost"),
+          iconButton("立即巡检全部", "play", async () => {
+            try {
+              const result = await api("/rss-feeds/check-all", { method: "POST" });
+              toast("巡检完成：新增下载 " + (result.downloaded || 0) + " 个", "ok");
+              pageRssFeeds();
+            } catch (error) {
+              toast(error.message, "err");
+            }
+          }, "sm"),
+          iconButton("预览地址", "search", () => rssPreview(""), "sm ghost"),
+          iconButton("新建", "plus", () => rssFeedForm(null, pageRssFeeds), "sm primary"),
+        ]),
+      ]),
+      table(
+        [
+          {
+            title: "RSS 源",
+            render: (row) =>
+              el("div", {}, [
+                el("div", { class: "row tight center wrap" }, [
+                  el("span", { text: row.name }),
+                  el("span", { class: "tag tiny", text: RSS_DIALECT_LABEL[row.dialect] || row.dialect }),
+                  row.aggregate
+                    ? el("span", { class: "tag tiny", text: "聚合流" })
+                    : el("span", { class: "tag tiny ok", text: "单番流" }),
+                  row.has_cookie ? el("span", { class: "tag tiny", text: "带 Cookie" }) : null,
+                  !row.enabled ? el("span", { class: "tag warn tiny", text: "已停用" }) : null,
+                ].filter(Boolean)),
+                el("div", { class: "cell-sub mono tiny truncate", title: row.url, text: row.url }),
+              ]),
+          },
+          {
+            title: "过滤 / 落地",
+            render: (row) =>
+              el("div", { class: "stack tiny" }, [
+                row.include_regex ? el("div", { class: "mono dim", text: "只要 " + row.include_regex }) : null,
+                row.exclude_regex ? el("div", { class: "mono dim", text: "排除 " + row.exclude_regex }) : null,
+                row.subscribe_id ? el("div", { class: "dim", text: "绑定订阅 #" + row.subscribe_id }) : null,
+                el("div", { class: "dim truncate", title: row.save_path || "", text: row.save_path || "默认目录" }),
+              ].filter(Boolean)),
+          },
+          {
+            title: "单轮上限",
+            class: "num",
+            render: (row) => el("div", { text: String(row.max_per_run || 5) }),
+          },
+          {
+            title: "已下载",
+            class: "num",
+            render: (row) =>
+              el("div", {}, [
+                el("div", { text: String(row.total_downloaded || 0) }),
+                el("div", { class: "cell-sub", text: "已记 " + (row.handled_count || 0) + " 条 guid" }),
+              ]),
+          },
+          {
+            title: "最近巡检",
+            render: (row) =>
+              el("div", {}, [
+                el("div", { text: fmtRelative(row.last_checked_at) }),
+                row.last_message
+                  ? el("div", { class: "cell-sub truncate", title: row.last_message, text: row.last_message })
+                  : null,
+              ]),
+          },
+          {
+            title: "失败",
+            class: "num",
+            render: (row) =>
+              row.failure_count
+                ? el("span", { class: "tag warn", text: String(row.failure_count) })
+                : el("span", { class: "dim", text: "0" }),
+          },
+          {
+            title: "操作",
+            render: (row) =>
+              el("div", { class: "row tight" }, [
+                iconButton("试运行", "eye", async () => {
+                  try {
+                    const result = await api("/rss-feeds/" + row.id + "/check?dry_run=true", { method: "POST" });
+                    toast(result.message || "试运行完成", result.success ? "ok" : "err");
+                    pageRssFeeds();
+                  } catch (error) {
+                    toast(error.message, "err");
+                  }
+                }, "sm ghost"),
+                iconButton("巡检", "play", async () => {
+                  try {
+                    const result = await api("/rss-feeds/" + row.id + "/check", { method: "POST" });
+                    toast(result.message || "巡检完成", result.success ? "ok" : "err");
+                    pageRssFeeds();
+                  } catch (error) {
+                    toast(error.message, "err");
+                  }
+                }, "sm"),
+                iconButton("编辑", "edit", () => rssFeedForm(row, pageRssFeeds), "sm ghost"),
+                iconButton("删除", "trash", async () => {
+                  if (!confirm("确定删除 RSS 源「" + row.name + "」？")) return;
+                  try {
+                    await api("/rss-feeds/" + row.id, { method: "DELETE" });
+                    toast("已删除", "ok");
+                    pageRssFeeds();
+                  } catch (error) {
+                    toast(error.message, "err");
+                  }
+                }, "sm danger"),
+              ]),
+          },
+        ],
+        list,
+        "还没有 RSS 源。上面「常用 RSS 地址」里挑一个添加，或点「新建」贴自己的地址"
+      ),
+    ]);
+
+    shell(
+      el("div", { class: "grid" }, [
+        statsRow,
+        el("div", { class: "grid cols-2" }, [jobCard, sampleCard]),
+        listCard,
+      ]),
+      "RSS 追新",
+      list.length
+        ? "共 " + list.length + " 个源 · 累计下载 " + (stats.downloaded || 0) + " 个"
+        : "贴 RSS 地址自动追新，聚合流按订阅分流",
+      [
+        iconButton("新建 RSS 源", "plus", () => rssFeedForm(null, pageRssFeeds), "primary"),
+        iconButton("刷新", "refresh", () => pageRssFeeds()),
+      ]
+    );
+  }
+
+  /** 检查更新。
+
+      结果必须带「结论怎么来的」：仓库有 Release 时按 tag 比对；一个 Release
+      都没有时退回读主干版本号与最新提交。不区分这两条路的话，没发版的仓库会
+      永远回答"已是最新版本" —— 一个不报错的假功能。
+  */
+  async function checkUpdate(force) {
+    let data;
+    try {
+      data = await api("/system/update/check" + (force ? "?force=true" : ""));
+    } catch (error) {
+      toast("检查更新失败：" + error.message, "err");
+      return;
+    }
+    const isSource = data.mode === "source";
+    const rows = [
+      { label: "当前版本", value: "v" + (data.current || "?") + (data.current_commit ? " (" + data.current_commit + ")" : "") },
+      { label: "上游版本", value: data.latest ? "v" + data.latest + (data.latest_commit ? " (" + data.latest_commit + ")" : "") : "未知" },
+      {
+        label: "判定依据",
+        value: data.source === "release"
+          ? "GitHub Release（按 tag 比对）"
+          : data.source === "branch"
+            ? "主干分支（仓库暂无 Release，读 main 的版本号与最新提交）"
+            : "未知",
+      },
+      { label: "部署形态", value: isSource ? "源码部署（可一键 git pull）" : "容器部署（需在宿主机更新镜像）" },
+      data.cached ? { label: "数据来源", value: "30 分钟缓存（GitHub 未鉴权限 60 次/小时，避免连点被限流）" } : null,
+    ].filter(Boolean);
+
+    panelModal(
+      data.has_update ? "发现新版本 v" + data.latest : "版本检查结果",
+      data.message || "",
+      el("div", {}, [
+        el("div", { class: "pad" }, [
+          el("div", { class: "row tight center wrap" }, [
+            data.has_update
+              ? el("span", { class: "tag dot warn", text: "有可用更新" })
+              : el("span", { class: "tag dot ok", text: "无需更新" }),
+            el("span", { class: "tag tiny", text: isSource ? "源码部署" : "容器部署" }),
+          ]),
+        ]),
+        el("div", { class: "list" }, rows.map((row) =>
+          el("div", { class: "list-row" }, [
+            el("span", { class: "kv-label", text: row.label }),
+            el("span", { class: "mono tiny", text: row.value }),
+          ])
+        )),
+        data.notes
+          ? el("div", { class: "pad" }, [
+              el("div", { class: "kv-label", text: "上游说明" }),
+              el("pre", { class: "pre-wrap mono tiny", text: String(data.notes).slice(0, 2000) }),
+            ])
+          : null,
+        el("div", { class: "pad row tight wrap" }, [
+          iconButton("重新检查（忽略缓存）", "refresh", () => checkUpdate(true), "sm ghost"),
+          data.can_apply
+            ? iconButton("执行更新（git pull）", "download", async () => {
+                try {
+                  const result = await api("/system/update/apply", { method: "POST" });
+                  if (result.success) {
+                    toast((result.message || "更新完成") + (result.restart_required ? "，请重启服务生效" : ""), "ok");
+                  } else {
+                    // 失败原因往往是"本地有未提交改动"，必须原话给出来，
+                    // 我们刻意不自动 reset/merge 去替用户丢掉他的修改
+                    panelModal("更新未执行", result.message || "", el("div", { class: "pad" }, [
+                      result.detail ? el("pre", { class: "pre-wrap mono tiny", text: result.detail }) : null,
+                      (result.commands || []).length
+                        ? el("div", {}, [
+                            el("div", { class: "kv-label", text: "请在宿主机执行" }),
+                            el("pre", { class: "pre-wrap mono tiny", text: (result.commands || []).join("\n") }),
+                          ])
+                        : null,
+                    ].filter(Boolean)), true);
+                  }
+                } catch (error) {
+                  toast(error.message, "err");
+                }
+              }, "sm primary")
+            : null,
+          el("a", {
+            class: "btn sm ghost",
+            href: data.url || "https://github.com/wengdajie/CineFlow",
+            target: "_blank",
+            rel: "noreferrer",
+            text: "在 GitHub 查看",
+          }),
+        ].filter(Boolean)),
+        !data.can_apply
+          ? el("div", { class: "pad" }, [
+              emptyBox(
+                "容器部署时程序无法替换自己的镜像（我们刻意不挂载 docker.sock —— 那等于把宿主机控制权交给本进程）。请在宿主机执行：docker compose pull && docker compose up -d",
+                "info"
+              ),
+            ])
+          : null,
+      ].filter(Boolean)),
+      true
+    );
+  }
+
   // ---------------- ChatOps 机器人 ----------------
   function copyText(text) {
     const value = String(text || "");
@@ -8107,7 +8663,10 @@
       "设置",
       editableGroups.length + " 组可改 · " + data.editable_total +
         " 项可在线改 · " + (dlList.items || []).length + " 个下载器 · 敏感项已脱敏",
-      [iconButton("刷新", "refresh", () => pageSettings())]
+      [
+        iconButton("检查更新", "download", () => checkUpdate(false)),
+        iconButton("刷新", "refresh", () => pageSettings()),
+      ]
     );
   }
 
@@ -8132,6 +8691,7 @@
     storage: pageStorage,
     pansub: pagePanSub,
     videosub: pageVideoSub,
+    rssfeeds: pageRssFeeds,
     strm: pageStrm,
     chatops: pageChatops,
     settings: pageSettings,

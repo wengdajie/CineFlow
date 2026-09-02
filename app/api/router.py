@@ -18,6 +18,7 @@ from app.api.routers import (
     plugins,
     radar,
     ranking,
+    rss_feeds,
     rule_groups,
     schedules,
     search,
@@ -41,6 +42,7 @@ api_router.include_router(subscribes.router)
 api_router.include_router(radar.router)
 api_router.include_router(ranking.router)
 api_router.include_router(rule_groups.router)
+api_router.include_router(rss_feeds.router)
 api_router.include_router(downloads.router)
 api_router.include_router(downloaders.router)
 api_router.include_router(library.router)

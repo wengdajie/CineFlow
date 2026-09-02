@@ -524,6 +524,59 @@ class VideoSubscribe(IdMixin, TimestampMixin, Base):
     total_downloaded: Mapped[int] = mapped_column(Integer, default=0)
 
 
+class RssFeed(IdMixin, TimestampMixin, Base):
+    """RSS 订阅源（参考 Auto_Bangumi 的 RSS 引擎设计）。
+
+    与 :class:`SiteConfig` 里那些 ``provider="rss"`` 的站点**分工不同**，
+    两者刻意并存：
+
+    * ``SiteConfig`` 的 RSS 站点参与**聚合搜索**（用户搜什么就去里面找什么）；
+    * 本表是**追新流**：不搜索，只定时拉最新，把新条目按订阅分流后直接下载。
+
+    合成一张表看似更简洁，实际会让「站点管理」页混进一堆搜不出东西的 RSS
+    （番剧 RSS 通常不支持关键词查询），反而更难理解。
+
+    ``aggregate`` 是本表的核心字段，它决定新条目怎么处理：
+
+    * ``True``（聚合 RSS，如 Mikan「我的番组」/ dmhy 分类流）：一条流里混着
+      多部作品，**必须**先逐条识别再与订阅匹配，只下命中订阅的；
+    * ``False``（单番 RSS）：整条流都是同一部作品，可直接全量下载。
+
+    把它做成用户可配的开关而不是自动推断：推断错的代价是**把整站新番下回来**，
+    这种错误用户往往在磁盘满了才发现。
+    """
+
+    __tablename__ = "rss_feeds"
+    __table_args__ = (UniqueConstraint("url", name="uq_rss_feed_url"),)
+
+    name: Mapped[str] = mapped_column(String(255), index=True)
+    url: Mapped[str] = mapped_column(Text)
+    #: 站点方言（mikan / nyaa / dmhy / acgnx / generic），由 feed 自述自动识别
+    dialect: Mapped[str] = mapped_column(String(32), default="generic")
+    #: 是否聚合流（一条 RSS 混着多部作品），见类文档
+    aggregate: Mapped[bool] = mapped_column(Boolean, default=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    #: 需要登录的 RSS（部分 PT 站的个人订阅地址）
+    cookie: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: 标题包含/排除正则；排除优先于包含
+    include_regex: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    exclude_regex: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    #: 落地目录，为空则用订阅或全局配置
+    save_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: 非聚合流可直接绑定到某个订阅（省掉标题匹配这一步）
+    subscribe_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    #: 单轮最多下载几个，防一次投出几十个任务
+    max_per_run: Mapped[int] = mapped_column(Integer, default=5)
+    #: 已处理过的条目 guid（增量判据：RSS 每次都返回全量，靠它区分新旧）
+    handled_guids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    #: 首次拉取是否跳过历史条目（默认跳过，否则加一条老 RSS 会瞬间投出几十个任务）
+    skip_existing: Mapped[bool] = mapped_column(Boolean, default=True)
+    failure_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    total_downloaded: Mapped[int] = mapped_column(Integer, default=0)
+
+
 class FilterRuleGroup(IdMixin, TimestampMixin, Base):
     """自定义过滤规则组（优先级规则）。
 
