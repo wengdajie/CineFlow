@@ -27,8 +27,8 @@
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)](#-docker-部署推荐)
-[![Tests](https://img.shields.io/badge/tests-1306%20passed-brightgreen)](docs/14-开发指南.md)
-[![Version](https://img.shields.io/badge/version-1.16.1-blue)](docs/08-变更日志.md)
+[![Tests](https://img.shields.io/badge/tests-1335%20passed-brightgreen)](docs/14-开发指南.md)
+[![Version](https://img.shields.io/badge/version-1.17.0-blue)](docs/08-变更日志.md)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 </div>

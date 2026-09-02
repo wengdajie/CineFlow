@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import AsyncIterator
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -434,6 +435,176 @@ async def search_detailed(
     if save_history:
         _save_results(title, media_type, ranked, active_providers, elapsed)
     return ranked, outcomes
+
+
+async def search_stream(
+    title: str,
+    *,
+    media_type: str | None = None,
+    season: int | None = None,
+    episode: int | None = None,
+    rule: FilterRule | None = None,
+    rule_group_id: int | None = None,
+    providers: list[SearchProvider] | None = None,
+    extra_keywords: list[str] | None = None,
+    save_history: bool = True,
+) -> AsyncIterator[dict[str, Any]]:
+    """流式聚合搜索：**每个站点一返回就立刻产出一批结果**。
+
+    为什么需要它：``search_detailed`` 用 ``asyncio.gather`` 等**所有**站点收齐才
+    返回一次。于是整页的等待时间 = 最慢那个站点的耗时（预算上限 25s），
+    哪怕最快的站 300ms 就出货了，用户也得干等——观感就是「搜索很慢」。
+    实际上开的站越多，越可能有一个慢站，体验反而越差。
+
+    产出的事件（供上层逐条 JSON 编码下发）：
+
+    - ``start``：本次要查哪些站点，让前端先把骨架和进度画出来
+    - ``site``：某个站点的结果（已过滤打分并跨站去重），带该站诊断
+    - ``done``：全部结束，附完整诊断与耗时
+
+    公平性在流式下是**天然**的：每个站点各自成批下发，不存在
+    :func:`enforce_site_share` 要解决的「全局重排后小站被整站抹掉」问题。
+    但仍保留两道安全阀，避免个别站点刷屏把浏览器拖死：
+    单站最多 ``SEARCH_MAX_PER_SITE``，全局最多 ``SEARCH_MAX_RESULTS * 2``。
+    """
+    started = time.perf_counter()
+    keywords = build_keywords(
+        title,
+        media_type=media_type,
+        season=season,
+        episode=episode,
+        extra=extra_keywords,
+    )
+    active_providers = providers if providers is not None else site_service.search_providers()
+    if not keywords or not active_providers:
+        if not active_providers:
+            logger.warning("没有可用的搜索站点，请先在站点管理中添加")
+        yield {
+            "type": "done",
+            "total": 0,
+            "items": [],
+            "sites": [],
+            "elapsed_ms": 0,
+            "message": "" if keywords else "关键词为空",
+        }
+        return
+
+    yield {
+        "type": "start",
+        "keyword": title,
+        "total_sites": len(active_providers),
+        "sites": [provider.site_name for provider in active_providers],
+    }
+
+    effective_rule = rule or FilterRule()
+    if not effective_rule.title_keywords:
+        effective_rule.title_keywords = _title_variants(title)
+
+    group = None
+    try:
+        from app.services import rule_groups as rule_group_service
+
+        group = rule_group_service.load_group(rule_group_id)
+    except Exception as exc:  # pragma: no cover - 规则组不可用时退回纯评分
+        logger.warning("加载过滤规则组失败，本次仅按评分排序: %s", exc)
+
+    semaphore = asyncio.Semaphore(max(settings.SEARCH_CONCURRENCY, 1))
+    tasks = [
+        asyncio.ensure_future(
+            _search_one(
+                provider,
+                keywords,
+                media_type=media_type,
+                season=season,
+                episode=episode,
+                semaphore=semaphore,
+            )
+        )
+        for provider in active_providers
+    ]
+
+    global_cap = max(settings.SEARCH_MAX_RESULTS, 1) * 2
+    per_site_cap = settings.SEARCH_MAX_PER_SITE
+    seen: set[str] = set()
+    ranked_all: list[dict[str, Any]] = []
+    outcomes: list[SiteOutcome] = []
+    done_count = 0
+
+    try:
+        for future in asyncio.as_completed(tasks):
+            done_count += 1
+            try:
+                resources, outcome = await future
+            except Exception as exc:
+                # as_completed 丢出来的异常没法关联到具体 provider（顺序已被打乱），
+                # 但绝不能静默吞掉：给一条无名诊断，总数才对得上（ADR-20）
+                logger.warning("站点搜索任务异常: %s", exc)
+                outcome = SiteOutcome(
+                    site="未知站点",
+                    status="error",
+                    message=f"{type(exc).__name__}: {exc}"[:200],
+                )
+                resources = []
+            outcomes.append(outcome)
+
+            limited = resources[:per_site_cap] if per_site_cap > 0 else list(resources)
+            outcome.kept = len(limited)
+
+            fresh: list[Resource] = []
+            for resource in limited:
+                key = resource.unique_key
+                if key in seen:
+                    continue
+                seen.add(key)
+                fresh.append(resource)
+
+            items: list[dict[str, Any]] = []
+            if fresh and len(ranked_all) < global_cap:
+                payload = [resource.to_dict() for resource in fresh]
+                items = filter_and_rank(payload, effective_rule, group)
+                room = global_cap - len(ranked_all)
+                if len(items) > room:
+                    items = items[:room]
+                for item in items:
+                    info = item.pop("_meta", None)
+                    if info is not None:
+                        item["meta"] = info.to_dict()
+                ranked_all.extend(items)
+
+            yield {
+                "type": "site",
+                "site": outcome.to_dict(),
+                "items": items,
+                "received": done_count,
+                "total_sites": len(active_providers),
+                "running_total": len(ranked_all),
+            }
+    finally:
+        # 客户端中途断开时，未完成的站点任务必须取消，
+        # 否则它们会继续跑满超时预算，白占并发名额和站点配额
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+
+    elapsed = int((time.perf_counter() - started) * 1000)
+    healthy = sum(1 for outcome in outcomes if outcome.status == "ok")
+    logger.info(
+        "流式搜索「%s」完成：%d/%d 站点有结果 / 命中 %d 条 / %dms",
+        title,
+        healthy,
+        len(active_providers),
+        len(ranked_all),
+        elapsed,
+    )
+    if save_history:
+        _save_results(title, media_type, ranked_all, active_providers, elapsed)
+
+    yield {
+        "type": "done",
+        "total": len(ranked_all),
+        "elapsed_ms": elapsed,
+        "sites": [outcome.to_dict() for outcome in outcomes],
+    }
 
 
 def _title_variants(title: str) -> list[str]:

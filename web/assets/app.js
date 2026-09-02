@@ -239,6 +239,91 @@
     return payload;
   }
 
+  /**
+   * NDJSON 流式请求：每读到一行就回调一次。
+   *
+   * 为什么不用 EventSource：它不能自定义请求头（带不了 Bearer token），
+   * 也只支持 GET，没法把完整搜索条件放进 body。用 fetch + ReadableStream
+   * 反而更简单，还能拿到 AbortController 用于「换关键词就取消上一次」。
+   *
+   * 返回 ``{ done, abort }``：``done`` 是整条流读完的 Promise，
+   * ``abort`` 供调用方主动取消（用户重新搜索时必须取消上一次，
+   * 否则两次搜索的结果会交叉写进同一个列表）。
+   */
+  function apiStream(path, options, onEvent) {
+    const config = Object.assign({ method: "POST", headers: {} }, options || {});
+    config.headers = Object.assign(
+      { "Content-Type": "application/json" },
+      config.headers,
+      store.token ? { Authorization: "Bearer " + store.token } : {}
+    );
+    if (config.body && typeof config.body !== "string") {
+      config.body = JSON.stringify(config.body);
+    }
+    const controller = new AbortController();
+    config.signal = controller.signal;
+
+    const done = (async function () {
+      const response = await fetch(API + path, config);
+      if (response.status === 401) {
+        logout(true);
+        throw new Error("登录已过期，请重新登录");
+      }
+      if (!response.ok) {
+        const text = await response.text();
+        let detail = "";
+        try {
+          const payload = text ? JSON.parse(text) : null;
+          detail = payload && (payload.detail || payload.message);
+        } catch (err) {
+          detail = text;
+        }
+        throw new Error(
+          typeof detail === "string" && detail ? detail : "请求失败(" + response.status + ")"
+        );
+      }
+      // 老浏览器/代理不支持 body 流时退回「一次性读完再逐行回放」：
+      // 体验回到非流式，但功能不会坏（渐进增强）
+      if (!response.body || !response.body.getReader) {
+        const text = await response.text();
+        text.split("\n").forEach(function (line) {
+          if (line.trim()) onEvent(JSON.parse(line));
+        });
+        return;
+      }
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      for (;;) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        buffer += decoder.decode(chunk.value, { stream: true });
+        // 按行切分：最后一段可能是**半行**，留在 buffer 里等下一个 chunk
+        const lines = buffer.split("\n");
+        buffer = lines.pop();
+        for (let i = 0; i < lines.length; i += 1) {
+          const line = lines[i].trim();
+          if (!line) continue;
+          try {
+            onEvent(JSON.parse(line));
+          } catch (err) {
+            // 单行坏了不该让整条流中断
+            console.warn("流式响应解析失败", line);
+          }
+        }
+      }
+      if (buffer.trim()) {
+        try {
+          onEvent(JSON.parse(buffer));
+        } catch (err) {
+          console.warn("流式响应尾行解析失败", buffer);
+        }
+      }
+    })();
+
+    return { done: done, abort: function () { controller.abort(); } };
+  }
+
   const STATUS_MAP = {
     active: ["追新中", "ok"],
     completed: ["已完成", "brand"],
@@ -923,7 +1008,10 @@
   }
 
   // ---------------- 资源搜索 ----------------
-  const searchState = { items: [], keyword: "", sort: "score", kind: "", sites: [] };
+  const searchState = { items: [], keyword: "", sort: "score", kind: "", sites: [],
+    // stream：进行中的流式请求句柄（换关键词要取消它）
+    // progress：已收到几个站 / 共几个站，用于搜索中的进度条
+    stream: null, progress: { received: 0, total: 0, running: false } };
 
   const SORTERS = {
     score: (a, b) => (b.score || 0) - (a.score || 0),
@@ -1164,6 +1252,14 @@
             el("h3", {}, [
               icon("search", "sm"),
               el("span", { text: "搜索结果 " + filtered.length + " / " + searchState.items.length }),
+              // 搜索中就把「已回来几个站」显示出来：流式下结果是一批批到的，
+              // 不告诉用户还有站没回来，他会以为已经搜完了（而且会少下东西）
+              searchState.progress.running
+                ? el("span", {
+                    class: "tag warn dot",
+                    text: "搜索中 " + searchState.progress.received + "/" + searchState.progress.total + " 站",
+                  })
+                : null,
             ]),
             el("div", { class: "row tight center" }, [
               segment(
@@ -1241,7 +1337,9 @@
               { title: "操作", render: (row) => resourceActions(row) },
             ],
             filtered,
-            "没有匹配的资源，试试更换关键词或启用更多站点"
+            searchState.progress.running
+              ? "正在搜索，结果会陆续出现…"
+              : "没有匹配的资源，试试更换关键词或启用更多站点"
           ),
         ])
       );
@@ -1260,31 +1358,90 @@
       }
       keyword.value = text;
       searchState.keyword = text;
+
+      // 换关键词必须取消上一次的流，否则两次搜索的结果会交叉写进同一个列表
+      if (searchState.stream) {
+        searchState.stream.abort();
+        searchState.stream = null;
+      }
+      searchState.items = [];
+      searchState.sites = [];
+      searchState.progress = { received: 0, total: 0, running: true };
       results.replaceChildren(loading());
-      try {
-        const data = await api("/search", {
-          method: "POST",
+
+      let firstBatch = true;
+      const handle = apiStream(
+        "/search/stream",
+        {
           body: {
             keyword: text,
             media_type: type.value || null,
             season: season.value ? Number(season.value) : null,
             episode: episode.value ? Number(episode.value) : null,
           },
-        });
-        searchState.items = data.items || [];
-        searchState.sites = data.sites || [];
-        renderResults();
-        loadHot();
-        // 有站点异常时不能只报「找到 N 条」：那会让用户以为已经搜全了
-        const bad = searchState.sites.filter(function (row) {
-          return row.status === "timeout" || row.status === "error" || row.status === "skipped";
-        }).length;
-        toast(
-          "找到 " + data.total + " 条资源" + (bad ? "（" + bad + " 个站点未出货，见下方站点情况）" : ""),
-          data.total ? (bad ? "warn" : "ok") : "warn"
-        );
+        },
+        function (event) {
+          if (event.type === "start") {
+            searchState.progress.total = event.total_sites || 0;
+            // 先把骨架画出来：用户立刻看到「正在查 N 个站」，而不是空白转圈
+            renderResults();
+            return;
+          }
+          if (event.type === "site") {
+            searchState.progress.received = event.received || 0;
+            searchState.progress.total = event.total_sites || searchState.progress.total;
+            if (event.site) searchState.sites.push(event.site);
+            const batch = event.items || [];
+            if (batch.length) {
+              searchState.items = searchState.items.concat(batch);
+              if (firstBatch) {
+                firstBatch = false;
+                // 首批到达就把 loading 换成真实表格
+                renderResults();
+                return;
+              }
+            }
+            renderResults();
+            return;
+          }
+          if (event.type === "done") {
+            searchState.progress.running = false;
+            if (event.sites && event.sites.length) searchState.sites = event.sites;
+            renderResults();
+            loadHot();
+            const bad = searchState.sites.filter(function (row) {
+              return row.status === "timeout" || row.status === "error" || row.status === "skipped";
+            }).length;
+            const total = event.total || searchState.items.length;
+            toast(
+              "找到 " + total + " 条资源" +
+                (bad ? "（" + bad + " 个站点未出货，见下方站点情况）" : ""),
+              total ? (bad ? "warn" : "ok") : "warn"
+            );
+            return;
+          }
+          if (event.type === "error") {
+            searchState.progress.running = false;
+            toast(event.message || "搜索失败", "err");
+            renderResults();
+          }
+        }
+      );
+      searchState.stream = handle;
+      try {
+        await handle.done;
       } catch (error) {
-        results.replaceChildren(el("div", { class: "card" }, [emptyBox(error.message, "alert")]));
+        if (error && error.name === "AbortError") return;  // 用户主动换词，不是故障
+        searchState.progress.running = false;
+        // 已经拿到部分结果时不要清屏：保住已出货的站点，只提示出错
+        if (searchState.items.length) {
+          renderResults();
+          toast(error.message, "err");
+        } else {
+          results.replaceChildren(el("div", { class: "card" }, [emptyBox(error.message, "alert")]));
+        }
+      } finally {
+        if (searchState.stream === handle) searchState.stream = null;
       }
     };
 
@@ -3924,6 +4081,7 @@
       "站点管理",
       "共 " + sites.length + " 个配置 · 已启用 " + enabledCount + " 个 · 下载器请到「设置」页配置",
       [
+        iconButton("接入 Jackett", "link", () => jackettDialog(pageSites), "primary"),
         iconButton("发现站点", "radar", () => discoverDialog()),
         iconButton("社区清单", "compass", () => zhuijuDialog(pageSites)),
         iconButton("AI 分析站点", "sparkles", () => aiSiteDialog(pageSites)),
@@ -3931,6 +4089,189 @@
         iconButton("新增站点", "plus", () => siteForm(providers), "primary"),
         iconButton("下载器设置", "download", () => go("settings"), "ghost"),
       ]
+    );
+  }
+
+  /**
+   * Jackett / Prowlarr 批量接入对话框。
+   *
+   * 设计意图：用户心里的操作是「我 Jackett 里已经配好一堆站了，拿过来」，
+   * 而不是逐个手工拼 indexers/<id>/results/torznab 地址（20 个站要填 20 次）。
+   * 所以这里是「填一次地址+Key → 勾选 → 批量导入」三步。
+   */
+  function jackettDialog(onDone) {
+    const url = el("input", { class: "input", placeholder: "http://127.0.0.1:9117" });
+    const key = el("input", { class: "input", placeholder: "Jackett 界面右上角的 API Key" });
+    url.value = localStorage.getItem("cf_jackett_url") || "http://127.0.0.1:9117";
+    key.value = localStorage.getItem("cf_jackett_key") || "";
+
+    const listBox = el("div", {});
+    const picked = {};
+    let indexers = [];
+
+    const importBtn = el("button", { class: "btn primary" }, [
+      icon("download", "sm"),
+      el("span", { text: "导入所选" }),
+    ]);
+    importBtn.disabled = true;
+
+    const refreshImportBtn = () => {
+      const n = Object.keys(picked).filter(function (k) { return picked[k]; }).length;
+      importBtn.disabled = !n;
+      importBtn.querySelector("span").textContent = n ? "导入所选 " + n + " 个" : "导入所选";
+    };
+
+    const renderList = () => {
+      if (!indexers.length) {
+        listBox.replaceChildren(el("div", { class: "muted", text: "先填地址与 API Key，再点「读取索引器」" }));
+        return;
+      }
+      const allBtn = el("button", { class: "btn sm ghost" }, [el("span", { text: "全选可导入" })]);
+      allBtn.addEventListener("click", function () {
+        indexers.forEach(function (item) {
+          if (!item.already_added) picked[item.id] = true;
+        });
+        renderList();
+      });
+      const noneBtn = el("button", { class: "btn sm ghost" }, [el("span", { text: "清空" })]);
+      noneBtn.addEventListener("click", function () {
+        Object.keys(picked).forEach(function (k) { delete picked[k]; });
+        renderList();
+      });
+
+      listBox.replaceChildren(
+        el("div", { class: "row tight", style: "margin-bottom:8px" }, [
+          el("span", { class: "tag", text: "共 " + indexers.length + " 个" }),
+          allBtn,
+          noneBtn,
+        ]),
+        table(
+          [
+            {
+              title: "",
+              render: function (row) {
+                const box = el("input", { type: "checkbox" });
+                box.checked = !!picked[row.id];
+                box.disabled = !!row.already_added;
+                box.addEventListener("change", function () {
+                  picked[row.id] = box.checked;
+                  refreshImportBtn();
+                });
+                return box;
+              },
+            },
+            {
+              title: "索引器",
+              render: function (row) {
+                return el("div", {}, [
+                  el("div", { class: "row tight center" }, [
+                    el("div", { text: row.name }),
+                    row.already_added ? el("span", { class: "tag ok", text: "已导入" }) : null,
+                    row.type ? el("span", { class: "tag", text: row.type }) : null,
+                  ]),
+                  el("div", { class: "cell-sub", text: row.categories.join(" · ") || row.description || "" }),
+                ]);
+              },
+            },
+            {
+              title: "测试",
+              render: function (row) {
+                const btn = el("button", { class: "btn sm ghost" }, [el("span", { text: "测试" })]);
+                btn.addEventListener("click", async function () {
+                  btn.disabled = true;
+                  btn.querySelector("span").textContent = "测试中…";
+                  try {
+                    const res = await api("/sites/jackett/test", {
+                      method: "POST",
+                      body: { url: url.value.trim(), api_key: key.value.trim(), indexer_id: row.id },
+                    });
+                    toast(row.name + "：" + res.message, res.success ? "ok" : "err");
+                  } catch (error) {
+                    toast(error.message, "err");
+                  }
+                  btn.disabled = false;
+                  btn.querySelector("span").textContent = "测试";
+                });
+                return btn;
+              },
+            },
+          ],
+          indexers,
+          "没有已配置的索引器"
+        )
+      );
+      refreshImportBtn();
+    };
+
+    const loadBtn = el("button", { class: "btn" }, [
+      icon("refresh", "sm"),
+      el("span", { text: "读取索引器" }),
+    ]);
+    loadBtn.addEventListener("click", async function () {
+      loadBtn.disabled = true;
+      loadBtn.querySelector("span").textContent = "读取中…";
+      listBox.replaceChildren(el("div", { class: "muted", text: "正在读取 Jackett 索引器…" }));
+      try {
+        const res = await api("/sites/jackett/indexers", {
+          method: "POST",
+          body: { url: url.value.trim(), api_key: key.value.trim() },
+        });
+        indexers = (res.data && res.data.items) || [];
+        if (!res.success) {
+          // 失败原因要原样显示：连不上 / Key 错 / 一个站都没配，
+          // 三种情况的下一步动作完全不同
+          listBox.replaceChildren(el("div", { class: "notice err", text: res.data.message }));
+        } else {
+          localStorage.setItem("cf_jackett_url", url.value.trim());
+          localStorage.setItem("cf_jackett_key", key.value.trim());
+          renderList();
+          toast(res.data.message, "ok");
+        }
+      } catch (error) {
+        listBox.replaceChildren(el("div", { class: "notice err", text: error.message }));
+      }
+      loadBtn.disabled = false;
+      loadBtn.querySelector("span").textContent = "读取索引器";
+    });
+
+    importBtn.addEventListener("click", async function () {
+      const ids = Object.keys(picked).filter(function (k) { return picked[k]; });
+      if (!ids.length) return;
+      importBtn.disabled = true;
+      importBtn.querySelector("span").textContent = "导入中…";
+      try {
+        const res = await api("/sites/jackett/import", {
+          method: "POST",
+          body: { url: url.value.trim(), api_key: key.value.trim(), indexer_ids: ids },
+        });
+        toast(res.message, res.created_count ? "ok" : "warn");
+        if (res.skipped && res.skipped.length) {
+          res.skipped.forEach(function (s) { toast(s.id + "：" + s.reason, "warn"); });
+        }
+        if (onDone) onDone();
+      } catch (error) {
+        toast(error.message, "err");
+      }
+      importBtn.disabled = false;
+      refreshImportBtn();
+    });
+
+    renderList();
+    panelModal(
+      "从 Jackett / Prowlarr 导入站点",
+      "Jackett 已经帮你维护了几百个站点的适配。填一次地址与 API Key，把里面配好的索引器整批拿过来即可。",
+      el("div", {}, [
+        el("div", { class: "grid cols-2" }, [
+          el("label", { class: "field" }, [el("span", { text: "Jackett 地址" }), url]),
+          el("label", { class: "field" }, [el("span", { text: "API Key" }), key]),
+        ]),
+        el("div", { class: "notice", style: "margin:10px 0" }, [
+          el("div", { text: "提示：CineFlow 跑在 Docker 里时，127.0.0.1 指的是容器自己，要填宿主机 IP（或用 host 网络）。" }),
+        ]),
+        el("div", { class: "row tight", style: "margin-bottom:12px" }, [loadBtn, importBtn]),
+        listBox,
+      ]),
+      true
     );
   }
 

@@ -189,8 +189,8 @@ try:
         for m in methods
         if m.lower() in ("get", "post", "patch", "delete", "put")
     )
-    check("API 端点 165 个", total == 165, f"实际 {total}")
-    check("README 声明 165 个端点", "165 个端点" in README and "共 165 个" in README)
+    check("API 端点 169 个", total == 169, f"实际 {total}")
+    check("README 声明 169 个端点", "169 个端点" in README and "共 169 个" in README)
     paths = set(spec["paths"])
     for path in ("/api/v1/users", "/api/v1/users/{user_id}",
                  "/api/v1/system/settings", "/api/v1/system/settings/reset",
@@ -297,8 +297,8 @@ check("README 说明定时任务可改期", "定时任务" in README and "cron" 
 
 # ---- 测试文件 ----
 test_files = sorted(p.name for p in pathlib.Path("tests").glob("test_*.py"))
-check("测试文件 52 个", len(test_files) == 52, str(test_files))
-check("README 声明 52 个测试文件", "52 个测试文件" in README)
+check("测试文件 53 个", len(test_files) == 53, str(test_files))
+check("README 声明 53 个测试文件", "53 个测试文件" in README)
 for name in ("test_custom_sites.py", "test_radar.py", "test_trending.py",
              "test_panstorage.py", "test_chatops.py", "test_nfo.py",
              "test_scraper.py", "test_webdav.py", "test_strm_sync.py",
@@ -326,9 +326,9 @@ if _badge and _guide:
     check("README 徽章与开发指南的测试数一致",
           _badge.group(1) == _guide.group(1),
           f"徽章 {_badge.group(1)} vs 指南 {_guide.group(1)}")
-check("README 版本号 1.16.1", "1.16.1" in README_ONLY)
+check("README 版本号 1.17.0", "1.17.0" in README_ONLY)
 version_src = pathlib.Path("app/core/version.py").read_text(encoding="utf-8")
-check("代码版本号为 1.16.1", 'APP_VERSION = "1.16.1"' in version_src)
+check("代码版本号为 1.17.0", 'APP_VERSION = "1.17.0"' in version_src)
 check("README 声明 288 项接口用例", "288 项真实 HTTP 接口用例" in README)
 check("scripts/README 声明 288 项", "288 项接口用例" in SCRIPTS_README)
 
@@ -1265,7 +1265,7 @@ check("变更日志含 v1.12.0", "## v1.12.0" in changelog_text)
 check("变更日志含 v1.12.1", "## v1.12.1" in changelog_text)
 check("变更日志含 v1.13.0", "## v1.13.0" in changelog_text)
 check("变更日志含 v1.14.0", "## v1.14.0" in changelog_text)
-check("变更日志含 v1.16.1", "## v1.16.1" in changelog_text)
+check("变更日志含 v1.17.0", "## v1.17.0" in changelog_text)
 check("变更日志记录破坏性变更", "破坏性变更" in changelog_text)
 roadmap_all = (docs_dir / "03-升级路线图.md").read_text(encoding="utf-8")
 for milestone in ("M30", "M31", "M32", "M33", "M34", "M35", "M36",
@@ -1403,7 +1403,8 @@ check("站点情况覆盖五种状态",
       all(f"{key}:" in _status_body
           for key in ("ok", "empty", "timeout", "skipped", "error")),
       _status_body.replace("\n", " ")[:80])
-check("搜索保存站点诊断", "searchState.sites = data.sites" in app_js)
+check("搜索逐站累积站点诊断", "searchState.sites.push(event.site)" in app_js)
+check("done 事件用完整诊断覆盖累积值", "searchState.sites = event.sites" in app_js)
 check("有站点未出货时提示不报全绿", "个站点未出货" in app_js)
 check("站点情况提供解除熔断入口", "/search/breaker/reset" in app_js)
 
@@ -1482,6 +1483,126 @@ check("重试次数有实测依据", "UNEXPECTED_EOF" in _img_src)
 check("图片代理重试有回归用例",
       "def test_proxy_retries_after_tls_drop(" in
       pathlib.Path("tests/test_image_proxy.py").read_text(encoding="utf-8"))
+
+# ---- v1.17.0：流式搜索 + Jackett 批量接入 ----
+# ① 流式搜索：整页等待 = 最慢站耗时，这条是本轮「搜索慢」的根因
+_search_src = pathlib.Path("app/services/search.py").read_text(encoding="utf-8")
+_search_api = pathlib.Path("app/api/routers/search.py").read_text(encoding="utf-8")
+check("搜索服务提供流式接口", "async def search_stream(" in _search_src)
+_stream_body = _search_src.split("async def search_stream(")[1].split("def _title_variants(")[0]
+# 判据必须钉死 as_completed：换回 gather 就退化成「等所有站收齐」，
+# 接口还在、事件还在，但用户那边又变成一次性出结果（本轮注入缺陷验证过）
+check("流式搜索按完成顺序下发", "asyncio.as_completed(tasks)" in _stream_body)
+_stream_code = "\n".join(
+    line for line in _stream_body.splitlines()
+    if not line.lstrip().startswith("#") and "``asyncio.gather``" not in line
+)
+check("流式搜索不用 gather 等齐", "asyncio.gather(" not in _stream_code)
+for event in ("start", "site", "done"):
+    check(f"流式事件含 {event}", f'"type": "{event}"' in _stream_body)
+# 单站异常必须变成一条有名有姓的诊断，否则站点总数对不上（ADR-20）
+check("流式搜索单站异常不拖垮整体", "except Exception as exc:" in _stream_body)
+check("流式搜索保留单站上限", "per_site_cap" in _stream_body)
+check("流式搜索保留全局上限", "global_cap" in _stream_body)
+# 客户端断开后未完成任务会继续吃满超时预算，占住并发名额与站点配额
+check("流式搜索收尾取消未完成任务",
+      "task.cancel()" in _stream_body and "finally:" in _stream_body)
+check("流式端点存在 /api/v1/search/stream", "/api/v1/search/stream" in paths)
+check("流式响应用 NDJSON", 'media_type="application/x-ndjson"' in _search_api)
+# 反代缓冲会攒够一块才转发，流式在用户那边退化成一次性出结果（部署面最常见的坑）
+check("流式响应关闭反代缓冲", '"X-Accel-Buffering": "no"' in _search_api)
+check("流式响应禁止转换与缓存", "no-cache, no-transform" in _search_api)
+# 流一开始就没法改状态码，异常只能写进流里
+check("流式异常写进流而不是抛 500", '{"type": "error"' in _search_api
+      or '"type": "error"' in _search_api)
+
+# ② Jackett 批量接入：手工拼 torznab 地址是「20 个站填 20 次」，不符合日常使用
+check("Jackett 服务存在", pathlib.Path("app/services/jackett.py").exists())
+_jk = pathlib.Path("app/services/jackett.py").read_text(encoding="utf-8")
+check("Jackett 索引器清单路径", 'INDEXERS_PATH = "/api/v2.0/indexers"' in _jk)
+# 落库地址**不能**带结尾 /api：TorznabIndexer._endpoint() 会自己补，
+# 带上就拼成 /torznab/api/api → 404，站点看着配好了却永远 0 条（本轮实测踩到）
+_torznab_fn = _jk.split("def torznab_url(")[1].split("def caps_url(")[0]
+check("torznab_url 不带结尾 /api",
+      'return f"{root}{INDEXERS_PATH}/{indexer_id}/results/torznab"' in _torznab_fn)
+_caps_fn = _jk.split("def caps_url(")[1].split("def _as_bool(")[0]
+check("caps_url 带 /api", 'torznab_url(base, indexer_id)}/api' in _caps_fn)
+check("Jackett 落库地址复用 torznab_url",
+      '"url": torznab_url(base_url, indexer_id)' in _jk)
+# 探测用 t=caps 而不是真搜一次：caps 不消耗站点搜索配额，
+# 也不会因「这词该站确实没有」误判成站点坏了（ADR-75 的反面教训）
+check("Jackett 探测用 caps 不消耗搜索配额", '"t": "caps"' in _jk)
+# 失败原因必须分三档，笼统报「获取失败」等于让用户瞎试
+_listing = _jk.split("async def list_indexers(")[1].split("async def test_indexer(")[0]
+check("连不上时提示 Docker 网络", "宿主机" in _listing and "127.0.0.1" in _listing)
+check("Key 错时明确指出", "API Key 不正确" in _listing)
+check("一个站都没配时指引 Add Indexer", "Add Indexer" in _listing)
+# Prowlarr 不返回 configured 字段，缺失时必须默认当作已配置，不能把真实站点悄悄藏掉
+check("configured 字段缺失时默认视为已配置",
+      "if configured is not None and not _as_bool(configured):" in _listing)
+_sites_src = pathlib.Path("app/api/routers/sites.py").read_text(encoding="utf-8")
+for path in ("/api/v1/sites/jackett/indexers", "/api/v1/sites/jackett/import",
+             "/api/v1/sites/jackett/test"):
+    check(f"端点存在 {path}", path in paths)
+# FastAPI 按注册顺序匹配：jackett 路由若排在 /{site_id} 之后，
+# POST /sites/jackett/test 会被 /sites/{site_id}/test 先吃掉并按 int 解析 → 422
+check("Jackett 路由注册在 /{site_id} 之前",
+      _sites_src.index('@router.post("/jackett/test"')
+      < _sites_src.index('@router.patch("/{site_id}"'))
+# 一条撞重名不该让整批失败；已存在的更新地址与 Key，重装 Jackett 时不必先删再加
+_import_body = _sites_src.split("async def jackett_import(")[1].split("async def jackett_test(")[0]
+check("批量导入逐条落库不整批回滚", "skipped.append(" in _import_body)
+check("已存在的站点更新地址与 Key",
+      "dup.url = data[\"url\"]" in _import_body
+      and "dup.api_key = data[\"api_key\"]" in _import_body)
+check("站点名加 Jackett 前缀避免撞名", 'name_prefix: str = "Jackett"' in _jk)
+check("Jackett 站点复用 torznab Provider", "TorznabIndexer.name" in _jk)
+
+# ③ 前端：流式读取 + Jackett 导入向导
+check("前端有 NDJSON 流式读取函数", "function apiStream(" in app_js)
+_stream_js = app_js.split("function apiStream(")[1].split("const STATUS_MAP")[0]
+# 半行必须留在 buffer 里等下一个 chunk，否则 JSON 会被截断解析失败
+check("前端处理半行缓冲", "buffer = lines.pop();" in _stream_js)
+check("前端单行解析失败不中断整流", "console.warn(" in _stream_js)
+# 不支持 body 流时退回一次性读完再回放：体验退化但功能不坏
+check("前端对不支持流的环境有退路", "response.body.getReader" in _stream_js)
+check("前端流式可中止", "controller.abort()" in _stream_js)
+check("搜索走流式端点", '"/search/stream"' in app_js)
+# 换关键词不取消上一次，两次结果会交叉写进同一个列表
+check("重新搜索先取消上一次", "searchState.stream" in app_js)
+check("主动取消不当成故障", "AbortError" in app_js)
+check("搜索中展示站点进度", "searchState.progress" in app_js
+      and "搜索中 " in app_js)
+# 还没搜完就说「没有匹配的资源」是错的
+check("搜索中空表文案不误报无结果", "结果会陆续出现" in app_js)
+check("前端有 Jackett 导入向导", "function jackettDialog(" in app_js)
+check("站点页有接入 Jackett 入口", '"接入 Jackett"' in app_js)
+check("Jackett 地址与 Key 记住", 'localStorage.setItem("cf_jackett_url"' in app_js)
+_jk_js = app_js.split("function jackettDialog(")[1][:6000]
+# 后端标 already_added，前端必须据此禁用勾选并打「已导入」标，
+# 否则用户会反复导入同一批站（虽然后端幂等，但界面看不出来）
+check("后端标注索引器是否已导入", 'item["already_added"] = item["id"] in existing' in _sites_src)
+check("已导入的索引器不可重复勾选", "box.disabled = !!row.already_added;" in _jk_js)
+check("已导入的索引器有标记", 'text: "已导入"' in _jk_js)
+check("流式与 Jackett 有回归用例",
+      pathlib.Path("tests/test_jackett_stream.py").exists())
+_jk_tests = pathlib.Path("tests/test_jackett_stream.py").read_text(encoding="utf-8")
+check("回归用例覆盖 torznab 地址不带 api", "class Test" in _jk_tests and "torznab" in _jk_tests)
+check("回归用例覆盖流式事件顺序", "search_stream" in _jk_tests)
+# 文档：站点接入指南必须把 Jackett 摆成首选路径，FAQ 要能自助排障
+check("ADR-78 记录流式优先于聚合等待",
+      "## ADR-78 ·" in (docs_dir / "04-决策记录.md").read_text(encoding="utf-8"))
+check("ADR-79 记录 Jackett 批量接入",
+      "## ADR-79 ·" in (docs_dir / "04-决策记录.md").read_text(encoding="utf-8"))
+_site_doc = (docs_dir / "10-站点接入指南.md").read_text(encoding="utf-8")
+check("站点指南含接入 Jackett 小节", "接入 Jackett" in _site_doc)
+check("站点指南提示 Docker 里要填宿主机 IP", "宿主机" in _site_doc and "9117" in _site_doc)
+_faq = (docs_dir / "15-常见问题.md").read_text(encoding="utf-8")
+check("FAQ 解释结果为何逐步出现", "逐步出现" in _faq or "陆续出现" in _faq)
+check("FAQ 解释 Jackett 导入的站搜不到", "Jackett" in _faq)
+check("API 文档列出流式端点", "/search/stream" in API_DOC)
+check("API 文档列出 Jackett 端点", "/sites/jackett/import" in API_DOC)
+check("路线图含里程碑 M50", "里程碑 M50" in roadmap_all)
 
 print()
 print("=" * 60)

@@ -109,19 +109,19 @@ curl -X POST -H "X-API-Token: your-token" \
      http://127.0.0.1:6060/api/v1/subscribes/run-all
 ```
 
-主要端点分组（共 165 个端点）：
+主要端点分组（共 169 个端点）：
 
 | 前缀 | 用途 |
 |---|---|
 | `/api/v1/auth` | 登录、当前用户、改密 |
-| `/api/v1/search` | 聚合搜索（GET 快查 / POST 带完整过滤条件）；**慢站熔断**（v1.15.0）：`GET /search/breaker` 看哪些站在冷却、还剩多久，`POST /search/breaker/reset` 手动解除（不传 `site` 则全部清空） |
+| `/api/v1/search` | 聚合搜索（GET 快查 / POST 带完整过滤条件）；**流式搜索**（v1.17.0）：`POST /search/stream` 按站点逐批下发结果，响应是 NDJSON（每行一个 JSON），事件 `start`（要查哪些站）/ `site`（某站结果 + 该站诊断 + `received`/`total_sites` 进度）/ `done`（完整诊断 + 耗时）；流已开始后异常写成 `{"type":"error"}` 行而不是改状态码。响应带 `X-Accel-Buffering: no`，反代需自行关闭缓冲；**慢站熔断**（v1.15.0）：`GET /search/breaker` 看哪些站在冷却、还剩多久，`POST /search/breaker/reset` 手动解除（不传 `site` 则全部清空） |
 | `/api/v1/trending` | 热度排行 / 发现榜：总览、资源榜、实时榜、搜索热词、站点贡献榜、**豆瓣条目查询**、豆瓣四分类、B 站分区、YouTube 地区榜、**Bangumi 放送日历** |
 | `/api/v1/images` | **封面图代理**（绕过豆瓣图床防盗链，带白名单 SSRF 防护，匿名可用） |
 | `/api/v1/subscribes` | 订阅 CRUD、缺集查询、单个/全部巡检 |
 | `/api/v1/downloads` | 任务列表、手动添加、暂停恢复、删除、同步、**资源类型→下载方式路由**（`GET /downloads/routing`：每类资源该走哪个下载器、现在缺什么、缺了去哪儿加；v1.15.0 起还会带 `unreachable` —— 巡检显示连不上的下载器）。⚠️ v1.15.0 起 `POST /downloads` 的 `success` 表示**投递的真实结局**：下载器拒绝时为 `false` 且 `message` 写明原因（HTTP 仍是 200，任务可查可重试）；`pending` 为 `true` 但带下一步提示 |
 | `/api/v1/library` | 统计、文件列表、扫描、手动整理、整理记录、刷新 |
 | `/api/v1/media` | 资源名识别、TMDB 搜索/详情/分集/热榜 |
-| `/api/v1/sites` | 站点 CRUD、连通性测试、Provider 清单、预设模板、导航站发现；**社区清单**（v1.14.0）：`GET /sites/catalog` 查询候选（`?refresh=true` 强制拉取、`?probe=searchable` 只看可搜索的）、`POST /sites/catalog/probe` 真搜一次做可用性探测、`POST /sites/catalog/{entry_id}/apply` 一键添加（**仅 `searchable` 允许，其余返回 400 并说明原因**） |
+| `/api/v1/sites` | 站点 CRUD、连通性测试、Provider 清单、预设模板、导航站发现；**Jackett/Prowlarr 批量接入**（v1.17.0）：`POST /sites/jackett/indexers` 列出 Jackett 上已配置的索引器（含分类/语言/是否已导入）、`POST /sites/jackett/import` 勾选后批量落库（`indexer_ids` 传 `["all"]` 用聚合端点；已存在的同名站点**更新地址与 Key**而非报错；逐条落库不整批回滚，返回 `imported`/`skipped`）、`POST /sites/jackett/test` 单站 `t=caps` 探测（不消耗搜索配额）。⚠️ 落库地址**不带**结尾 `/api`（Provider 会自己补，带上会拼成 `/api/api` → 404）；**社区清单**（v1.14.0）：`GET /sites/catalog` 查询候选（`?refresh=true` 强制拉取、`?probe=searchable` 只看可搜索的）、`POST /sites/catalog/probe` 真搜一次做可用性探测、`POST /sites/catalog/{entry_id}/apply` 一键添加（**仅 `searchable` 允许，其余返回 400 并说明原因**） |
 | `/api/v1/radar` | 追新雷达：手动追新、预览匹配、最新流预览、任务状态 |
 | `/api/v1/ranking-rules` | 榜单自动订阅：规则 CRUD、试算候选、单条/全部执行 |
 | `/api/v1/rule-groups` | 过滤规则组：CRUD、设为默认、样例资源试算分层 |
@@ -164,7 +164,7 @@ cineflow/
 │   └── main.py        应用入口（lifespan / CORS / 静态资源）
 ├── web/               index.html + assets/(app.js style.css)  ← 零依赖前端
 ├── plugins/           auto_cleanup pan_transfer daily_digest  ← 示例插件
-├── tests/             52 个测试文件
+├── tests/             53 个测试文件
 ├── scripts/           smoke_test / ui_check / demo_pipeline 验证脚本
 ├── docs/              16 篇维护文档（现状/架构/路线图/决策/运维/站点接入/变更日志/竞品对标…）
 ├── config/            config.yaml.example
