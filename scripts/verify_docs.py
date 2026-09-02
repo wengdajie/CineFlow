@@ -83,6 +83,37 @@ for _p in _REMOVED_SITES:
         f"已下线的 provider {_p} 不再内置",
         not any(s["provider"] == _p for s in DEFAULT_SITES),
     )
+# v1.16.1：清单瘦身对**升级用户**必须有迁移动作兜底。
+# create_default_sites 只增不删，所以老库里 v1.14.0 写入的下线站点会一直留着，
+# 表现为「启用了也永远搜不到东西」——只有全新安装才干净（详见 docs/04 ADR-77）。
+import inspect as _inspect  # noqa: E402
+
+from app.db import init_db as _init_db_module  # noqa: E402
+from app.db.init_db import _RETIRED_SITES, retire_removed_sites  # noqa: E402
+
+check("已下线站点有清理迁移", callable(retire_removed_sites))
+check("下线清单含 10 个站点", len(_RETIRED_SITES) == 10, f"实际 {len(_RETIRED_SITES)}")
+check(
+    "init_db 调用下线清理",
+    "retire_removed_sites()" in _inspect.getsource(_init_db_module.init_db),
+)
+# 一手删一手加回来会让迁移每次启动都删掉刚写入的记录
+check(
+    "下线清单与内置清单无交集",
+    not ({s["name"] for s in DEFAULT_SITES} & set(_RETIRED_SITES)),
+)
+# 只删「没被用户碰过」的记录，凭据与改过的地址都必须拦住
+_retire_src = _inspect.getsource(_init_db_module.retire_removed_sites)
+_untouched_src = _inspect.getsource(_init_db_module._looks_untouched)
+check("清理前检查是否出厂状态", "_looks_untouched" in _retire_src)
+check(
+    "出厂判定检查四类凭据",
+    all(f in _untouched_src for f in ("api_key", "cookie", "username", "password")),
+)
+check("出厂判定比对出厂地址", "site.url" in _untouched_src)
+check("清理动作会记账避免反复删除", "KEY_RETIRED_SEEDS" in _retire_src)
+check("下线清理有回归用例", pathlib.Path("tests/test_seed_retire.py").exists())
+
 check("默认站点含 webdav", any(s["provider"] == "webdav" for s in DEFAULT_SITES))
 # 需要填地址/账号的站点必须默认禁用（示例值直接跑必然报错）。
 # 白名单：yt-dlp 是本地库调用；kkso 系（kkso.net / zhuiju.us）是 v1.14.0 从
@@ -266,8 +297,8 @@ check("README 说明定时任务可改期", "定时任务" in README and "cron" 
 
 # ---- 测试文件 ----
 test_files = sorted(p.name for p in pathlib.Path("tests").glob("test_*.py"))
-check("测试文件 51 个", len(test_files) == 51, str(test_files))
-check("README 声明 51 个测试文件", "51 个测试文件" in README)
+check("测试文件 52 个", len(test_files) == 52, str(test_files))
+check("README 声明 52 个测试文件", "52 个测试文件" in README)
 for name in ("test_custom_sites.py", "test_radar.py", "test_trending.py",
              "test_panstorage.py", "test_chatops.py", "test_nfo.py",
              "test_scraper.py", "test_webdav.py", "test_strm_sync.py",
@@ -295,9 +326,9 @@ if _badge and _guide:
     check("README 徽章与开发指南的测试数一致",
           _badge.group(1) == _guide.group(1),
           f"徽章 {_badge.group(1)} vs 指南 {_guide.group(1)}")
-check("README 版本号 1.16.0", "1.16.0" in README_ONLY)
+check("README 版本号 1.16.1", "1.16.1" in README_ONLY)
 version_src = pathlib.Path("app/core/version.py").read_text(encoding="utf-8")
-check("代码版本号为 1.16.0", 'APP_VERSION = "1.16.0"' in version_src)
+check("代码版本号为 1.16.1", 'APP_VERSION = "1.16.1"' in version_src)
 check("README 声明 288 项接口用例", "288 项真实 HTTP 接口用例" in README)
 check("scripts/README 声明 288 项", "288 项接口用例" in SCRIPTS_README)
 
@@ -1234,7 +1265,7 @@ check("变更日志含 v1.12.0", "## v1.12.0" in changelog_text)
 check("变更日志含 v1.12.1", "## v1.12.1" in changelog_text)
 check("变更日志含 v1.13.0", "## v1.13.0" in changelog_text)
 check("变更日志含 v1.14.0", "## v1.14.0" in changelog_text)
-check("变更日志含 v1.16.0", "## v1.16.0" in changelog_text)
+check("变更日志含 v1.16.1", "## v1.16.1" in changelog_text)
 check("变更日志记录破坏性变更", "破坏性变更" in changelog_text)
 roadmap_all = (docs_dir / "03-升级路线图.md").read_text(encoding="utf-8")
 for milestone in ("M30", "M31", "M32", "M33", "M34", "M35", "M36",
