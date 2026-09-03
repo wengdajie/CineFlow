@@ -22,6 +22,7 @@ from app.schemas.models import (
     RssPreviewRequest,
 )
 from app.services import rss_feeds as service
+from app.services import site_catalog
 
 router = APIRouter(prefix="/rss-feeds", tags=["RSS 追新"])
 
@@ -74,6 +75,66 @@ def dialects(user: CurrentUser) -> dict[str, Any]:
 @router.post("/check-all", summary="立即巡检全部 RSS 源")
 async def check_all(user: OperatorUser, dry_run: bool = False) -> dict[str, Any]:
     return await service.run(dry_run=dry_run, notify=False)
+
+
+@router.get("/presets", summary="实测可用的 RSS 源清单")
+def rss_presets(user: CurrentUser, include_adult: bool = False) -> dict[str, Any]:
+    """已实测可拉通的 RSS 追新源，可一键批量添加。
+
+    ``include_adult`` 默认 False：成人向源不该在「一键添加推荐源」时被顺手带进去。
+    """
+    existing = {str(row.get("url") or "") for row in service.list_feeds()}
+    items = []
+    for preset in site_catalog.list_rss_presets(include_adult=include_adult):
+        row = dict(preset)
+        row["installed"] = preset["url"] in existing
+        items.append(row)
+    return {"success": True, "total": len(items), "items": items}
+
+
+@router.post("/presets/import", summary="批量添加实测可用的 RSS 源")
+def import_rss_presets(
+    user: OperatorUser,
+    ids: list[str] | None = None,
+    enabled: bool = True,
+    include_adult: bool = False,
+) -> dict[str, Any]:
+    """把实测 RSS 源批量落库。``ids`` 为空表示全部（不含成人向，除非显式要求）。
+
+    已存在的地址**跳过而不是报错**：``create_feed`` 本身对重复地址返回既有记录，
+    这里把它归到 skipped，好让用户看清"这次真正新增了几条"。
+    """
+    wanted = site_catalog.list_rss_presets(include_adult=True)
+    if ids:
+        keep = {str(i) for i in ids}
+        wanted = [p for p in wanted if p["id"] in keep]
+        missing = keep - {p["id"] for p in wanted}
+        if missing:
+            raise HTTPException(status_code=404, detail=f"预设不存在：{', '.join(sorted(missing))}")
+    else:
+        wanted = site_catalog.list_rss_presets(include_adult=include_adult)
+    if not wanted:
+        raise HTTPException(status_code=400, detail="没有可添加的 RSS 源")
+
+    created: list[str] = []
+    skipped: list[str] = []
+    for preset in wanted:
+        payload = site_catalog.feed_payload(preset, enabled=enabled)
+        try:
+            data = service.create_feed(payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if data.get("duplicated"):
+            skipped.append(payload["name"])
+        else:
+            created.append(payload["name"])
+    return {
+        "success": True,
+        "created": created,
+        "skipped": skipped,
+        "message": f"新增 {len(created)} 条 RSS 源"
+        + (f"，跳过 {len(skipped)} 条已存在" if skipped else ""),
+    }
 
 
 @router.patch("/{feed_id}", summary="更新 RSS 源")

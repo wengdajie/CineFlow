@@ -10,6 +10,7 @@ from sqlalchemy import select
 from app.api.deps import AdminUser, CurrentUser, DbSession
 from app.db.base import utcnow
 from app.db.models import SiteConfig
+from app.db.session import SessionLocal
 from app.providers.registry import list_providers
 from app.schemas.enums import ProviderKind
 from app.schemas.models import (
@@ -24,6 +25,7 @@ from app.schemas.models import (
 from app.services import discovery as discovery_service
 from app.services import jackett as jackett_service
 from app.services import presets as preset_service
+from app.services import site_catalog
 from app.services import sites as site_service
 from app.services import zhuiju as zhuiju_service
 
@@ -185,6 +187,83 @@ async def jackett_test(
         payload.url, payload.api_key, payload.indexer_id, timeout=payload.timeout
     )
     return {"success": ok, "message": message}
+
+
+@router.get("/bt-catalog", summary="实测可用的 BT 站点清单")
+def bt_catalog(user: CurrentUser) -> dict[str, Any]:
+    """已实测跑通的磁力/BT 站点，可一键批量导入。
+
+    与 ``/presets``（字段映射模板）的区别：这里每一条都**当场搜出过真实资源**，
+    ``measured`` 字段就是验收凭据，``caveat`` 如实写明缺陷。
+    """
+    items = []
+    for preset in site_catalog.list_bt_presets():
+        row = {k: v for k, v in preset.items() if k != "options"}
+        row["installed"] = False
+        items.append(row)
+    # 标出哪些已经装过，避免用户重复导入后撞 unique 约束才发现
+    with SessionLocal() as probe:
+        existing = {
+            str(name)
+            for name in probe.execute(select(SiteConfig.name)).scalars()
+        }
+    for row in items:
+        row["installed"] = row["name"] in existing
+    return {"success": True, "total": len(items), "items": items}
+
+
+@router.post("/bt-catalog/import", summary="批量导入实测可用的 BT 站点")
+def import_bt_catalog(
+    session: DbSession,
+    user: AdminUser,
+    ids: list[str] | None = None,
+    enabled: bool = True,
+) -> dict[str, Any]:
+    """把实测清单里的站点批量落库。
+
+    ``ids`` 为空表示全部导入。已存在的**跳过而不是报错** ——
+    批量导入里让一条重复毁掉整批是最没必要的失败。
+    """
+    wanted = list(site_catalog.list_bt_presets())
+    if ids:
+        keep = {str(i) for i in ids}
+        wanted = [p for p in wanted if p["id"] in keep]
+        missing = keep - {p["id"] for p in wanted}
+        if missing:
+            raise HTTPException(status_code=404, detail=f"预设不存在：{', '.join(sorted(missing))}")
+    if not wanted:
+        raise HTTPException(status_code=400, detail="没有可导入的站点")
+
+    created: list[str] = []
+    skipped: list[str] = []
+    for preset in wanted:
+        payload = site_catalog.site_payload(preset, enabled=enabled)
+        exists = session.execute(
+            select(SiteConfig).where(SiteConfig.name == payload["name"])
+        ).scalar_one_or_none()
+        if exists:
+            skipped.append(payload["name"])
+            continue
+        session.add(
+            SiteConfig(
+                name=payload["name"],
+                kind=payload["kind"],
+                provider=payload["provider"],
+                url=payload["url"],
+                enabled=payload["enabled"],
+                priority=payload["priority"],
+                options=payload["options"],
+            )
+        )
+        created.append(payload["name"])
+    session.commit()
+    return {
+        "success": True,
+        "created": created,
+        "skipped": skipped,
+        "message": f"新增 {len(created)} 个站点"
+        + (f"，跳过 {len(skipped)} 个已存在" if skipped else ""),
+    }
 
 
 @router.patch("/{site_id}", response_model=SiteOut, summary="更新站点")

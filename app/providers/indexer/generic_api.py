@@ -122,9 +122,22 @@ def clean_text(value: Any) -> str:
     return text.strip()
 
 
+RESOURCE_KINDS = {"torrent", "magnet", "pan", "direct", "webvideo"}
+
+
 def guess_kind(link: str, declared: str | None = None) -> str:
-    """根据链接推断资源类型。"""
-    if declared:
+    """根据链接推断资源类型。
+
+    ``declared`` 是站点配置里的 ``kind`` 字段（ProviderKind），
+    不是 ResourceKind。两者名字相同但值域不同，ProviderKind 的值
+    （"indexer"、"pan"）在 ResourceKind 里没有对应项。
+
+    如果直接 ``if declared: return declared``，站点配置了
+    ``kind="indexer"`` 的 BT 站会**把所有磁力标成 kind=indexer**，
+    下载路由查不到这个 ResourceKind 而回退到 torrent 兜底（ADR-82）。
+    因此只接受合法的 ResourceKind 值。
+    """
+    if declared and declared in RESOURCE_KINDS:
         return declared
     lowered = link.lower()
     if lowered.startswith("magnet:"):

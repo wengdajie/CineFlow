@@ -17,6 +17,7 @@ from app.providers.base import Resource, SearchProvider
 from app.schemas.enums import MediaType
 from app.services import search_breaker
 from app.services import sites as site_service
+from app.utils.http import FetchError
 from app.utils.strings import normalize
 
 logger = get_logger(__name__)
@@ -131,6 +132,9 @@ async def _search_one(
     outcome = SiteOutcome(site=provider.site_name)
     started = time.perf_counter()
     last_error = ""
+    #: 是否出现过「服务明确不可用」（502/连不上/DNS 失败）。
+    #: 与超时分开记：硬失败要单独进熔断计数，否则已死的站会永远拖慢每次搜索。
+    hard_failure = False
     # 熔断中的站点直接跳过：它上几轮都把整个预算吃光且没有任何结果，
     # 继续带着它只会让每次搜索都多等一个 SEARCH_TIMEOUT（实测 25s）。
     # 注意要如实写进诊断，不能静默消失（ADR-20）。
@@ -173,6 +177,15 @@ async def _search_one(
                 outcome.status = "timeout"
                 last_error = f"搜索超时（站点预算 >{settings.SEARCH_TIMEOUT}s）"
                 continue
+            except FetchError as exc:
+                # 站点/服务层面的失败（502、超时、TLS、域名失效…）。
+                # 这里必须**保留 exc.message**：它已经是"能照着做下一步"的中文，
+                # 再包一层 FetchError: 前缀反而把有用信息埋掉。
+                logger.warning("站点 %s 请求失败: %s", provider.site_name, exc.message)
+                outcome.status = "error"
+                last_error = exc.message[:200]
+                hard_failure = True
+                continue
             except Exception as exc:
                 logger.warning("站点 %s 搜索异常: %s", provider.site_name, exc)
                 outcome.status = "error"
@@ -206,6 +219,14 @@ async def _search_one(
         if outcome.status == "timeout" and outcome.elapsed_ms >= budget_ms * 0.9:
             if search_breaker.record_timeout(
                 provider.site_name, outcome.elapsed_ms, "连续吃满超时预算且无结果"
+            ):
+                outcome.message += "（已触发熔断，稍后自动重试）"
+        elif outcome.status == "error" and hard_failure:
+            # 服务明确不可用（如 Jackett 挂掉返回 502）。实测这种站每次搜索
+            # 都要先撞 3.4s 才放弃，且永远不会自愈，必须进熔断计数，
+            # 否则它会给**每一次**聚合搜索都加上这份固定开销。
+            if search_breaker.record_failure(
+                provider.site_name, outcome.elapsed_ms, last_error or "服务不可用"
             ):
                 outcome.message += "（已触发熔断，稍后自动重试）"
         elif outcome.status == "empty":

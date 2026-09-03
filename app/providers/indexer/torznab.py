@@ -9,7 +9,7 @@ from app.core.logger import get_logger
 from app.providers.base import Resource, SearchProvider
 from app.providers.registry import register
 from app.schemas.enums import MediaType, ProviderKind, ResourceKind
-from app.utils.http import fetch_text
+from app.utils.http import FetchError, fetch_text, fetch_text_result
 from app.utils.strings import parse_datetime, parse_size
 
 logger = get_logger(__name__)
@@ -77,7 +77,11 @@ class TorznabIndexer(SearchProvider):
         if page:
             params["offset"] = page * int(self.option("page_size", 100))
 
-        text = await fetch_text(
+        # 刻意用 fetch_text_result（会抛）而不是 fetch_text（返回 None）：
+        # Jackett 挂掉时端口返回 502，返回 None 会让上层把"服务已死"
+        # 显示成「连通正常，但没有匹配结果」，用户只会去反复换关键词。
+        # 详见 app.utils.http.FetchError 的文档与 ADR-82。
+        text = await fetch_text_result(
             endpoint,
             params=self._params(t=search_type, **params),
             headers={"Cookie": self.config.get("cookie") or ""},
@@ -169,11 +173,15 @@ class TorznabIndexer(SearchProvider):
         endpoint = self._endpoint()
         if not endpoint:
             return False, "未配置 url"
-        text = await fetch_text(
-            endpoint, params=self._params(t="caps"), timeout=self.config.get("timeout")
-        )
+        try:
+            text = await fetch_text_result(
+                endpoint, params=self._params(t="caps"), timeout=self.config.get("timeout")
+            )
+        except FetchError as exc:
+            # 如实回报 502/超时/TLS，而不是一律"无法连接站点"
+            return False, exc.message
         if not text:
-            return False, "无法连接站点"
+            return False, "站点返回空内容"
         if "<caps" not in text and "<error" not in text:
             return False, "返回内容不是 Torznab caps"
         if "<error" in text:

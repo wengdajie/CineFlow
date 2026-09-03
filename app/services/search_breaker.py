@@ -105,6 +105,20 @@ def skip_reason(site: str) -> str:
     return f"已暂时跳过（{detail}），约 {max(1, left // 60)} 分钟后自动重试"
 
 
+def record_failure(site: str, elapsed_ms: int, reason: str = "") -> bool:
+    """记一次「站点级硬失败」（服务已死 / 域名失效）。返回是否触发熔断。
+
+    与 :func:`record_timeout` 分开命名是为了表达**语义不同**：
+    超时是"慢到没能给出结果"，硬失败是"服务明确不可用"（502/连不上/DNS 失败）。
+
+    **为什么硬失败也必须计数**（v1.19.0 实测）：Jackett 挂掉后每次搜索都要
+    先花 3.4s 撞上 502 才放弃。它不是 timeout，所以原来完全不进熔断计数，
+    于是这个已死的站会**永远**参与每一次聚合搜索，白白给每次搜索加 3.4s。
+    硬失败比超时更确定（服务明确说了"我不行"），因此没有理由比超时更宽容。
+    """
+    return record_timeout(site, elapsed_ms, reason)
+
+
 def record_timeout(site: str, elapsed_ms: int, reason: str = "") -> bool:
     """记一次「吃满预算且零结果」。返回本次是否触发熔断。"""
     if not enabled():
