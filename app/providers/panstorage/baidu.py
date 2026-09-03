@@ -20,7 +20,11 @@
 **两个百度特有的坑（都已处理）**：
 
 1. **写操作必须带 ``bdstoken``**：这是从模板变量接口现取的 CSRF 令牌，
-   缺了会直接 ``errno=-6``（身份验证失败）。这里取一次缓存在实例上。
+   缺了会直接 ``errno=-6``（身份验证失败）。这里取一次缓存在实例上，
+   模板变量接口取不到时**再从 ``/disk/home`` 的 HTML 里正则兜底**。
+   实测：无 Cookie 与垃圾 Cookie 都返回 ``errno=-6``、``result=[]``，
+   两者完全同形 —— 所以错误消息必须按 ``_last_errno`` + 有没有 Cookie
+   分开说，否则「没登录」会被误报成「登录过期」，用户照着提示白忙一场。
 2. **直链 ``dlink`` 不能直接投给下载器**：用浏览器 UA 请求 dlink 会 403，
    必须带 ``User-Agent: netdisk``。所以 :meth:`download_url` 自己带着
    ``netdisk`` UA 请求一次、**取 302 的 Location 作为最终 CDN 直链**返回，
@@ -44,6 +48,9 @@ from app.providers.registry import register
 from app.utils.http import async_client, fetch_json
 
 logger = get_logger(__name__)
+
+#: 网盘首页 HTML 里的 bdstoken（模板变量接口拿不到时的兜底取法）
+_BDSTOKEN_RE = re.compile(r'bdstoken["\s:=]+([0-9a-f]{32})')
 
 API_BASE = "https://pan.baidu.com"
 #: 分享链接形如 https://pan.baidu.com/s/1AbCdEf 或 .../share/init?surl=AbCdEf
@@ -88,6 +95,8 @@ class BaiduPanStorage(BasePanStorage):
     def __init__(self, config: dict[str, Any] | None = None) -> None:
         super().__init__(config)
         self._bdstoken: str = ""
+        #: 最近一次 _call 的 errno（None = 没发出去或响应不是 JSON）
+        self._last_errno: int | None = None
 
     @property
     def cookie(self) -> str:
@@ -109,7 +118,13 @@ class BaiduPanStorage(BasePanStorage):
         params: dict[str, Any] | None = None,
         data: Any = None,
     ) -> dict[str, Any] | None:
-        """调百度接口。``errno != 0`` 视为失败并记录原因。"""
+        """调百度接口。``errno != 0`` 视为失败并记录原因。
+
+        兼容既有 19 处调用点的语义（失败返回 ``None``），但**把最后一次
+        errno 留在 ``self._last_errno``** —— 上层要区分「Cookie 没配」
+        「Cookie 过期」「被风控」时需要它，而 ``None`` 三者同形（ADR-82）。
+        """
+        self._last_errno = None
         if not self.cookie:
             return None
         merged = {"clienttype": 0, "app_id": 250528, "web": 1, **(params or {})}
@@ -124,6 +139,7 @@ class BaiduPanStorage(BasePanStorage):
         if not isinstance(payload, dict):
             return None
         errno = _as_int(payload.get("errno"), 0)
+        self._last_errno = errno
         if errno != 0:
             logger.warning(
                 "百度网盘 %s 失败：errno=%s %s",
@@ -135,7 +151,13 @@ class BaiduPanStorage(BasePanStorage):
         return payload
 
     async def _token(self) -> str:
-        """取并缓存 bdstoken（写操作的 CSRF 令牌）。"""
+        """取并缓存 bdstoken（写操作的 CSRF 令牌）。
+
+        **两条取法，缺一不可**（实测）：模板变量接口是主路；它在某些
+        账号态下会返回 ``errno=0`` 但 ``result`` 里没有 bdstoken，
+        此时从 ``/disk/home`` 的 HTML 里正则捞一次仍能拿到。
+        只有两条都空才算真失败。
+        """
         if self._bdstoken:
             return self._bdstoken
         payload = await self._call(
@@ -144,7 +166,56 @@ class BaiduPanStorage(BasePanStorage):
         result = (payload or {}).get("result") or {}
         if isinstance(result, dict):
             self._bdstoken = str(result.get("bdstoken") or "")
+        if not self._bdstoken:
+            self._bdstoken = await self._token_from_html()
         return self._bdstoken
+
+    async def _token_from_html(self) -> str:
+        """兜底：从网盘首页 HTML 里正则提取 bdstoken。
+
+        未登录时百度会 302 到 ``/login?redirecturl=...``，那个页面里
+        **没有** bdstoken —— 实测确认过，所以捞不到就是没登录，
+        不必再重试。
+        """
+        if not self.cookie:
+            return ""
+        try:
+            async with async_client(
+                timeout=self.config.get("timeout") or 15, follow_redirects=True
+            ) as client:
+                response = await client.get(
+                    f"{API_BASE}/disk/home", headers=self._headers()
+                )
+        except (httpx.HTTPError, OSError) as exc:  # 网络层问题，不是登录问题
+            logger.warning("百度网盘取首页失败：%s", exc)
+            return ""
+        matched = _BDSTOKEN_RE.search(response.text or "")
+        return matched.group(1) if matched else ""
+
+    def _auth_hint(self, action: str) -> str:
+        """把「取不到 bdstoken」翻成**可执行**的下一步。
+
+        原来一律说「Cookie 可能已过期」，但实测 ``errno=-6`` 在
+        **没配 Cookie** 和 **Cookie 过期** 两种情况下完全相同，
+        而用户该做的事不一样。这里按已知信号分开说。
+        """
+        if not self.cookie:
+            return f"{action}失败：未配置百度网盘 Cookie，请先在「网盘管理」扫码登录"
+        errno = self._last_errno
+        if errno == -6:
+            return (
+                f"{action}失败：百度返回 errno=-6（身份校验不通过），"
+                "Cookie 已失效或缺少 BDUSS/STOKEN 字段，请重新扫码登录"
+            )
+        if errno is None:
+            return (
+                f"{action}失败：连不上百度网盘或响应不是 JSON，"
+                "请检查网络/代理后重试"
+            )
+        return (
+            f"{action}失败：取不到 bdstoken（百度 errno={errno}），"
+            "多为登录态异常或触发风控，请重新扫码登录"
+        )
 
     # ---------------- 目录 ----------------
     @staticmethod
@@ -206,7 +277,7 @@ class BaiduPanStorage(BasePanStorage):
         """文件管理统一入口（rename/move/copy/delete 都走它）。"""
         token = await self._token()
         if not token:
-            logger.warning("百度网盘取不到 bdstoken，写操作无法进行（Cookie 可能已过期）")
+            logger.warning("百度网盘%s", self._auth_hint("写操作"))
             return False
         payload = await self._call(
             "/api/filemanager",
@@ -332,7 +403,11 @@ class BaiduPanStorage(BasePanStorage):
         )
         if payload:
             return True, "百度网盘登录态正常"
-        return False, "百度网盘 Cookie 可能已过期，请重新扫码登录"
+        if self._last_errno == -6:
+            return False, "百度网盘 Cookie 已过期或失效（errno=-6），请重新扫码登录"
+        if self._last_errno is None:
+            return False, "连不上百度网盘（网络或代理问题），登录态未知"
+        return False, f"百度网盘保活失败（errno={self._last_errno}），可能触发风控"
 
     # ---------------- 转存 ----------------
     @staticmethod
@@ -370,9 +445,7 @@ class BaiduPanStorage(BasePanStorage):
 
         token = await self._token()
         if not token:
-            return SaveResult(
-                success=False, message="取不到 bdstoken，Cookie 可能已过期"
-            )
+            return SaveResult(success=False, message=self._auth_hint("转存"))
 
         # 1) 有密码先校验，换 BDCLND 票据
         sekey = ""

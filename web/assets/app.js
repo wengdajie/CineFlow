@@ -1180,7 +1180,13 @@
               storages.map((item) => ({ value: String(item.site_id), label: item.name }))
             ),
           },
-          { key: "target_dir", label: "落地目录", placeholder: "留空用网盘默认目录" },
+          {
+            key: "target_dir",
+            label: "落地目录",
+            // 预填上次用过的目录（后端按站点记忆），省掉每次重新输入
+            value: (storages[0] || {}).suggested_target_dir || "",
+            placeholder: "留空用网盘默认目录",
+          },
         ],
         async (values) => {
           await doSave(
@@ -3580,7 +3586,7 @@
         const data = response.data;
         listBox.replaceChildren(
           el("div", { class: "muted tiny", style: "margin-bottom:8px", text:
-            "发现 " + data.total + " 个站点。导航站只提供入口，需配置为自定义站点后才能搜索。" }),
+            "发现 " + data.total + " 个站点。点击「添加」会先真搜一次验证；多数导航站候选搜不到资源，通不过属正常。" }),
           table(
             [
               { title: "名称", render: (row) => row.name },
@@ -3602,11 +3608,46 @@
                     (row.tags || []).slice(0, 3).map((tag) => el("span", { class: "tag", text: tag }))),
               },
               {
-                title: "状态",
-                render: (row) =>
-                  row.already_added
-                    ? el("span", { class: "tag dot ok", text: "已添加" })
-                    : el("span", { class: "dim tiny", text: "未添加" }),
+                title: "操作",
+                render: (row) => {
+                  if (row.already_added) {
+                    return el("span", { class: "tag dot ok", text: "已添加" });
+                  }
+                  var wrap = el("span", { class: "row tight" });
+                  var btn = el("button", { class: "btn primary thin" }, [
+                    icon("plus", "sm"),
+                    el("span", { text: "添加" }),
+                  ]);
+                  var note = el("span", { class: "dim tiny" });
+
+                  btn.addEventListener("click", async function () {
+                    btn.disabled = true;
+                    btn.querySelector("span").textContent = "验证中…";
+                    note.textContent = "";
+                    try {
+                      // 后端 apply 会自己先探测再落库，只有 searchable 才放行，
+                      // 所以这里一次调用即可，不必前端先 probe 一遍。
+                      await api("/sites/discover/apply", {
+                        method: "POST",
+                        body: { url: row.url, name: row.name, source: row.source || "" },
+                      });
+                      btn.replaceChildren(icon("check", "sm"), el("span", { text: "已添加" }));
+                      btn.className = "btn thin";
+                      row.already_added = true;
+                      toast("已添加「" + row.name + "」，默认禁用，请到站点管理确认后启用", "ok");
+                    } catch (e) {
+                      // 探测没过是**预期结果**而不是错误：导航站收录的站多半搜不到，
+                      // 这里就地说明原因，不弹红 toast 把它当故障。
+                      btn.disabled = false;
+                      btn.replaceChildren(icon("plus", "sm"), el("span", { text: "重试" }));
+                      note.textContent = e.message.length > 28 ? e.message.slice(0, 28) + "…" : e.message;
+                      note.title = e.message;
+                    }
+                  });
+
+                  wrap.append(btn, note);
+                  return wrap;
+                },
               },
             ],
             data.sites,
@@ -5511,7 +5552,13 @@
               list.map((item) => ({ value: String(item.site_id), label: item.name }))
             ),
           },
-          { key: "target_dir", label: "落地目录", placeholder: "留空用网盘默认目录" },
+          {
+            key: "target_dir",
+            label: "落地目录",
+            // 同上：预填后端记住的上次目录
+            value: (list[0] || {}).suggested_target_dir || "",
+            placeholder: "留空用网盘默认目录",
+          },
         ],
         async (values) => {
           const result = await api("/pan/save", {

@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.config import settings
 from app.core.logger import get_logger
@@ -97,6 +98,56 @@ def _unwrap(result: Any) -> tuple[bool, str]:
     return bool(result), ""
 
 
+# ---------------- 落地目录记忆 ----------------
+#: 存 options 的键。用 `_` 前缀表示「运行期状态」而非用户填的配置，
+#: 与 site_catalog 里 `_from_zhuiju` 同一套约定。
+LAST_DIR_KEY = "_last_target_dir"
+
+
+def remember_target_dir(site_id: int | None, target_dir: str | None) -> None:
+    """把这次真正用到的落地目录记在站点上。
+
+    **为什么落库而不是放前端 localStorage**：转存不只有「用户点按钮」
+    一条路 —— 订阅巡检、分享追更、ChatOps 都会调 :func:`save_share`，
+    它们没有浏览器。落在 `SiteConfig.options` 里，这些无头入口
+    才能共享同一个「上次存哪儿」，也不会因为换浏览器/清缓存就丢。
+
+    刻意只在**转存成功**后调用：失败的目录（比如写错的路径）
+    不该被记住，否则下次默认值就是一个必然失败的值。
+    """
+    if not site_id:
+        return
+    cleaned = str(target_dir or "").strip()
+    if not cleaned:
+        return
+    try:
+        with session_scope() as session:
+            site = session.get(SiteConfig, site_id)
+            if not site:
+                return
+            options = dict(site.options or {})
+            if options.get(LAST_DIR_KEY) == cleaned:
+                return  # 没变就不写，避免每次转存都产生一次 UPDATE
+            options[LAST_DIR_KEY] = cleaned
+            site.options = options
+            site.updated_at = utcnow()
+    except SQLAlchemyError as exc:  # 记忆是锦上添花，绝不能因此让转存失败
+        logger.warning("记录落地目录失败（不影响转存结果）：%s", exc)
+
+
+def suggested_target_dir(storage: BasePanStorage) -> str:
+    """这个盘下一次转存该默认存到哪儿。
+
+    优先级：上次用过的 > 站点配的 root_path。
+    """
+    options = storage.config.get("options") or {}
+    if isinstance(options, dict):
+        remembered = str(options.get(LAST_DIR_KEY) or "").strip()
+        if remembered:
+            return remembered
+    return storage.root_path
+
+
 # ---------------- 只读查询 ----------------
 async def overview() -> dict[str, Any]:
     """网盘总览：每个盘的容量与连通性。"""
@@ -122,6 +173,8 @@ async def overview() -> dict[str, Any]:
                 # v1.7.0：能力位整体下发，前端按能力渲染文件管理按钮
                 "capabilities": storage.capabilities(),
                 "root_path": storage.root_path,
+                # 前端转存弹窗用它预填，省掉每次手输（上次用过的优先）
+                "suggested_target_dir": suggested_target_dir(storage),
                 "quota": quota.to_dict(),
             }
         )
@@ -162,9 +215,13 @@ async def save_share(
     if not storage.supports_save:
         return {"success": False, "message": f"{storage.site_name} 不支持从分享链接转存"}
 
+    # 没显式指定就用「上次用过的 / 站点默认」，让无头入口也享受到记忆
+    effective_dir = str(target_dir or "").strip() or suggested_target_dir(storage)
     result = await storage.save_share(
-        share_url, password=password, target_dir=target_dir
+        share_url, password=password, target_dir=effective_dir or None
     )
+    if result.success:
+        remember_target_dir(storage.config.get("id") or site_id, effective_dir)
     payload = {
         "success": result.success,
         "storage": storage.site_name,

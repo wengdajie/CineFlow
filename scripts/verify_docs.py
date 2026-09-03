@@ -191,8 +191,8 @@ try:
         for m in methods
         if m.lower() in ("get", "post", "patch", "delete", "put")
     )
-    check("API 端点 183 个", total == 183, f"实际 {total}")
-    check("README 声明 183 个端点", "183 个端点" in README and "共 183 个" in README)
+    check("API 端点 185 个", total == 185, f"实际 {total}")
+    check("README 声明 185 个端点", "185 个端点" in README and "共 185 个" in README)
     paths = set(spec["paths"])
     for path in ("/api/v1/users", "/api/v1/users/{user_id}",
                  "/api/v1/system/settings", "/api/v1/system/settings/reset",
@@ -299,8 +299,8 @@ check("README 说明定时任务可改期", "定时任务" in README and "cron" 
 
 # ---- 测试文件 ----
 test_files = sorted(p.name for p in pathlib.Path("tests").glob("test_*.py"))
-check("测试文件 56 个", len(test_files) == 56, str(test_files))
-check("README 声明 56 个测试文件", "56 个测试文件" in README)
+check("测试文件 57 个", len(test_files) == 57, str(test_files))
+check("README 声明 57 个测试文件", "57 个测试文件" in README)
 for name in ("test_custom_sites.py", "test_radar.py", "test_trending.py",
              "test_panstorage.py", "test_chatops.py", "test_nfo.py",
              "test_scraper.py", "test_webdav.py", "test_strm_sync.py",
@@ -328,9 +328,9 @@ if _badge and _guide:
     check("README 徽章与开发指南的测试数一致",
           _badge.group(1) == _guide.group(1),
           f"徽章 {_badge.group(1)} vs 指南 {_guide.group(1)}")
-check("README 版本号 1.20.0", "1.20.0" in README_ONLY)
+check("README 版本号 1.21.0", "1.21.0" in README_ONLY)
 version_src = pathlib.Path("app/core/version.py").read_text(encoding="utf-8")
-check("代码版本号为 1.20.0", 'APP_VERSION = "1.20.0"' in version_src)
+check("代码版本号为 1.21.0", 'APP_VERSION = "1.21.0"' in version_src)
 check("README 声明 314 项接口用例", "314 项真实 HTTP 接口用例" in README)
 check("scripts/README 声明 314 项", "314 项接口用例" in SCRIPTS_README)
 
@@ -1730,6 +1730,46 @@ check("新 Provider 文件存在", pathlib.Path("app/providers/indexer/torrents_
 check("新 Provider 文件存在", pathlib.Path("app/providers/indexer/animetosho.py").exists())
 check("别名模块存在", pathlib.Path("app/services/title_alias.py").exists())
 check("BT 覆盖测试文件存在", pathlib.Path("tests/test_bt_coverage.py").exists())
+
+
+# ---- v1.21.0：发现即可接入 / 落地目录记忆 / 百度病因分流 ----
+_adr = (docs_dir / "04-决策记录.md").read_text(encoding="utf-8")
+check("变更日志含 v1.21.0", "## v1.21.0" in _chg118)
+check("ADR-87 记录发现即可接入", "## ADR-87 ·" in _adr)
+check("ADR-88 记录交互式探测收窄", "## ADR-88 ·" in _adr)
+check("ADR-89 记录落地目录服务端记忆", "## ADR-89 ·" in _adr)
+check("ADR-90 记录百度 bdstoken 病因分流", "## ADR-90 ·" in _adr)
+check("路线图含里程碑 M53", "里程碑 M53" in roadmap_all)
+
+_disc_src = pathlib.Path("app/services/discovery.py").read_text(encoding="utf-8")
+check("发现候选可探测", "async def probe_discovered" in _disc_src)
+check("发现候选可落库", "def suggest_from_probe" in _disc_src)
+# 交互式探测必须收窄：照搬定时任务参数曾把请求拖到 175s（ADR-88）
+check("交互式探测只用 1 个关键词", "INTERACTIVE_KEYWORDS" in _disc_src)
+check("交互式探测有墙钟预算",
+      "PROBE_BUDGET_SECONDS = " in _disc_src
+      and "budget: float = PROBE_BUDGET_SECONDS" in _disc_src
+      and "timeout=budget" in _disc_src)
+check("探测超时报 unknown 而非 blocked",
+      '"probe": "unknown"' in _disc_src and "asyncio.wait_for" in _disc_src)
+# 只放行 searchable，否则等于把搜不到的站塞进搜索链路（ADR-70）
+check("落库只放行 searchable", 'if str(probe.get("probe")) != "searchable"' in _disc_src)
+
+_pan_src = pathlib.Path("app/services/pan_storage.py").read_text(encoding="utf-8")
+check("落地目录会被记住", "def remember_target_dir" in _pan_src)
+check("落地目录有建议值", "def suggested_target_dir" in _pan_src)
+check("建议目录下发给前端", '"suggested_target_dir": suggested_target_dir(storage)' in _pan_src)
+# 失败的目录不该被记住，否则下次默认值是必然失败的值（ADR-89）
+check("只在转存成功后回写记忆", "if result.success:\n        remember_target_dir" in _pan_src)
+
+_bd_src = pathlib.Path("app/providers/panstorage/baidu.py").read_text(encoding="utf-8")
+check("百度按病因分流提示", "def _auth_hint" in _bd_src)
+check("百度 bdstoken 有 HTML 兜底", "async def _token_from_html" in _bd_src)
+check("百度留下 errno 供上层判别", "_last_errno" in _bd_src)
+
+check("发现接入回归用例存在", pathlib.Path("tests/test_site_add_and_dirs.py").exists())
+check("前端发现列表可直接添加",
+      'api("/sites/discover/apply"' in app_js)
 
 check("README 致谢 Auto_Bangumi", "Auto_Bangumi" in README_ONLY)
 

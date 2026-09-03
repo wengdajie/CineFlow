@@ -171,6 +171,22 @@ class SiteUpdate(BaseModel):
     options: dict[str, Any] | None = None
 
 
+class DiscoverProbe(BaseModel):
+    """探测导航站候选站点。"""
+
+    url: str = Field(min_length=1, description="候选站点地址，如 https://uz998.com")
+    timeout: float | None = None
+
+
+class DiscoverApply(BaseModel):
+    """从导航站发现结果添加站点。"""
+
+    url: str = Field(min_length=1, description="候选站点地址")
+    name: str = Field(default="", description="展示名，留空自动从探测结果推断")
+    source: str = Field(default="", description="来源导航站名称，仅用于备注")
+    timeout: float | None = None
+
+
 class JackettConnect(BaseModel):
     """Jackett/Prowlarr 连接参数。"""
 

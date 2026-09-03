@@ -15,6 +15,7 @@ OneNav 的站点卡片形如::
 
 from __future__ import annotations
 
+import asyncio
 import html
 import re
 from dataclasses import asdict, dataclass, field
@@ -202,4 +203,104 @@ async def discover(
         "sites": [item.to_dict() for item in collected[:limit]],
         "errors": errors,
         "directories": [item["url"] for item in targets],
+    }
+
+# ---------------- 探测与落库建议 ----------------
+def _provider_guess(domain: str, search_url: str) -> tuple[str, str, dict[str, Any]]:
+    """按域名/探测出的搜索形态猜 provider。
+
+    与 ``zhuiju.suggest_site`` 保持同一套判据，避免两处对同一个站
+    给出不同的 provider（那会让用户以为是随机的）。
+    """
+    if "kkso" in domain:
+        return "kkso", "pan", {}
+    return (
+        "html_generic",
+        "indexer",
+        {"search_url": search_url, "magnet_only": True} if search_url else {},
+    )
+
+
+#: 交互式探测用的关键词。**刻意只用 1 个**（zhuiju 的定时任务仍用 3 个）：
+#: probe_site 是 keywords × 5 种搜索形态的双层循环，每个形态都可能吃满超时。
+#: 3 词 × 5 形态 × 15s = **225s 最坏情况** —— 实测真的会跑到 urllib 超时，
+#: 而这是挂在界面按钮后面的同步请求，用户只会以为点了没反应。
+INTERACTIVE_KEYWORDS = ("凡人修仙传",)
+
+#: 单次交互式探测的墙钟上限。超了就如实说"没探完"，不假装结论。
+PROBE_BUDGET_SECONDS = 40.0
+
+
+async def probe_discovered(
+    url: str,
+    *,
+    timeout: float = 8.0,
+    budget: float = PROBE_BUDGET_SECONDS,
+) -> dict[str, Any]:
+    """对导航站发现的候选站**真搜一次**，判定能不能用。
+
+    直接复用 :func:`app.services.zhuiju.probe_site` —— 导航站候选和社区清单
+    候选面临的是同一个问题（「首页 200 ≠ 搜得到」，见 ADR-70），
+    没有理由为它们写第二套判据。
+
+    **但不能照搬它的参数**：那个函数是给定时任务用的（3 个关键词、15s 超时、
+    串行留间隔），双层循环最坏要 225s。挂在界面按钮后面必须收窄成
+    1 个关键词 + 8s 超时，并加一道墙钟上限兜底 —— 超时**如实报 unknown**，
+    不猜成 blocked（那会把"我们没探完"说成"站点不可用"，是在替用户下错结论）。
+
+    在这里晚导入是为了避免 ``discovery`` ↔ ``zhuiju`` 循环依赖。
+    """
+    from app.services import zhuiju as zhuiju_service
+
+    try:
+        probe = await asyncio.wait_for(
+            zhuiju_service.probe_site(
+                url, keywords=INTERACTIVE_KEYWORDS, timeout=timeout
+            ),
+            timeout=budget,
+        )
+    except (TimeoutError, asyncio.TimeoutError):
+        logger.info("候选站探测超预算（%ss）：%s", budget, url)
+        probe = {
+            "probe": "unknown",
+            "probe_note": f"探测超过 {int(budget)} 秒未完成，站点响应过慢，未能判定",
+        }
+    domain = urlparse(url).netloc.lower()
+    # probe_site 回的 search_url 已含 {keyword} 占位，正是 html_generic 要的格式
+    search_url = str(probe.get("search_url") or "")
+    provider, kind, options = _provider_guess(domain, search_url)
+    return {
+        **probe,
+        "url": url,
+        "domain": domain,
+        "provider": provider,
+        "kind": kind,
+        "options": options,
+    }
+
+
+def suggest_from_probe(
+    name: str, url: str, probe: dict[str, Any], *, source: str = ""
+) -> dict[str, Any]:
+    """把一次探测结果转成可直接落库的站点配置。
+
+    只放行 ``searchable``：``reachable_only`` 的站加进来也搜不到东西，
+    等于给用户一个「加了但没用」的坑 —— 与 ADR-70 / zhuiju 同一立场。
+    """
+    if str(probe.get("probe")) != "searchable":
+        return {
+            "ok": False,
+            "reason": str(probe.get("probe_note") or "该站点未通过本地搜索探测，不建议添加"),
+        }
+    return {
+        "ok": True,
+        "name": truncate(name or probe.get("domain") or url, 60),
+        "url": url,
+        "provider": str(probe.get("provider") or "html_generic"),
+        "kind": str(probe.get("kind") or "indexer"),
+        "options": {
+            **(probe.get("options") or {}),
+            "note": f"由导航站发现并通过本地搜索探测{('（' + source + '）') if source else ''}",
+        },
+        "probe_note": probe.get("probe_note"),
     }

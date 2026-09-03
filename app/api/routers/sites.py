@@ -14,6 +14,8 @@ from app.db.session import SessionLocal
 from app.providers.registry import list_providers
 from app.schemas.enums import ProviderKind
 from app.schemas.models import (
+    DiscoverApply,
+    DiscoverProbe,
     JackettConnect,
     JackettImport,
     JackettTest,
@@ -376,6 +378,83 @@ async def discover_sites(
 
     data["directories_builtin"] = discovery_service.DEFAULT_DIRECTORIES
     return {"success": True, "data": data}
+
+
+@router.post("/discover/probe", summary="探测导航站候选站点是否真能搜到资源")
+async def discover_probe(
+    payload: DiscoverProbe,
+    user: AdminUser,
+) -> dict[str, Any]:
+    """对导航站发现的候选站真搜一次，返回四档判定。
+
+    与社区清单的 `/catalog/probe` 同一套判据（ADR-70：首页 200 ≠ 搜得到），
+    因为两边候选面临的问题完全相同。
+    """
+    probe = await discovery_service.probe_discovered(
+        str(payload.url), timeout=payload.timeout or 8.0
+    )
+    return {"success": True, "data": probe}
+
+
+@router.post("/discover/apply", response_model=SiteOut, summary="把发现的站点直接添加为站点")
+async def discover_apply(
+    payload: DiscoverApply,
+    session: DbSession,
+    user: AdminUser,
+    enabled: bool = False,
+) -> SiteOut:
+    """把导航站发现的候选站**一键落库**，无需手工填 provider/搜索地址。
+
+    这是本端点存在的理由：发现列表原来只能看不能加，用户得自己记下域名、
+    再去「新增站点」把 provider、search_url、magnet_only 一个个填对 ——
+    而这些信息探测时其实已经拿到了，让用户重新猜一遍毫无道理。
+
+    落库前**强制探测**：只有 `searchable` 档才允许添加（ADR-70），
+    否则等于把搜不到东西的站塞进搜索链路，每次搜索白等几秒。
+    默认 `enabled=False`，由用户确认后再启用（与社区清单一致）。
+    """
+    probe = await discovery_service.probe_discovered(
+        str(payload.url), timeout=payload.timeout or 8.0
+    )
+    suggestion = discovery_service.suggest_from_probe(
+        payload.name or "", str(payload.url), probe, source=payload.source or ""
+    )
+    if not suggestion.get("ok"):
+        raise HTTPException(
+            status_code=400,
+            detail=str(suggestion.get("reason") or "该站点未通过本地搜索探测"),
+        )
+
+    url = str(suggestion["url"])
+    exists = session.execute(
+        select(SiteConfig).where(SiteConfig.url == url)
+    ).scalar_one_or_none()
+    if exists:
+        raise HTTPException(status_code=400, detail=f"站点已存在：{exists.name}")
+
+    name = str(suggestion["name"])
+    # 名字撞了就带上域名区分，否则 unique 约束会直接 500
+    if session.execute(
+        select(SiteConfig).where(SiteConfig.name == name)
+    ).scalar_one_or_none():
+        name = f"{name}（{suggestion.get('options', {}).get('_domain') or probe.get('domain')}）"[:128]
+
+    site = SiteConfig(
+        name=name,
+        kind=str(suggestion["kind"]),
+        provider=str(suggestion["provider"]),
+        url=url,
+        enabled=bool(enabled),
+        priority=40,
+        options=dict(suggestion.get("options") or {}),
+        updated_at=utcnow(),
+    )
+    session.add(site)
+    session.commit()
+    session.refresh(site)
+    return _to_out(site)
+
+
 @router.get("/catalog", summary="社区站点清单（awesome-zhuiju-free）")
 async def zhuiju_catalog(
     session: DbSession,
