@@ -117,8 +117,40 @@ class Aria2Downloader(BaseDownloader):
             error=str(item.get("errorMessage") or "") or None,
         )
 
+    #: 磁力链接的元数据阶段最多跟随几层 followedBy。
+    #: 实测 aria2 1.37 只有一层（metadata -> 数据），留 3 层是防环上限。
+    _FOLLOW_LIMIT = 3
+
+    async def _follow(self, external_id: str) -> dict[str, Any] | None:
+        """顺着 ``followedBy`` 找到真正在下数据的那个 GID。
+
+        磁力链接交给 aria2 时，``addUri`` 返回的是**元数据任务**的 GID：
+        它只负责从 DHT/peer 拉 torrent 信息，几百 KB 就 ``complete``，
+        然后派生一个新 GID 去下真正的内容（``followedBy`` 指向它）。
+
+        如果一直查旧 GID，会看到「已完成、size=466KB」——巡检据此把任务判成
+        完成并把那个 ``.torrent`` 当成片源送去入库，而 6GB 正片其实还在下。
+        这是实测踩到的（ubuntu-24.04.1 magnet：父 GID complete 466619 字节，
+        子 GID active 6114656256 字节），所以这里必须跟随。
+        """
+        seen: set[str] = set()
+        current = external_id
+        for _ in range(self._FOLLOW_LIMIT + 1):
+            if not current or current in seen:
+                break
+            seen.add(current)
+            item = await self._call("aria2.tellStatus", [current])
+            if not isinstance(item, dict):
+                return None
+            followed = item.get("followedBy") or []
+            if isinstance(followed, list) and followed:
+                current = str(followed[0])
+                continue
+            return item
+        return None
+
     async def get(self, external_id: str) -> TorrentState | None:
-        result = await self._call("aria2.tellStatus", [external_id])
+        result = await self._follow(external_id)
         return self._to_state(result) if result else None
 
     async def list_tasks(self, category: str | None = None) -> list[TorrentState]:
@@ -127,20 +159,48 @@ class Aria2Downloader(BaseDownloader):
         waiting = await self._call("aria2.tellWaiting", [0, 100]) or []
         stopped = await self._call("aria2.tellStopped", [0, 100]) or []
         for group in (active, waiting, stopped):
-            states.extend(self._to_state(item) for item in group if isinstance(item, dict))
+            for item in group:
+                if not isinstance(item, dict):
+                    continue
+                # 已派生出子任务的元数据条目不是真实下载，列出来只会看到
+                # 一堆 466KB 的「已完成」幽灵任务，过滤掉。
+                if item.get("followedBy"):
+                    continue
+                states.append(self._to_state(item))
         return states
 
     async def remove(self, external_id: str, *, delete_files: bool = False) -> bool:
-        result = await self._call("aria2.remove", [external_id])
-        if result is None:
-            result = await self._call("aria2.removeDownloadResult", [external_id])
-        return result is not None
+        # 先删子任务：只删元数据 GID 的话，真正在下的那个会继续跑成孤儿。
+        targets: list[str] = []
+        head = await self._call("aria2.tellStatus", [external_id])
+        if isinstance(head, dict):
+            followed = head.get("followedBy") or []
+            if isinstance(followed, list):
+                targets.extend(str(gid) for gid in followed if gid)
+        targets.append(external_id)
+
+        ok = False
+        for gid in targets:
+            result = await self._call("aria2.remove", [gid])
+            if result is None:
+                result = await self._call("aria2.removeDownloadResult", [gid])
+            ok = ok or result is not None
+        return ok
+
+    async def _live_gid(self, external_id: str) -> str:
+        """暂停/恢复要作用在真正在下数据的 GID 上（同 ``_follow`` 的理由）。"""
+        item = await self._follow(external_id)
+        if isinstance(item, dict) and item.get("gid"):
+            return str(item["gid"])
+        return external_id
 
     async def pause(self, external_id: str) -> bool:
-        return await self._call("aria2.pause", [external_id]) is not None
+        gid = await self._live_gid(external_id)
+        return await self._call("aria2.pause", [gid]) is not None
 
     async def resume(self, external_id: str) -> bool:
-        return await self._call("aria2.unpause", [external_id]) is not None
+        gid = await self._live_gid(external_id)
+        return await self._call("aria2.unpause", [gid]) is not None
 
     #: aria2 的 changeGlobalOption 支持运行时改限速
     supports_speed_limit = True

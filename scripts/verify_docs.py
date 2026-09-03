@@ -328,9 +328,14 @@ if _badge and _guide:
     check("README 徽章与开发指南的测试数一致",
           _badge.group(1) == _guide.group(1),
           f"徽章 {_badge.group(1)} vs 指南 {_guide.group(1)}")
-check("README 版本号 1.21.0", "1.21.0" in README_ONLY)
+# ---- v1.22.0 aria2 磁力 GID 跟随（ADR-91）----
+_aria2_src = pathlib.Path("app/providers/downloader/aria2.py").read_text(encoding="utf-8")
+check("aria2 会跟随 followedBy 到数据 GID", "followedBy" in _aria2_src and "_follow" in _aria2_src)
+_dl_tests = pathlib.Path("tests/test_downloaders.py").read_text(encoding="utf-8")
+check("aria2 磁力 GID 跟随有回归用例", "test_aria2_magnet_get_follows_to_data_gid" in _dl_tests)
+check("README 版本号 1.22.0", "1.22.0" in README_ONLY)
 version_src = pathlib.Path("app/core/version.py").read_text(encoding="utf-8")
-check("代码版本号为 1.21.0", 'APP_VERSION = "1.21.0"' in version_src)
+check("代码版本号为 1.22.0", 'APP_VERSION = "1.22.0"' in version_src)
 check("README 声明 314 项接口用例", "314 项真实 HTTP 接口用例" in README)
 check("scripts/README 声明 314 项", "314 项接口用例" in SCRIPTS_README)
 
@@ -395,6 +400,8 @@ adr_text = (docs_dir / "04-决策记录.md").read_text(encoding="utf-8")
 for adr in ("ADR-24", "ADR-25", "ADR-26", "ADR-27",
             "ADR-36", "ADR-37", "ADR-38", "ADR-39", "ADR-40"):
     check(f"决策记录含 {adr}", adr in adr_text)
+check("ADR-91 记录磁力元数据 GID 陷阱",
+      "ADR-91" in adr_text and "followedBy" in adr_text)
 check("ADR-24 记录 yt-dlp 合规边界", "只下**公开内容**" in adr_text)
 check("ADR-25 记录公平性靠交错", "轮转交错" in adr_text)
 check("ADR-26 记录不强依赖 TMDB", "不强依赖 TMDB" in adr_text)

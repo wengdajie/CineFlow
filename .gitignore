@@ -8,6 +8,8 @@ downloads/
 library/
 strm/
 config/config.yaml
+# aria2 实际配置含 rpc-secret 与本机路径，只提交 .example
+config/aria2.conf
 .env
 *.db
 *.log

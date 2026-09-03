@@ -1,0 +1,48 @@
+# CineFlow aria2 配置模板 —— 复制成 config/aria2.conf 后按需改。
+# 启动：aria2c --conf-path=config/aria2.conf
+#
+# 两个必须对上的点（否则 CineFlow 连不上）：
+#   1. rpc-listen-port 必须是 6800，站点 url 填 http://127.0.0.1:6800/jsonrpc
+#   2. rpc-secret 要和站点里的 api_key 一致
+#
+# rpc-listen-all=false：只听本机。设成 true 会把 RPC 暴露到局域网，
+# 那时 rpc-secret 就是唯一防线，务必用足够长的随机串。
+# CineFlow 本地 aria2 配置（由助手生成，可手改）
+# RPC：CineFlow 的 aria2 provider 会把 url 补成 /jsonrpc，端口必须是 6800
+enable-rpc=true
+rpc-listen-all=false
+rpc-listen-port=6800
+rpc-allow-origin-all=true
+rpc-secret=改成你自己的随机串_例如_openssl_rand_hex_16
+
+dir=/path/to/cineflow/downloads
+input-file=/path/to/cineflow/data/aria2/aria2.session
+save-session=/path/to/cineflow/data/aria2/aria2.session
+save-session-interval=30
+continue=true
+always-resume=true
+max-concurrent-downloads=5
+max-connection-per-server=8
+split=8
+min-split-size=4M
+file-allocation=none
+disk-cache=32M
+
+# BT / 磁力：CineFlow 主要靠 aria2 处理 torrent + magnet
+enable-dht=true
+enable-dht6=false
+bt-enable-lpd=true
+bt-max-peers=128
+bt-request-peer-speed-limit=10M
+bt-save-metadata=true
+bt-remove-unselected-file=true
+seed-time=0
+follow-torrent=true
+listen-port=51413
+dht-listen-port=51413
+dht-file-path=/path/to/cineflow/data/aria2/dht.dat
+bt-tracker=udp://tracker.opentrackr.org:1337/announce,udp://open.demonii.com:1337/announce,udp://tracker.torrent.eu.org:451/announce,udp://exodus.desync.com:6969/announce,udp://open.stealth.si:80/announce,udp://tracker.openbittorrent.com:6969/announce
+
+log=/path/to/cineflow/data/aria2/aria2.log
+log-level=notice
+console-log-level=notice

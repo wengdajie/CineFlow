@@ -663,3 +663,158 @@ async def test_qbittorrent_5xx_not_reported_as_missing_account(
     assert ok is False
     assert "没启动" in message, f"5xx 没提示服务未启动：{message}"
     assert "账号" not in message, f"5xx 被误报成缺账号：{message}"
+
+
+# --------------------------------------------------------------------------
+# aria2 磁力：元数据 GID -> 数据 GID 的跟随
+# --------------------------------------------------------------------------
+
+
+class _Aria2MagnetFake:
+    """仿真 aria2 处理磁力链接时的两段式 GID。
+
+    实测数据（aria2 1.37.0，ubuntu-24.04.1 magnet）：
+    ``addUri`` 返回元数据 GID，它 466619 字节就 ``complete`` 并通过
+    ``followedBy`` 派生出真正下内容的 GID（6114656256 字节，``active``）。
+    """
+
+    META_GID = "01e1b15ff77290be"
+    DATA_GID = "b26da45822c0e36c"
+
+    def __init__(self) -> None:
+        self.removed: list[str] = []
+        self.paused: list[str] = []
+
+    def handle(self, request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        method = payload["method"]
+        params = [p for p in payload["params"] if not str(p).startswith("token:")]
+
+        if method == "aria2.tellStatus":
+            gid = params[0]
+            if gid == self.META_GID:
+                return self._ok(
+                    {
+                        "gid": self.META_GID,
+                        "status": "complete",
+                        "totalLength": "466619",
+                        "completedLength": "466619",
+                        "downloadSpeed": "0",
+                        "followedBy": [self.DATA_GID],
+                        "dir": "/downloads",
+                        "files": [{"path": "/downloads/x.torrent"}],
+                    }
+                )
+            if gid == self.DATA_GID:
+                return self._ok(
+                    {
+                        "gid": self.DATA_GID,
+                        "status": "active",
+                        "totalLength": "6114656256",
+                        "completedLength": "125239296",
+                        "downloadSpeed": "7393453",
+                        "following": self.META_GID,
+                        "dir": "/downloads",
+                        "files": [{"path": "/downloads/ubuntu.iso"}],
+                    }
+                )
+            return self._err("not found")
+        if method in {"aria2.remove", "aria2.removeDownloadResult"}:
+            self.removed.append(params[0])
+            return self._ok(params[0])
+        if method in {"aria2.pause", "aria2.unpause"}:
+            self.paused.append(params[0])
+            return self._ok(params[0])
+        if method == "aria2.tellActive":
+            return self._ok(
+                [
+                    {
+                        "gid": self.DATA_GID,
+                        "status": "active",
+                        "totalLength": "6114656256",
+                        "completedLength": "125239296",
+                        "files": [{"path": "/downloads/ubuntu.iso"}],
+                    }
+                ]
+            )
+        if method == "aria2.tellStopped":
+            return self._ok(
+                [
+                    {
+                        "gid": self.META_GID,
+                        "status": "complete",
+                        "totalLength": "466619",
+                        "completedLength": "466619",
+                        "followedBy": [self.DATA_GID],
+                        "files": [{"path": "/downloads/x.torrent"}],
+                    }
+                ]
+            )
+        if method == "aria2.tellWaiting":
+            return self._ok([])
+        return self._err(f"unexpected {method}")
+
+    @staticmethod
+    def _ok(result: Any) -> httpx.Response:
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": "1", "result": result})
+
+    @staticmethod
+    def _err(message: str) -> httpx.Response:
+        return httpx.Response(
+            200, json={"jsonrpc": "2.0", "id": "1", "error": {"code": 1, "message": message}}
+        )
+
+
+def _aria2_with_fake(monkeypatch: pytest.MonkeyPatch) -> tuple[Any, _Aria2MagnetFake]:
+    from app.utils import http as http_mod
+
+    fake = _Aria2MagnetFake()
+    _patch_transport(monkeypatch, http_mod, fake.handle)
+    return Aria2Downloader({"url": "http://127.0.0.1:6800", "api_key": "s"}), fake
+
+
+@pytest.mark.asyncio
+async def test_aria2_magnet_get_follows_to_data_gid(monkeypatch: pytest.MonkeyPatch) -> None:
+    """查元数据 GID 必须报告真实进度，而不是"已完成 466KB"。
+
+    这是实测踩到的事故：巡检拿元数据 GID 一问，看到 complete + 466619 字节，
+    就把任务判成完成、把 ``.torrent`` 当片源送进整理流程，而 6GB 正片还在下。
+    """
+    dl, _fake = _aria2_with_fake(monkeypatch)
+    state = await dl.get(_Aria2MagnetFake.META_GID)
+
+    assert state is not None
+    assert state.status != "completed", "元数据阶段被误判为下载完成"
+    assert state.size == 6114656256, f"报告的大小是元数据体积而非正片：{state.size}"
+    assert state.downloaded == 125239296
+    assert state.external_id == _Aria2MagnetFake.DATA_GID
+    assert 0.0 < state.progress < 1.0, f"进度不对：{state.progress}"
+    assert "ubuntu.iso" in state.content_path, state.content_path
+
+
+@pytest.mark.asyncio
+async def test_aria2_list_tasks_hides_metadata_placeholder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """已派生子任务的元数据条目不能作为独立任务出现（否则满屏 466KB 幽灵任务）。"""
+    dl, _ = _aria2_with_fake(monkeypatch)
+    states = await dl.list_tasks()
+    gids = {s.external_id for s in states}
+    assert _Aria2MagnetFake.DATA_GID in gids
+    assert _Aria2MagnetFake.META_GID not in gids, "元数据占位任务被当成真实任务列出"
+
+
+@pytest.mark.asyncio
+async def test_aria2_remove_also_kills_child(monkeypatch: pytest.MonkeyPatch) -> None:
+    """删任务要连子 GID 一起删，否则真正在下的那个变成孤儿继续占带宽。"""
+    dl, fake = _aria2_with_fake(monkeypatch)
+    assert await dl.remove(_Aria2MagnetFake.META_GID) is True
+    assert _Aria2MagnetFake.DATA_GID in fake.removed, f"子任务没被删除：{fake.removed}"
+
+
+@pytest.mark.asyncio
+async def test_aria2_pause_targets_data_gid(monkeypatch: pytest.MonkeyPatch) -> None:
+    """暂停要作用在真正在下数据的 GID 上，否则点了没反应。"""
+    dl, fake = _aria2_with_fake(monkeypatch)
+    assert await dl.pause(_Aria2MagnetFake.META_GID) is True
+    assert fake.paused == [_Aria2MagnetFake.DATA_GID], f"暂停打在了错的 GID：{fake.paused}"
