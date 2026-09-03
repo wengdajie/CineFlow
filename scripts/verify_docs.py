@@ -189,8 +189,8 @@ try:
         for m in methods
         if m.lower() in ("get", "post", "patch", "delete", "put")
     )
-    check("API 端点 179 个", total == 179, f"实际 {total}")
-    check("README 声明 179 个端点", "179 个端点" in README and "共 179 个" in README)
+    check("API 端点 183 个", total == 183, f"实际 {total}")
+    check("README 声明 183 个端点", "183 个端点" in README and "共 183 个" in README)
     paths = set(spec["paths"])
     for path in ("/api/v1/users", "/api/v1/users/{user_id}",
                  "/api/v1/system/settings", "/api/v1/system/settings/reset",
@@ -297,8 +297,8 @@ check("README 说明定时任务可改期", "定时任务" in README and "cron" 
 
 # ---- 测试文件 ----
 test_files = sorted(p.name for p in pathlib.Path("tests").glob("test_*.py"))
-check("测试文件 54 个", len(test_files) == 54, str(test_files))
-check("README 声明 54 个测试文件", "54 个测试文件" in README)
+check("测试文件 55 个", len(test_files) == 55, str(test_files))
+check("README 声明 55 个测试文件", "55 个测试文件" in README)
 for name in ("test_custom_sites.py", "test_radar.py", "test_trending.py",
              "test_panstorage.py", "test_chatops.py", "test_nfo.py",
              "test_scraper.py", "test_webdav.py", "test_strm_sync.py",
@@ -326,9 +326,9 @@ if _badge and _guide:
     check("README 徽章与开发指南的测试数一致",
           _badge.group(1) == _guide.group(1),
           f"徽章 {_badge.group(1)} vs 指南 {_guide.group(1)}")
-check("README 版本号 1.18.0", "1.18.0" in README_ONLY)
+check("README 版本号 1.19.0", "1.19.0" in README_ONLY)
 version_src = pathlib.Path("app/core/version.py").read_text(encoding="utf-8")
-check("代码版本号为 1.18.0", 'APP_VERSION = "1.18.0"' in version_src)
+check("代码版本号为 1.19.0", 'APP_VERSION = "1.19.0"' in version_src)
 check("README 声明 314 项接口用例", "314 项真实 HTTP 接口用例" in README)
 check("scripts/README 声明 314 项", "314 项接口用例" in SCRIPTS_README)
 

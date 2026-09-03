@@ -4084,6 +4084,13 @@
       "站点管理",
       "共 " + sites.length + " 个配置 · 已启用 " + enabledCount + " 个 · 下载器请到「设置」页配置",
       [
+        iconButton("实测 BT 站", "flame", () => catalogImportDialog({
+          title: "实测可用的 BT / 磁力站点",
+          hint: "以下站点均已当场搜出真实资源，实测产出与已知缺陷都列在下方。请先看清缺陷再导入。",
+          listPath: "/sites/bt-catalog",
+          importPath: "/sites/bt-catalog/import",
+          onDone: pageSites,
+        }), "primary"),
         iconButton("接入 Jackett", "link", () => jackettDialog(pageSites), "primary"),
         iconButton("发现站点", "radar", () => discoverDialog()),
         iconButton("社区清单", "compass", () => zhuijuDialog(pageSites)),
@@ -6575,6 +6582,81 @@
     );
   }
 
+  /** 实测清单批量导入向导（BT 站点 / RSS 源共用）。
+
+      为什么做成"先列清单再勾选"而不是直接一键全装：清单里每条都有
+      已知缺陷（caveat），比如 BD电影首发站的 size 恒为 0。用户该在
+      导入前看到这些，而不是装完发现列表里体积全是 0 再来怀疑是 bug。
+   */
+  async function catalogImportDialog(opts) {
+    let data;
+    try {
+      data = await api(opts.listPath);
+    } catch (error) {
+      toast(error.message, "err");
+      return;
+    }
+    const items = data.items || [];
+    if (!items.length) {
+      toast("清单为空", "warn");
+      return;
+    }
+    const picked = {};
+    items.forEach((item) => {
+      // 已装过的默认不勾，避免用户以为"又装了一遍"
+      picked[item.id] = !item.installed;
+    });
+
+    const rows = items.map((item) => {
+      const box = el("input", { type: "checkbox" });
+      box.checked = !!picked[item.id];
+      if (item.installed) box.disabled = true;
+      box.addEventListener("change", () => {
+        picked[item.id] = box.checked;
+      });
+      return el("label", { class: "list-row pick" }, [
+        el("span", { class: "row tight center" }, [
+          box,
+          el("span", {}, [
+            el("div", { class: "row tight center wrap" }, [
+              el("span", { text: item.name }),
+              item.installed ? el("span", { class: "tag tiny ok", text: "已添加" }) : null,
+              item.dialect
+                ? el("span", { class: "tag tiny", text: RSS_DIALECT_LABEL[item.dialect] || item.dialect })
+                : null,
+              item.adult ? el("span", { class: "tag tiny warn", text: "成人向" }) : null,
+            ].filter(Boolean)),
+            item.measured
+              ? el("div", { class: "cell-sub tiny", text: "实测：" + item.measured })
+              : null,
+            item.caveat ? el("div", { class: "cell-sub tiny warn-text", text: item.caveat }) : null,
+            item.description ? el("div", { class: "cell-sub tiny dim", text: item.description }) : null,
+          ].filter(Boolean)),
+        ]),
+      ]);
+    });
+
+    modal(opts.title, [
+      el("p", { class: "dim tiny", text: opts.hint }),
+      el("div", { class: "list" }, rows),
+    ], async () => {
+      const ids = Object.keys(picked).filter((key) => picked[key]);
+      if (!ids.length) {
+        toast("请至少勾选一项", "warn");
+        return false;
+      }
+      try {
+        const query = ids.map((id) => "ids=" + encodeURIComponent(id)).join("&");
+        const result = await api(opts.importPath + "?" + query, { method: "POST" });
+        toast(result.message || "已导入", "ok");
+        if (opts.onDone) opts.onDone();
+      } catch (error) {
+        toast(error.message, "err");
+        return false;
+      }
+    }, "导入所选");
+  }
+
   async function pageRssFeeds() {
     shell(loading(), "RSS 追新", "贴 RSS 地址自动追新，聚合流按订阅分流");
     const [data, schedules] = await Promise.all([
@@ -6664,6 +6746,13 @@
             }
           }, "sm"),
           iconButton("预览地址", "search", () => rssPreview(""), "sm ghost"),
+          iconButton("推荐源", "sparkles", () => catalogImportDialog({
+            title: "实测可用的 RSS 源",
+            hint: "以下源均已实测可拉通（括号内为实测条目数）。聚合流会混着多部作品，请配合订阅或标题规则过滤。",
+            listPath: "/rss-feeds/presets?include_adult=true",
+            importPath: "/rss-feeds/presets/import",
+            onDone: pageRssFeeds,
+          }), "sm ghost"),
           iconButton("新建", "plus", () => rssFeedForm(null, pageRssFeeds), "sm primary"),
         ]),
       ]),
