@@ -213,7 +213,20 @@ async def save_share(
     if not storage:
         return {"success": False, "message": "没有可用的网盘存储，请先在站点管理中添加并启用"}
     if not storage.supports_save:
-        return {"success": False, "message": f"{storage.site_name} 不支持从分享链接转存"}
+        # 把 Provider 自己写的理由带出来，而不是在这里另造一句干瘪的话。
+        # 每个不支持转存的 Provider 都在 save_share() 里写清了**替代路径**
+        # （WebDAV/本地目录 → 改用 AList 或夸克；百度开放平台 → 另加一个
+        # Cookie 方式的 baidu 站点）。原来这里直接 return 把那句话丢掉了，
+        # 用户只看到「不支持」，不知道下一步该干什么（ADR-82：拒绝要给下一步）。
+        detail = await storage.save_share(
+            share_url, password=password, target_dir=target_dir
+        )
+        message = detail.message or f"{storage.site_name} 不支持从分享链接转存"
+        return {
+            "success": False,
+            "storage": storage.site_name,
+            "message": f"{storage.site_name}：{message}",
+        }
 
     # 没显式指定就用「上次用过的 / 站点默认」，让无头入口也享受到记忆
     effective_dir = str(target_dir or "").strip() or suggested_target_dir(storage)

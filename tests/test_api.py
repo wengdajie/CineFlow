@@ -549,7 +549,10 @@ def test_settings_groups_include_new_features(client, auth_headers):
     """新增的配置组必须出现在设置页数据里，否则用户不知道怎么开关。"""
     body = client.get("/api/v1/system/settings", headers=auth_headers).json()
     titles = {group["title"] for group in body["groups"]}
-    assert {"刮削与分类", "STRM 同步", "分享追更与洗版"} <= titles
+    assert {"分类归档", "STRM 同步", "分享追更与洗版"} <= titles
+    # v1.24.0 下线刮削与榜单订阅：入口必须跟着消失，否则用户点进去是空壳组
+    assert "刮削与分类" not in titles
+    assert "榜单自动订阅" not in titles
     keys = {item["key"] for group in body["groups"] for item in group["items"]}
     assert {"STRM_LINK_MODE", "UPGRADE_ENABLED", "CATEGORY_ENABLED"} <= keys
 

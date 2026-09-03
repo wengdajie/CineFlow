@@ -31,8 +31,14 @@ def call(method, path, *, body=None, form=None, token=None, expect=(200, 201), e
             status, text = response.status, response.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as exc:
         status, text = exc.code, exc.read().decode("utf-8", "replace")
+    except TimeoutError as exc:
+        # 超时必须能和"服务器答了但答错"区分开。以前两者都落成 status=0，
+        # 于是上层断言只会说「字段不对」，把人引去查业务逻辑，
+        # 而真正的原因是这一步太慢（本轮实测就踩了：check-all 要 21~60s，
+        # 默认 45s 超时 → status=0 → 断言报「必须标记为试运行」，完全误诊）。
+        status, text = 0, f"TIMEOUT after {timeout}s: {exc}"
     except Exception as exc:
-        status, text = 0, str(exc)
+        status, text = 0, f"{type(exc).__name__}: {exc}"
 
     ok = status in expect
     results.append((ok, method, path, status))
@@ -43,6 +49,34 @@ def call(method, path, *, body=None, form=None, token=None, expect=(200, 201), e
         return json.loads(text)
     except Exception:
         return {}
+
+
+def purge_by_name(collection, names, token, *, key="name", list_key="items"):
+    """按名字清掉上一轮残留，让脚本**可重复跑**。
+
+    为什么必须有这个：本脚本创建的资源大多有唯一名（订阅标题、用户名、
+    规则组名、下载器名）。任何一次中途失败都会把它们留在库里，
+    下一轮 POST 就 409/400「已存在」——**而随后的断言报的是别的事**
+    （「回显应只给 password_set」「viewer 的 is_superuser 为 false」），
+    把人引去查业务逻辑。实测本轮连着踩了 5 处，全是这个原因。
+    幂等是冒烟脚本的硬要求，不是锦上添花。
+    """
+    listing = call("GET", collection, token=token)
+    rows = listing if isinstance(listing, list) else (listing.get(list_key) or [])
+    wanted = set(names)
+    removed = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get(key) or "") in wanted:
+            rid = row.get("id")
+            if rid is None:
+                continue
+            call("DELETE", f"{collection}/{rid}", token=token, expect=(200, 204, 404))
+            removed.append(f"#{rid} {row.get(key)}")
+    if removed:
+        print(f"       清理残留 {collection}：{', '.join(removed)}")
+    return removed
 
 
 print("=" * 70)
@@ -358,6 +392,7 @@ call("GET", "/media/trending", token=token)
 print("\n" + "=" * 70)
 print("7) 订阅全生命周期")
 print("=" * 70)
+purge_by_name("/subscribes", ("冒烟测试剧", "viewer 不该建成功"), token, key="title")
 sub = call(
     "POST",
     "/subscribes",
@@ -639,7 +674,8 @@ print(
 )
 call("GET", "/strm/records?limit=10", token=token)
 call("GET", "/strm/records?limit=10&alive_only=true", token=token)
-synced = call("POST", "/strm/sync", token=token, body={})
+# 同步是**同步**遍历网盘目录树，耗时随文件数增长，默认 45s 不够（实测超时）。
+synced = call("POST", "/strm/sync", token=token, body={}, timeout=180)
 print(f"       全盘同步：{synced.get('message')}")
 call("POST", "/strm/sync", token=token, body={"site_id": 999999})
 # 播放端点必须**免认证**（播放器带不了 JWT），未知记录回 404 而不是 401
@@ -707,7 +743,18 @@ print("=" * 70)
 settings_body = call("GET", "/system/settings", token=token)
 titles = [group["title"] for group in settings_body.get("groups") or []]
 print(f"       配置分组 {len(titles)} 个：{titles}")
-for expected in ("分类", "STRM 同步", "分享追更与洗版"):
+# v1.24.0：原「刮削与分类」组随刮削下线，只剩 CATEGORY_ENABLED，
+# 改名为「分类归档」独立成组。断言跟着改，并顺带确认两个已下线的组真的没了。
+for retired in ("榜单自动订阅", "刮削与分类"):
+    ok = retired not in titles
+    results.append((ok, "CHECK", f"已下线设置组「{retired}」不再出现", 200 if ok else 0))
+    print(f"{'PASS' if ok else 'FAIL'} 200 CHECK  已下线设置组「{retired}」不再出现")
+# 空壳分组=功能没了入口还在，比不删更糟
+_empty = [g["title"] for g in settings_body.get("groups") or [] if not (g.get("items") or [])]
+ok = not _empty
+results.append((ok, "CHECK", "没有空壳设置分组", 200 if ok else 0))
+print(f"{'PASS' if ok else 'FAIL'} 200 CHECK  没有空壳设置分组 {_empty if _empty else ''}")
+for expected in ("分类归档", "STRM 同步", "分享追更与洗版"):
     ok = expected in titles
     results.append((ok, "CHECK", f"设置分组「{expected}」", 200 if ok else 0))
     print(f"{'PASS' if ok else 'FAIL'} 200 CHECK  设置分组「{expected}」")
@@ -759,6 +806,7 @@ print("=" * 70)
 users = call("GET", "/users", token=token)
 print(f"       现有用户 {users.get('total')} 个，角色档位 {[r['value'] for r in users.get('roles') or []]}")
 
+purge_by_name("/users", ("cf_smoke_viewer", "cf_smoke_operator"), token, key="username")
 viewer = call("POST", "/users", token=token,
               body={"username": "cf_smoke_viewer", "password": "smoke-pass", "role": "viewer",
                     "note": "冒烟测试账号"})
@@ -849,6 +897,7 @@ builtin = groups.get("items") or []
 ok = len(builtin) >= 4 and sum(1 for item in builtin if item.get("is_default")) <= 1
 results.append((ok, "CHECK", "内置规则组模板存在且默认组唯一", 200 if ok else 0))
 print(f"{'PASS' if ok else 'FAIL'} 200 CHECK  内置规则组模板存在且默认组唯一")
+purge_by_name("/rule-groups", ("冒烟测试规则组", "没有层级"), token)
 group_created = call(
     "POST",
     "/rule-groups",
@@ -925,7 +974,20 @@ assert by_name.get("pan115", {}).get("qrcode") is True, "115 应支持扫码"
 assert by_name.get("baidu", {}).get("qrcode") is True, "百度应支持扫码"
 # 夸克登录需签名公参，逆向属对抗风控，明确不做（ADR-38）
 assert by_name.get("quark", {}).get("qrcode") is False, "夸克不应声明支持扫码"
-assert all(p.get("cookie") for p in prov_rows), "所有网盘都应支持 Cookie 导入"
+# ⚠️ 不是所有通道都支持 Cookie：``baidu_openapi`` 走 OAuth，存的是
+# access_token/refresh_token 而不是 Cookie。原来这里断言"全都支持"，
+# v1.23.0 加了开放平台通道后就成了必然失败的断言（实测冒烟卡在这里）。
+# 改成按声明校验，并把「声明不支持就必须真的挡住」也一起验了。
+assert by_name.get("baidu_openapi", {}).get("cookie") is False, \
+    "开放平台走 OAuth，不该声明支持 Cookie 导入"
+for _name in ("pan115", "baidu", "quark"):
+    assert by_name.get(_name, {}).get("cookie"), f"{_name} 应支持 Cookie 导入"
+# 声明 cookie=False 就要在服务层真的拒绝，而不是靠 verify() 碰巧失败——
+# 碰巧失败时报的是「授权无效」，会把用户引向重新授权，而真正的问题是入口用错了
+_r = call("POST", "/pan/login/cookie", token=token,
+          body={"provider": "baidu_openapi", "cookie": "BDUSS=whatever"},
+          expect=(400,))
+assert "不支持 Cookie 导入" in str(_r), f"应按能力位拒绝，实际：{_r}"
 
 # 夸克要扫码必须被拒（而不是给一个用不了的二维码）
 call("POST", "/pan/login/qrcode", token=token, body={"provider": "quark"}, expect=(400,))
@@ -999,6 +1061,16 @@ assert "cookie_file" in ytdlp_keys, "yt-dlp 必须能配 cookie_file"
 dl_list = call("GET", "/downloaders", token=token)
 print(f"       现有下载器 {len(dl_list.get('items') or [])} 个")
 
+# 先清掉上一轮的残留：本脚本必须**可重复跑**。
+# 实测踩过：上一轮跑到一半失败，"冒烟-下载器"留在库里，
+# 下一轮 POST 直接 409「名称已存在」，而断言报的是「回显应只给 password_set」
+# —— 又是一次误诊。名称是唯一键，就必须自己负责收干净。
+_SMOKE_DL_NAMES = ("冒烟-下载器", "冒烟-下载器改名", "冒烟-非法")
+for _row in (dl_list.get("items") or []):
+    if _row.get("name") in _SMOKE_DL_NAMES:
+        call("DELETE", f"/downloaders/{_row.get('id')}", token=token, expect=(200, 204, 404))
+        print(f"       清理残留下载器 #{_row.get('id')} {_row.get('name')}")
+
 # 新建（默认不启用：连不上的下载器一旦启用会污染真实下载流程）
 dl_created = call(
     "POST", "/downloaders", token=token,
@@ -1035,6 +1107,11 @@ if dl_id:
     # 测试连通性：连不上是预期结果，接口本身必须 200 并给出结论
     dl_test = call("POST", f"/downloaders/{dl_id}/test", token=token, expect=(200, 400))
     print(f"       连通性结论 success={dl_test.get('success')} {str(dl_test.get('message'))[:40]}")
+
+# 注：dl_id 的删除统一放在文末「10) 清理测试数据」，这里不要重复删 ——
+# 删两次第二次必然 404，那是脚本自己制造的假失败。
+# 之所以库里仍积了 2 个残留，是因为**中途失败时到不了文末**，
+# 所以真正的解法是上面创建前的 purge，而不是在这里再删一次。
 
 # 边界：非下载器 provider 不能从这里建；不存在的 id 一律 404
 call("POST", "/downloaders", token=token,
@@ -1137,7 +1214,20 @@ maccms_sites = [s for s in site_list if s.get("provider") == "maccms"]
 print(f"       内置 maccms 站点 {len(maccms_sites)} 个")
 for item in maccms_sites:
     print(f"       - {item.get('name')} enabled={item.get('enabled')}")
-    assert not item.get("enabled"), f"{item.get('name')} 必须默认禁用"
+    # ⚠️ 这里**不能**断言 enabled 为假。
+    #
+    # 「默认禁用」是**代码默认值**的性质，属于 `DEFAULT_SITES`，已由
+    # `tests/test_maccms.py::test_内置站点默认禁用` 对着 DEFAULT_SITES 断言。
+    # 而冒烟脚本读的是**活库**，用户/运维完全有权把这个站点开起来
+    # （note 里已写清边界，开了是知情选择）。拿活库去验代码默认值，
+    # 实测就会像本轮这样：有人手工启用过 → 冒烟红，但产品没有任何问题。
+    # 这种断言只会训练人忽略告警。真正该守的是「note 必须在」——
+    # 也就是用户开之前一定看得到边界说明。
+    note = str((item.get("options") or {}).get("note") or "")
+    assert note, f"{item.get('name')} 必须写明「大部分是会员正片」的边界说明"
+    assert "会员" in note, f"note 未写清会员正片边界：{note[:80]}"
+    if item.get("enabled"):
+        print("         NOTE 该站已被手工启用（允许；note 已写明边界）")
 
 print("\n" + "=" * 70)
 print("9s) RSS 追新：方言 / 预览 / CRUD / 增量与试运行（v1.18.0）")
@@ -1194,9 +1284,19 @@ results.append((ok, "CHECK", "reset_failures 清零并恢复启用", 200 if ok e
 print(f"{'PASS' if ok else 'FAIL'} 200 CHECK  reset_failures 清零并恢复启用")
 
 # 试运行不能写回 guid（否则试跑一次真巡检就什么都不下了）
-dry = call("POST", "/rss-feeds/check-all?dry_run=true", token=token)
-print(f"       试运行全部：检查 {dry.get('checked')} 个源，dry_run={dry.get('dry_run')}")
+#
+# ⚠️ 超时给足：这个端点是**同步**去拉每一个启用的 RSS 源，耗时随源数量线性增长，
+# 且源之间刻意有 per-host 间隔（防 429）。实测 6 个源单跑 21.4s，
+# 冒烟里连着前面的用例跑会超过默认 45s。之前就因为默认超时不够而红，
+# 报的却是「必须标记为试运行」——误诊。这里显式放宽并把耗时打出来。
+dry = call("POST", "/rss-feeds/check-all?dry_run=true", token=token, timeout=180)
+print(f"       试运行全部：检查 {dry.get('checked')} 个源，"
+      f"dry_run={dry.get('dry_run')}，耗时 {dry.get('elapsed_ms')}ms")
+assert dry, "check-all 没有返回 JSON（多为超时，见上一行 FAIL 的原因）"
 assert dry.get("dry_run") is True, "check-all?dry_run=true 必须标记为试运行"
+# 试运行的语义是「看得到新条目，但不产生下载」——只验 dry_run 标记不够，
+# 那样把 downloaded 写成非 0 也发现不了
+assert dry.get("downloaded") == 0, f"试运行不该产生下载：{dry.get('downloaded')}"
 
 # 404 边界
 call("POST", "/rss-feeds/999999/check", token=token, expect=(404,))

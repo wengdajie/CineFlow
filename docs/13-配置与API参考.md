@@ -163,7 +163,8 @@ cineflow/
 │   └── main.py        应用入口（lifespan / CORS / 静态资源）
 ├── web/               index.html + assets/(app.js style.css)  ← 零依赖前端
 ├── plugins/           auto_cleanup pan_transfer daily_digest  ← 示例插件
-├── tests/             56 个测试文件（含 test_library_ops.py：本地文件操作与越界防护）
+├── tests/             57 个测试文件（含 test_library_ops.py：本地文件操作与越界防护；
+│                       test_baidu_openapi_storage.py：僵尸站点不变式）
 ├── scripts/           smoke_test / ui_check / demo_pipeline 验证脚本
 ├── docs/              16 篇维护文档（现状/架构/路线图/决策/运维/站点接入/变更日志/竞品对标…）
 ├── config/            config.yaml.example

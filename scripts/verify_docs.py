@@ -46,8 +46,8 @@ from app.providers.registry import list_providers, load_builtin_providers  # noq
 load_builtin_providers()
 providers = list_providers()
 names = {p["name"] for p in providers}
-check("Provider 总数 34", len(providers) == 34, f"实际 {len(providers)}")
-check("README 声明 34 个 Provider", "34 个注册 Provider" in README)
+check("Provider 总数 35", len(providers) == 35, f"实际 {len(providers)}")
+check("README 声明 35 个 Provider", "35 个注册 Provider" in README)
 # v1.16.0：百度网盘的**扫码登录**早就有了，存储 Provider 却一直缺失，
 # 导致登录成功后建出的站点是「僵尸站点」（总览查不到、转存/保活全静默跳过）。
 check("baidu 存储 Provider 已注册", "baidu" in names)
@@ -185,6 +185,9 @@ for job in ("cineflow.radar", "cineflow.pan_transfer", "cineflow.pan_subscribe",
     check(f"任务已注册 {job}", job in job_ids)
 
 # ---- API 端点 ----
+#: 期望端点数。docs/07「门禁数字的来源」那段散文会与这个值逐一比对（ADR-98），
+#: 所以它必须是个变量而不是散落在字面量里 —— 否则两处会各自漂移。
+total_expected = 181
 try:
     with urllib.request.urlopen(f"{BASE}/openapi.json", timeout=15) as r:
         spec = json.loads(r.read().decode())
@@ -194,7 +197,7 @@ try:
         for m in methods
         if m.lower() in ("get", "post", "patch", "delete", "put")
     )
-    check("API 端点 181 个", total == 181, f"实际 {total}")
+    check(f"API 端点 {total_expected} 个", total == total_expected, f"实际 {total}")
     check("README 声明 181 个端点", "181 个端点" in README and "共 181 个" in README)
     paths = set(spec["paths"])
     for path in ("/api/v1/users", "/api/v1/users/{user_id}",
@@ -302,8 +305,8 @@ check("README 说明定时任务可改期", "定时任务" in README and "cron" 
 
 # ---- 测试文件 ----
 test_files = sorted(p.name for p in pathlib.Path("tests").glob("test_*.py"))
-check("测试文件 56 个", len(test_files) == 56, str(test_files))
-check("README 声明 56 个测试文件", "56 个测试文件" in README)
+check("测试文件 57 个", len(test_files) == 57, str(test_files))
+check("README 声明 57 个测试文件", "57 个测试文件" in README)
 for name in ("test_custom_sites.py", "test_radar.py", "test_trending.py",
              # test_nfo / test_scraper / test_ranking 已随功能下线（ADR-96）
              "test_panstorage.py", "test_chatops.py", "test_library_ops.py",
@@ -341,7 +344,7 @@ check("README 版本号 1.24.0", "1.24.0" in README_ONLY)
 version_src = pathlib.Path("app/core/version.py").read_text(encoding="utf-8")
 check("代码版本号为 1.24.0", 'APP_VERSION = "1.24.0"' in version_src)
 check("README 声明 314 项接口用例", "314 项真实 HTTP 接口用例" in README)
-check("scripts/README 声明 314 项", "314 项接口用例" in SCRIPTS_README)
+check("scripts/README 声明 321 项", "321 项接口用例" in SCRIPTS_README)
 
 # ---- 服务模块 ----
 # scraper / ranking 已删除（ADR-96），library 顶上来负责本地文件操作
@@ -1450,7 +1453,7 @@ from app.api.routers.system import SETTING_GROUPS  # noqa: E402
 _shown_keys = {k for g in SETTING_GROUPS for k in g["keys"]}
 _orphan = sorted(k for k in config_store.EDITABLE if k not in _shown_keys)
 check("可改配置全部有设置页入口", _orphan == [], f"没挂分组：{_orphan}")
-check("设置页分组 18 组", len(SETTING_GROUPS) == 18, f"实际 {len(SETTING_GROUPS)}")
+check("设置页分组 17 组", len(SETTING_GROUPS) == 17, f"实际 {len(SETTING_GROUPS)}")
 
 # ⑥ 后端返回的每站诊断必须真的渲染出来（v1.6.0 就有数据，界面一直没用）
 # 判据要钉住「定义 + 真的被调用」：只查函数名前缀的话，改个名字照样能通过
@@ -1829,6 +1832,180 @@ check("前端发现列表可直接添加",
       'api("/sites/discover/apply"' in app_js)
 
 check("README 致谢 Auto_Bangumi", "Auto_Bangumi" in README_ONLY)
+
+
+# ---- v1.24.0 / M55：登录通道与存储通道必须成对（ADR-97）----
+check("ADR-97 记录登录/存储成对不变式", "## ADR-97 ·" in _adr)
+check("路线图含里程碑 M55", "里程碑 M55" in roadmap_all)
+check("变更日志含 v1.24.0", "## v1.24.0" in _chg118)
+
+# 僵尸站点：v1.16.0 给 baidu 修过、v1.23.0 给 baidu_openapi 又犯一遍。
+# 这里断言的是**行为**（造得出实例），不是文件在不在 —— 文件存在但没
+# @register / 没进 load_builtin_providers 清单 / name 写错，都一样是僵尸站点。
+_bo_store = pathlib.Path("app/providers/panstorage/baidu_openapi.py")
+check("百度开放平台存储 Provider 存在", _bo_store.exists())
+check("baidu_openapi 已注册（否则授权成功却建出僵尸站点）",
+      "baidu_openapi" in names)
+# 不变式本体：任何能登录的网盘都必须有存储实现
+from app.services.pan_login import PROVIDERS as _LOGIN_PROVIDERS  # noqa: E402
+
+_orphans = [n for n in _LOGIN_PROVIDERS if n not in names]
+check("每个登录通道都有对应存储 Provider", not _orphans, f"缺失 {_orphans}")
+
+_bo_src = _bo_store.read_text(encoding="utf-8")
+# 开放平台没有 /share/transfer，如实声明比假装支持重要
+check("开放平台如实声明不支持转存", "supports_save = False" in _bo_src)
+check("拒绝转存时给出替代路径（ADR-82：拒绝要给下一步）",
+      "另外用 Cookie 方式添加" in _bo_src)
+# access_token 只有 30 天；只刷内存不落库等于每次调用都刷一遍
+check("access_token 到期自动刷新", "async def _refresh_token" in _bo_src
+      and "TOKEN_INVALID_ERRNOS" in _bo_src)
+check("刷新后回写站点（否则重启又用回旧 token）",
+      "def _store_tokens" in _bo_src and "site.api_key = access" in _bo_src)
+check("刷新有一次性闸门（防吊销 token 打死循环）", "_refreshed_once" in _bo_src)
+# 能力位声明了不支持 Cookie，就必须在服务层真的挡住
+_pl_src = pathlib.Path("app/services/pan_login.py").read_text(encoding="utf-8")
+check("apply_cookie 按能力位拒绝", 'if not meta["cookie"]:' in _pl_src)
+
+_bo_tests = pathlib.Path("tests/test_baidu_openapi_storage.py")
+check("百度开放平台存储有独立测试", _bo_tests.exists())
+_bo_t = _bo_tests.read_text(encoding="utf-8")
+check("不变式有测试钉住",
+      "test_every_login_provider_has_a_storage_provider" in _bo_t)
+# 第一版不变式写在测试进程内，被文件顶部的 import 自己满足了 —— 注入验证
+# 删掉 load_builtin_providers 清单那行时**仍然全绿**。必须隔离进程。
+check("不变式在干净子进程内验证（否则测的是自己的 import 副作用）",
+      "_REGISTRY_INVARIANT_SCRIPT" in _bo_t and "subprocess.run" in _bo_t)
+# 守卫类断言要搭配"会成功的后端"，否则去掉守卫也会因为网络失败而假绿
+check("守卫用例证明「一个请求都没发」",
+      "_counting_ok" in _bo_t and "assert calls == []" in _bo_t)
+check("守卫有反向担保（正常删除仍能到后端）",
+      "test_delete_normal_path_does_reach_backend" in _bo_t)
+# 服务层不能把 Provider 写的替代路径丢掉（live 实测查出）
+_ps_src = pathlib.Path("app/services/pan_storage.py").read_text(encoding="utf-8")
+check("拒绝转存时带出 Provider 的理由",
+      "detail = await storage.save_share(" in _ps_src
+      and "detail.message or" in _ps_src)
+check("拒绝理由有测试钉住",
+      "test_service_layer_keeps_provider_refusal_reason" in _bo_t)
+
+
+# ---- v1.24.0 / M56：半截删除 + 没人校验的门禁清单（ADR-98 / ADR-99）----
+check("ADR-98 记录半截删除与门禁散文（v1.24.0）", "## ADR-98 ·" in _adr)
+check("ADR-99 记录遍历双闸门（v1.24.0）", "## ADR-99 ·" in _adr)
+check("路线图含里程碑 M56", "里程碑 M56" in roadmap_all)
+
+# 空壳分组：功能删了、标题留着 → 用户点进去是空白
+_sys_src = pathlib.Path("app/api/routers/system.py").read_text(encoding="utf-8")
+_group_titles = {g["title"] for g in SETTING_GROUPS}
+check("设置分组不再含已下线的榜单订阅", "榜单自动订阅" not in _group_titles)
+check("设置分组不再含已下线的刮削", "刮削与分类" not in _group_titles)
+check("设置分组含替代它们的分类归档", "分类归档" in _group_titles)
+check("渲染层过滤空壳分组（漏删时用户看不到）", "if not items:" in _sys_src)
+check("空壳分组会打警告（运维能发现漏删）",
+      "logger.warning" in _sys_src and "get_logger" in _sys_src)
+_cfg_t = pathlib.Path("tests/test_config_store.py").read_text(encoding="utf-8")
+check("悬空键有门禁（既有断言的逆命题）",
+      "test_setting_groups_have_no_dangling_keys" in _cfg_t)
+check("空壳分组有门禁", "test_no_empty_setting_group_is_exposed" in _cfg_t)
+check("已下线分组有反向断言", "test_retired_setting_groups_are_gone" in _cfg_t)
+# 删功能时断言要反转而不是删掉
+_api_t = pathlib.Path("tests/test_api.py").read_text(encoding="utf-8")
+check("旧分组断言已反转而非删除",
+      '"刮削与分类" not in titles' in _api_t and '"榜单自动订阅" not in titles' in _api_t)
+
+# 全盘遍历闸门：深度限制防目录环，防不住"盘本来就大"
+_strm_src = pathlib.Path("app/services/strm_sync.py").read_text(encoding="utf-8")
+check("遍历有墙钟预算（压在网关超时之下）", "WALK_BUDGET_SECONDS" in _strm_src)
+check("遍历有目录数上限", "WALK_MAX_DIRS" in _strm_src)
+check("截断能与「跑完了」区分开", "truncated" in _strm_src)
+check("stats 初始化就带 truncated（早退路径不能给调用方 KeyError）",
+      '"truncated": False,' in _strm_src)
+check("截断时不再说「没有找到视频文件」",
+      "遍历达到上限提前收工" in _strm_src)
+check("截断冒泡到顶层 message", 'summary["truncated"]' in _strm_src)
+_strm_t = pathlib.Path("tests/test_strm_sync.py").read_text(encoding="utf-8")
+for _t in ("test_walk_stops_at_dir_budget_and_reports_truncation",
+           "test_walk_stops_at_time_budget",
+           "test_truncated_sync_does_not_claim_no_videos",
+           "test_sync_all_surfaces_truncation_in_top_level_message"):
+    check(f"遍历闸门用例 {_t}", _t in _strm_t)
+check("闸门有反向担保（小盘不被误标截断）",
+      "test_small_pan_is_not_marked_truncated" in _strm_t)
+
+# 只给"最像瓶颈的那一步"设限是不够的：实测元数据阶段（359s）比遍历（90s）还慢
+check("元数据阶段有独立闸门", "METADATA_BUDGET_SECONDS" in _strm_src
+      and "METADATA_MAX_FILES" in _strm_src)
+check("单盘同步有覆盖全部阶段的总预算", "SYNC_STORAGE_BUDGET_SECONDS" in _strm_src)
+check("元数据用剩余预算而非独立预算",
+      "deadline - time.monotonic()" in _strm_src)
+check("元数据被砍会回报（返回二元组）", "return count, truncated" in _strm_src)
+# 慢盘曾把总预算吃干，让实测 0.0s 就能扫完的本地盘永远轮不到
+check("配额在盘之间公平分配", "remaining / max(1, len(targets) - index)" in _strm_src)
+# 「一个目录都没看过」与「只扫了一部分」是两种结果，混起来会重复计数
+check("区分「没轮到扫」与「只扫了一部分」", '"not_scanned": True' in _strm_src)
+check("顶层截断含没轮到的盘",
+      'bool(truncated_names) or bool(skipped_for_budget)' in _strm_src)
+check("截断消息用站点名而非 ID（ID 无法据此行动）",
+      'item.get("site_name") or item.get("site_id")' in _strm_src)
+# 本轮最严重的缺陷：截断时清理把上一轮生成的 636 个 STRM 全删了
+check("截断时跳过失效清理（否则反复删建）",
+      "if clean and not dry_run and not truncated:" in _strm_src)
+for _t in ("test_metadata_download_stops_at_time_budget",
+           "test_metadata_download_stops_at_file_count",
+           "test_sync_storage_budget_covers_metadata_phase",
+           "test_metadata_truncation_marks_sync_as_truncated",
+           "test_slow_storage_does_not_starve_later_storages",
+           "test_truncated_sync_does_not_clean_unseen_records"):
+    check(f"闸门用例 {_t}", _t in _strm_t)
+# 修复不能变成"再也不清理"
+check("清理有反向担保（完整同步仍会清失效）",
+      "test_complete_sync_still_cleans_disappeared_records" in _strm_t)
+check("元数据闸门有反向担保（正常数量不被误标）",
+      "test_small_metadata_set_is_not_marked_truncated" in _strm_t)
+check("ADR-99 记录分阶段实测数据", "255 个 × 1.4s" in _adr)
+check("ADR-99 记录截断误删事故", "removed: 636" in _adr or "`removed: 636`" in _adr)
+
+# smoke test 自身的可靠性：超时不能伪装成取值错误，且必须幂等
+_smoke_src = pathlib.Path("scripts/smoke_test.py").read_text(encoding="utf-8")
+check("smoke test 区分超时与取值错误（原先 45s 超时报成断言失败）",
+      "except TimeoutError" in _smoke_src and "TIMEOUT after" in _smoke_src)
+check("smoke test 跑前清残留（否则 409 会被误诊成别的问题）",
+      "def purge_by_name" in _smoke_src)
+
+# 「门禁数字的来源」这段散文自己必须被门禁覆盖 —— 它曾是全文档漂移最严重处
+# 原文写「榜单来源 4 个」，而榜单订阅已在 v1.24.0 下线；真正还在的可数对象是
+# 发现榜分类，所以这一项换成它而不是留个已死的数字。
+from app.services import discover as _discover_service  # noqa: E402
+
+_discover_categories = _discover_service.categories()
+_doc07 = (docs_dir / "07-运维手册.md").read_text(encoding="utf-8")
+_DOC07_GATE_NUMBERS = (
+    ("API 端点", f"API 端点 **{total_expected}**"),
+    ("router", f"router **{router_count}**"),
+    ("数据库表", f"数据库表 **{len(Base.metadata.tables)}**"),
+    ("Provider", f"Provider **{len(providers)}**"),
+    ("前端页面", f"前端页面 **{page_count}**"),
+    ("示例站点", f"示例站点 **{len(DEFAULT_SITES)}**"),
+    ("内置定时任务", f"内置定时任务 **{len(job_ids)}**"),
+    ("设置页分组", f"设置页 **{len(SETTING_GROUPS)} 组**"),
+    ("可编辑配置", f"可编辑配置 **{len(config_store.EDITABLE)} 项**"),
+    ("内置规则组模板", f"内置规则组模板 **{len(DEFAULT_RULE_GROUPS)} 个**"),
+    ("发现榜分类", f"发现榜分类 **{len(_discover_categories)} 个**"),
+)
+for _label, _frag in _DOC07_GATE_NUMBERS:
+    check(f"docs/07 门禁清单数字对得上：{_label}", _frag in _doc07, _frag)
+check("docs/07 记录这段散文自己曾漂移", "自己不在门禁里" in _doc07)
+# 同一批数字散落在其他文档，一并钉住
+check("docs/01 设置页数字正确",
+      f"设置页（{len(SETTING_GROUPS)} 组，其中 {len(config_store.EDITABLE)} 项可在线改）"
+      in (docs_dir / "01-项目现状.md").read_text(encoding="utf-8"))
+check("docs/02 可编辑项数字正确",
+      f"白名单里的 {len(config_store.EDITABLE)} 项"
+      in (docs_dir / "02-架构设计.md").read_text(encoding="utf-8"))
+_doc12 = (docs_dir / "12-功能特性详解.md").read_text(encoding="utf-8")
+check("docs/12 可编辑项数字正确", f"**{len(config_store.EDITABLE)} 项**" in _doc12)
+check("docs/12 分组数字正确", f"配置按 **{len(SETTING_GROUPS)} 组**" in _doc12)
 
 print()
 print("=" * 60)

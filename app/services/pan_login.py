@@ -31,7 +31,9 @@ logger = get_logger(__name__)
 
 #: 各网盘的登录能力声明。
 #: ``qrcode``   能不能扫码登录
-#: ``cookie``   能不能导入 Cookie（目前都能）
+#: ``cookie``   能不能导入 Cookie。**不是都能**：开放平台授权那条路存的是
+#:              OAuth token，不是 Cookie，粘 Cookie 进去只会存出一个用不了的
+#:              凭据，所以声明为 False 并在 :func:`apply_cookie` 里真的挡住。
 #: ``verify``   有没有即时校验实现
 PROVIDERS: dict[str, dict[str, Any]] = {
     "pan115": {
@@ -180,6 +182,18 @@ async def apply_cookie(
     meta = PROVIDERS.get(provider)
     if not meta:
         return {"success": False, "message": f"不支持的网盘：{provider}"}
+    # 声明了不支持 Cookie 就必须真的挡住。``baidu_openapi`` 落库的是
+    # access_token/refresh_token，把一段 Cookie 塞进 options["cookie"] 会建出
+    # 一个「有站点、有凭据、但每次调用都失败」的坏站点；而它的 verify() 收的是
+    # access_token，一段 Cookie 恰好也能"校验失败"——于是报错信息指向
+    # 「授权无效」，把用户引向重新授权，而真正的问题是他用错了入口（ADR-82）。
+    if not meta["cookie"]:
+        return {
+            "success": False,
+            "message": (
+                f"{meta['label']}不支持 Cookie 导入：{meta['note']}"
+            ),
+        }
     cookie = (cookie or "").strip()
     if not cookie:
         return {"success": False, "message": "Cookie 为空"}

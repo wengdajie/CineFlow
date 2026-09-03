@@ -243,6 +243,44 @@ def test_settings_groups_cover_every_editable_key() -> None:
     assert missing == [], f"这些项能在线改却没有设置页入口：{missing}"
 
 
+def test_setting_groups_have_no_dangling_keys() -> None:
+    """反向担保：分组引用的键必须真的存在于 settings。
+
+    上一条测的是「能改的都有入口」，这条测的是「入口指向的东西都还在」。
+    渲染时 `hasattr(settings, key)` 会**静默跳过**不存在的键，所以功能下线后
+    只删配置项、忘了删分组标题，界面上就出现一个**空壳分组** ——
+    v1.24.0 实测真有两个（「榜单自动订阅」「刮削与分类」，`RANKING_*`/`SCRAPE_*`
+    早已删除），冒烟脚本查分组名才发现。删功能最容易留半截，必须两个方向都钉。
+    """
+    from app.api.routers.system import SETTING_GROUPS
+    from app.core.config import settings as live_settings
+
+    dangling = {
+        group["title"]: [k for k in group["keys"] if not hasattr(live_settings, k)]
+        for group in SETTING_GROUPS
+    }
+    dangling = {t: ks for t, ks in dangling.items() if ks}
+    assert dangling == {}, f"这些分组引用了已不存在的配置项：{dangling}"
+
+
+def test_no_empty_setting_group_is_exposed(client, auth_headers) -> None:
+    """接口不能下发空分组——功能没了、入口还在，比不删更糟。"""
+    response = client.get("/api/v1/system/settings", headers=auth_headers)
+    assert response.status_code == 200
+    empty = [g["title"] for g in response.json()["groups"] if not g["items"]]
+    assert empty == [], f"这些分组是空壳：{empty}"
+
+
+def test_retired_setting_groups_are_gone(client, auth_headers) -> None:
+    """榜单自动订阅 / 刮削 两组随功能下线，标题不该再出现（ADR-96）。"""
+    response = client.get("/api/v1/system/settings", headers=auth_headers)
+    titles = [g["title"] for g in response.json()["groups"]]
+    assert "榜单自动订阅" not in titles
+    assert "刮削与分类" not in titles
+    # 未被推翻的分类归档要还在（否则等于把没删的功能也一起藏了）
+    assert "分类归档" in titles
+
+
 def test_settings_api_returns_breaker_keys(client, auth_headers) -> None:
     """熔断三项要真的出现在接口返回里，且标记为可改。"""
     response = client.get("/api/v1/system/settings", headers=auth_headers)

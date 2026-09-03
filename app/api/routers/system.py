@@ -11,7 +11,7 @@ from sqlalchemy import func, select
 from app.api.deps import AdminUser, CurrentUser, OperatorUser
 from app.core.config import DEFAULT_CONFIG_FILE as CONFIG_FILE
 from app.core.config import settings
-from app.core.logger import recent_logs
+from app.core.logger import get_logger, recent_logs
 from app.core.version import APP_TITLE, APP_VERSION
 from app.db.models import (
     DownloadTask,
@@ -31,6 +31,7 @@ from app.services import update_check as update_service
 from app.services.scheduler import scheduler_service
 
 router = APIRouter(prefix="/system", tags=["系统"])
+logger = get_logger(__name__)
 
 
 @router.get("/info", summary="系统信息")
@@ -210,20 +211,15 @@ SETTING_GROUPS: list[dict[str, Any]] = [
         "title": "下载器调度",
         "keys": ["DOWNLOADER_STRATEGY", "DOWNLOADER_FAILOVER"],
     },
+    # v1.24.0：「榜单自动订阅」整组与「刮削」5 个键随功能下线（ADR-96）。
+    # ⚠️ 这里曾经是**半删状态**的活标本：`RANKING_*` / `SCRAPE_*` 配置项本身
+    # 已经删掉了，但分组标题还留着。分组渲染会静默跳过不存在的键，
+    # 于是设置页上就出现两个**空**分组「榜单自动订阅」「刮削与分类」——
+    # 功能没了，入口还在，用户点进去以为坏了。
+    # 分类归档（CATEGORY_ENABLED）没被推翻，改名为「分类归档」独立成组。
     {
-        "title": "榜单自动订阅",
-        "keys": ["RANKING_INTERVAL_MINUTES", "RANKING_MAX_PER_RUN"],
-    },
-    {
-        "title": "刮削与分类",
-        "keys": [
-            "SCRAPE_ENABLED",
-            "SCRAPE_IMAGES",
-            "SCRAPE_OVERWRITE",
-            "SCRAPE_CRON",
-            "SCRAPE_BATCH",
-            "CATEGORY_ENABLED",
-        ],
+        "title": "分类归档",
+        "keys": ["CATEGORY_ENABLED"],
     },
     {
         "title": "STRM 同步",
@@ -332,6 +328,16 @@ def effective_settings(user: CurrentUser) -> dict[str, Any]:
                     **meta,
                 }
             )
+        # 空分组不下发。分组里的键会被 `hasattr` 静默跳过，所以功能下线后
+        # 只要忘了删标题，设置页就会出现一个**空壳分组**——功能没了、入口还在。
+        # v1.24.0 实测就有两个（「榜单自动订阅」「刮削与分类」），
+        # 冒烟脚本查分组名才发现。这里兜底：宁可不显示，也不给空入口。
+        if not items:
+            logger.warning(
+                "设置分组「%s」没有任何存在的配置项，已跳过（功能下线后残留的标题？）",
+                group["title"],
+            )
+            continue
         groups.append({"title": group["title"], "items": items})
     return {
         "success": True,
