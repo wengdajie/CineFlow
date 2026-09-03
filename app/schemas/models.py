@@ -358,7 +358,12 @@ class PanMoveRequest(BaseModel):
 class PanLoginStartRequest(BaseModel):
     """开始一次扫码登录。"""
 
-    provider: str = Field(description="pan115 / baidu")
+    provider: str = Field(description="pan115 / baidu / baidu_openapi / quark")
+    #: 仅 baidu_openapi 需要：百度开放平台应用的 AppKey / SecretKey。
+    #: 不内置公共值——共用一个 AppKey 会共享配额且一旦被封全员受影响，
+    #: 而把 SecretKey 写进开源仓库本身就是泄密。
+    client_id: str = Field(default="", description="百度开放平台 AppKey")
+    client_secret: str = Field(default="", description="百度开放平台 SecretKey")
 
 
 class PanLoginCompleteRequest(BaseModel):

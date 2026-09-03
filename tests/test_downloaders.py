@@ -818,3 +818,87 @@ async def test_aria2_pause_targets_data_gid(monkeypatch: pytest.MonkeyPatch) -> 
     dl, fake = _aria2_with_fake(monkeypatch)
     assert await dl.pause(_Aria2MagnetFake.META_GID) is True
     assert fake.paused == [_Aria2MagnetFake.DATA_GID], f"暂停打在了错的 GID：{fake.paused}"
+
+
+# --------------------------------------------------------------------------
+# qBittorrent 5.x：登录成功回 204，不是 200
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_qbittorrent_login_accepts_204(monkeypatch: pytest.MonkeyPatch) -> None:
+    """qB 5.2.3 登录成功返回 **HTTP 204**，不能报成"用户名或密码错误"。
+
+    实测（真实 qBittorrent v5.2.3，本机 8080）：
+    ``POST /api/v2/auth/login`` 正确账密 → ``204`` + ``Set-Cookie: QBT_SID_8080=...``，
+    body 为空。旧代码 ``status_code != 200`` 于是输出
+    「用户名或密码错误（HTTP 204）」—— 明明登录成功了却说密码错，
+    这正是用户报告的现象。
+    """
+    from app.providers.downloader import qbittorrent as mod
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v2/auth/login":
+            return httpx.Response(
+                204, headers={"set-cookie": "QBT_SID_8080=abc; path=/"}
+            )
+        if request.url.path == "/api/v2/app/version":
+            return httpx.Response(200, text="v5.2.3")
+        return httpx.Response(200, text="[]")
+
+    _patch_transport(monkeypatch, mod, handler)
+    dl = mod.QbittorrentDownloader(
+        {"url": "http://127.0.0.1:8080", "username": "admin", "password": "pw"}
+    )
+    ok, message = await dl.health_check()
+    assert ok is True, f"204 登录成功被判失败：{message}"
+    assert "v5.2.3" in message
+    assert "密码" not in message, f"成功却提到密码：{message}"
+
+
+@pytest.mark.asyncio
+async def test_qbittorrent_204_but_dead_session_is_auth_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """204 但会话无效 → 必须报认证失败，且**不能**报成"没启动"。
+
+    为什么要这条：qB 对 localhost 默认「跳过本机认证」，实测**错误密码
+    也回 204 + Cookie**（正确/错密码/错用户名三种全是 204）。
+    所以状态码不携带认证结论，唯一可靠判据是拿会话去请求要认证的接口。
+    """
+    from app.providers.downloader import qbittorrent as mod
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v2/auth/login":
+            return httpx.Response(204)
+        return httpx.Response(403, text="Forbidden")
+
+    _patch_transport(monkeypatch, mod, handler)
+    dl = mod.QbittorrentDownloader(
+        {"url": "http://127.0.0.1:8080", "username": "admin", "password": "wrong"}
+    )
+    ok, message = await dl.health_check()
+    assert ok is False
+    assert "用户名或密码错误" in message, f"会话无效没报成认证失败：{message}"
+    assert "没启动" not in message, f"认证失败被误报成服务未启动：{message}"
+
+
+@pytest.mark.asyncio
+async def test_qbittorrent_login_fails_keyword_still_detected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """老版本 qB 回 200 "Fails." 的路径不能因为放宽状态码而失效。"""
+    from app.providers.downloader import qbittorrent as mod
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v2/auth/login":
+            return httpx.Response(200, text="Fails.")
+        return httpx.Response(200, text="v4.6.0")
+
+    _patch_transport(monkeypatch, mod, handler)
+    dl = mod.QbittorrentDownloader(
+        {"url": "http://127.0.0.1:8080", "username": "admin", "password": "bad"}
+    )
+    ok, message = await dl.health_check()
+    assert ok is False
+    assert "用户名或密码错误" in message, message

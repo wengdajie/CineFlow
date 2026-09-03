@@ -299,8 +299,8 @@ check("README 说明定时任务可改期", "定时任务" in README and "cron" 
 
 # ---- 测试文件 ----
 test_files = sorted(p.name for p in pathlib.Path("tests").glob("test_*.py"))
-check("测试文件 57 个", len(test_files) == 57, str(test_files))
-check("README 声明 57 个测试文件", "57 个测试文件" in README)
+check("测试文件 58 个", len(test_files) == 58, str(test_files))
+check("README 声明 58 个测试文件", "58 个测试文件" in README)
 for name in ("test_custom_sites.py", "test_radar.py", "test_trending.py",
              "test_panstorage.py", "test_chatops.py", "test_nfo.py",
              "test_scraper.py", "test_webdav.py", "test_strm_sync.py",
@@ -333,9 +333,9 @@ _aria2_src = pathlib.Path("app/providers/downloader/aria2.py").read_text(encodin
 check("aria2 会跟随 followedBy 到数据 GID", "followedBy" in _aria2_src and "_follow" in _aria2_src)
 _dl_tests = pathlib.Path("tests/test_downloaders.py").read_text(encoding="utf-8")
 check("aria2 磁力 GID 跟随有回归用例", "test_aria2_magnet_get_follows_to_data_gid" in _dl_tests)
-check("README 版本号 1.22.0", "1.22.0" in README_ONLY)
+check("README 版本号 1.23.0", "1.23.0" in README_ONLY)
 version_src = pathlib.Path("app/core/version.py").read_text(encoding="utf-8")
-check("代码版本号为 1.22.0", 'APP_VERSION = "1.22.0"' in version_src)
+check("代码版本号为 1.23.0", 'APP_VERSION = "1.23.0"' in version_src)
 check("README 声明 314 项接口用例", "314 项真实 HTTP 接口用例" in README)
 check("scripts/README 声明 314 项", "314 项接口用例" in SCRIPTS_README)
 
@@ -402,6 +402,18 @@ for adr in ("ADR-24", "ADR-25", "ADR-26", "ADR-27",
     check(f"决策记录含 {adr}", adr in adr_text)
 check("ADR-91 记录磁力元数据 GID 陷阱",
       "ADR-91" in adr_text and "followedBy" in adr_text)
+check("ADR-92 记录 qB 204 登录", "ADR-92" in adr_text and "204" in adr_text)
+check("ADR-93 记录百度分享正则放宽", "ADR-93" in adr_text)
+check("ADR-94 记录 400 不等于网络问题", "ADR-94" in adr_text)
+check("ADR-95 记录百度开放平台授权", "ADR-95" in adr_text and "refresh_token" in adr_text)
+_bo = pathlib.Path("app/services/panlogin/baidu_openapi.py").read_text(encoding="utf-8")
+check("百度开放平台走设备码授权", "device_token" in _bo and "authorization_pending" in _bo)
+check("百度开放平台声明不支持转存", "转存" in _bo and "互补" in _bo)
+_qb = pathlib.Path("app/providers/downloader/qbittorrent.py").read_text(encoding="utf-8")
+check("qB 接受 204 登录", "(200, 204)" in _qb)
+_bd = pathlib.Path("app/providers/panstorage/baidu.py").read_text(encoding="utf-8")
+check("百度记录 HTTP 状态码以区分登录态", "_last_http_status" in _bd)
+check("百度分享正则支持 yun/eyun", "yun|eyun" in _bd)
 check("ADR-24 记录 yt-dlp 合规边界", "只下**公开内容**" in adr_text)
 check("ADR-25 记录公平性靠交错", "轮转交错" in adr_text)
 check("ADR-26 记录不强依赖 TMDB", "不强依赖 TMDB" in adr_text)

@@ -199,7 +199,11 @@ def login_providers(user: CurrentUser) -> dict[str, Any]:
 @router.post("/login/qrcode", summary="开始扫码登录")
 async def login_start(payload: PanLoginStartRequest, user: OperatorUser) -> dict[str, Any]:
     """申请二维码。返回的 token 用于后续轮询。"""
-    result = await login_service.start_qrcode(payload.provider)
+    result = await login_service.start_qrcode(
+        payload.provider,
+        client_id=payload.client_id,
+        client_secret=payload.client_secret,
+    )
     if not result.get("success"):
         raise HTTPException(status_code=400, detail=result.get("message", "无法开始登录"))
     return result

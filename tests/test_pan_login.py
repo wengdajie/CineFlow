@@ -342,7 +342,16 @@ def test_providers_declare_capabilities():
     assert provs["pan115"]["qrcode"] is True
     assert provs["baidu"]["qrcode"] is True
     assert provs["quark"]["qrcode"] is False
-    assert all(p["cookie"] for p in provs.values())
+    # 原断言是 `all(p["cookie"] for p in provs.values())`，即"所有网盘都能导
+    # Cookie"。v1.23.0 起这条判断被**推翻**：``baidu_openapi`` 走官方 OAuth，
+    # 落库的是 access_token/refresh_token，根本没有 Cookie 概念，
+    # 声明 cookie=True 会让前端渲染出一个填了也没用的 Cookie 输入框。
+    # 保留这段说明而不是直接删掉旧断言，是为了让后来者知道它为什么变了。
+    assert all(
+        p["cookie"] for k, p in provs.items() if k != "baidu_openapi"
+    ), "除开放平台授权外，其余网盘都应支持 Cookie 导入"
+    assert provs["baidu_openapi"]["cookie"] is False
+    assert provs["baidu_openapi"]["needs_app_credentials"] is True
 
 
 def test_start_qrcode_rejects_unsupported():

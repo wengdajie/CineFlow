@@ -53,8 +53,20 @@ logger = get_logger(__name__)
 _BDSTOKEN_RE = re.compile(r'bdstoken["\s:=]+([0-9a-f]{32})')
 
 API_BASE = "https://pan.baidu.com"
-#: 分享链接形如 https://pan.baidu.com/s/1AbCdEf 或 .../share/init?surl=AbCdEf
-SHARE_RE = re.compile(r"pan\.baidu\.com/s/1([0-9a-zA-Z_-]+)")
+#: 分享链接的三种真实形态（实测用户粘贴的内容）：
+#:   https://pan.baidu.com/s/1AbCdEf          —— 最常见，短码带前导 1
+#:   https://pan.baidu.com/s/xKq9v2Lm         —— 新版短码**没有**前导 1
+#:   https://pan.baidu.com/share/init?surl=AbCdEf
+#:
+#: ⚠️ 旧正则写死了 ``/s/1``（把 1 当分隔符吃掉），于是：
+#:   ① 不以 1 开头的新短码被判「不是有效的百度网盘分享链接」；
+#:   ② 域名写死 pan.baidu.com，yun.baidu.com / eyun.baidu.com 全部误杀。
+#: 这两类都是**能打开的正常链接**，却在入口就被拒——用户看到的就是
+#: 「网盘资源下载提示：不是有效的百度网盘分享链接」。
+#:
+#: 现在：域名放宽到 (pan|yun|eyun).baidu.com，短码整体捕获后再剥前导 1。
+#: 前导 1 必须剥掉，因为下游 ``surl`` 参数要的是不含它的部分。
+SHARE_RE = re.compile(r"(?:pan|yun|eyun)\.baidu\.com/s/([0-9a-zA-Z_-]+)")
 SURL_RE = re.compile(r"[?&]surl=([0-9a-zA-Z_-]+)")
 
 UA = (
@@ -97,6 +109,9 @@ class BaiduPanStorage(BasePanStorage):
         self._bdstoken: str = ""
         #: 最近一次 _call 的 errno（None = 没发出去或响应不是 JSON）
         self._last_errno: int | None = None
+        #: 最后一次 HTTP 状态码。Cookie 过期时百度回 400，必须靠它区分
+        #: 「登录态失效」与「网络不通」——两者以前都报成网络问题。
+        self._last_http_status: int | None = None
 
     @property
     def cookie(self) -> str:
@@ -125,17 +140,30 @@ class BaiduPanStorage(BasePanStorage):
         「Cookie 过期」「被风控」时需要它，而 ``None`` 三者同形（ADR-82）。
         """
         self._last_errno = None
+        self._last_http_status = None
         if not self.cookie:
             return None
         merged = {"clienttype": 0, "app_id": 250528, "web": 1, **(params or {})}
-        payload = await fetch_json(
-            f"{API_BASE}{path}",
-            method=method,
-            params=merged,
-            data=data,
-            headers=self._headers(),
-            timeout=self.config.get("timeout"),
-        )
+        # ⚠️ 不能用 fetch_json：它把 4xx 也归成 None。
+        #
+        # 实测：**Cookie 过期时百度 /api/quota 回的是 HTTP 400**（不是 200+errno）。
+        # 走 fetch_json 时 raise_for_status() 抛异常 → 返回 None → `_last_errno`
+        # 停留在 None → 上层判成「连不上百度网盘（网络或代理问题），登录态未知」。
+        # 于是用户看到的是"网络问题"，实际是 Cookie 死了；重新扫码也没用，
+        # 因为提示把他引向了错误的方向。这里自己发请求以保住状态码。
+        url = f"{API_BASE}{path}"
+        try:
+            async with async_client(
+                timeout=self.config.get("timeout"), headers=self._headers()
+            ) as client:
+                response = await client.request(
+                    method, url, params=merged, data=data
+                )
+            self._last_http_status = response.status_code
+            payload = response.json()
+        except Exception as exc:  # 真正的网络层失败才是"连不上"
+            logger.warning("百度网盘 %s 请求失败：%s", path, exc)
+            return None
         if not isinstance(payload, dict):
             return None
         errno = _as_int(payload.get("errno"), 0)
@@ -405,6 +433,15 @@ class BaiduPanStorage(BasePanStorage):
             return True, "百度网盘登录态正常"
         if self._last_errno == -6:
             return False, "百度网盘 Cookie 已过期或失效（errno=-6），请重新扫码登录"
+        # HTTP 4xx：请求到达了百度但被拒——实测 Cookie 过期就是 400。
+        # 这**不是**网络问题，不能让用户去查代理。
+        if self._last_http_status is not None and 400 <= self._last_http_status < 500:
+            return False, (
+                f"百度网盘登录态已失效（HTTP {self._last_http_status}）。"
+                "网页 Cookie 风控很严、往往几小时就废；"
+                "建议改用「百度开放平台授权」（设置 → 网盘 → 百度 → 开放平台授权），"
+                "用 refresh_token 长期免扫码"
+            )
         if self._last_errno is None:
             return False, "连不上百度网盘（网络或代理问题），登录态未知"
         return False, f"百度网盘保活失败（errno={self._last_errno}），可能触发风控"
@@ -416,7 +453,10 @@ class BaiduPanStorage(BasePanStorage):
         raw = str(share_url or "")
         match = SHARE_RE.search(raw)
         if match:
-            return match.group(1)
+            code = match.group(1)
+            # ``/s/1xxxx`` 里的前导 1 是百度的固定前缀，不属于短码本身；
+            # 新版短码没有它。两种都要归一成「不含前导 1」的形式。
+            return code[1:] if code.startswith("1") and len(code) > 1 else code
         match = SURL_RE.search(raw)
         return match.group(1) if match else ""
 

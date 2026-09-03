@@ -23,6 +23,7 @@ from app.services.panlogin import (
     put_session,
 )
 from app.services.panlogin import baidu as baidu_login
+from app.services.panlogin import baidu_openapi as baidu_openapi_login
 from app.services.panlogin import pan115 as pan115_login
 from app.services.panlogin import quark as quark_login
 
@@ -47,6 +48,20 @@ PROVIDERS: dict[str, dict[str, Any]] = {
         "module": baidu_login,
         "note": "passport 扫码；风控较严时请改用 Cookie 导入",
     },
+    "baidu_openapi": {
+        "label": "百度网盘（开放平台授权）",
+        "qrcode": True,
+        "cookie": False,
+        "module": baidu_openapi_login,
+        "note": (
+            "官方 OAuth 设备码授权，refresh_token 有效期 10 年、可静默刷新，"
+            "不会像网页 Cookie 那样几小时就失效。"
+            "需自备 AppKey/SecretKey（pan.baidu.com/union 创建应用）。"
+            "注意：开放平台**不支持转存他人分享链接**，转存仍需网页 Cookie"
+        ),
+        #: 这条路要先收 AppKey/SecretKey 才能出二维码
+        "needs_app_credentials": True,
+    },
     "quark": {
         "label": "夸克网盘",
         "qrcode": False,
@@ -66,13 +81,23 @@ def providers() -> list[dict[str, Any]]:
             "qrcode": bool(meta["qrcode"]),
             "cookie": bool(meta["cookie"]),
             "note": str(meta["note"]),
+            "needs_app_credentials": bool(meta.get("needs_app_credentials")),
         }
         for key, meta in PROVIDERS.items()
     ]
 
 
-async def start_qrcode(provider: str) -> dict[str, Any]:
-    """开始一次扫码登录。"""
+async def start_qrcode(
+    provider: str,
+    *,
+    client_id: str = "",
+    client_secret: str = "",
+) -> dict[str, Any]:
+    """开始一次扫码登录。
+
+    ``client_id``/``client_secret`` 只有开放平台授权那条路要用
+    （见 ``needs_app_credentials``）；其余网盘忽略，保持签名统一。
+    """
     meta = PROVIDERS.get(provider)
     if not meta:
         return {"success": False, "message": f"不支持的网盘：{provider}"}
@@ -81,7 +106,10 @@ async def start_qrcode(provider: str) -> dict[str, Any]:
             "success": False,
             "message": f"{meta['label']}不支持扫码登录：{meta['note']}",
         }
-    session: LoginSession = await meta["module"].start()
+    if meta.get("needs_app_credentials"):
+        session: LoginSession = await meta["module"].start(client_id, client_secret)
+    else:
+        session = await meta["module"].start()
     await put_session(session)
     if session.status == "failed":
         return {"success": False, "message": session.message, "data": session.to_dict()}
@@ -199,6 +227,73 @@ async def apply_cookie(
     return result
 
 
+async def apply_openapi_tokens(
+    provider: str,
+    extra: dict[str, Any],
+    *,
+    site_id: int | None = None,
+    site_name: str | None = None,
+) -> dict[str, Any]:
+    """把开放平台授权的 token 写入站点记录。
+
+    与 Cookie 路径分开是因为落库内容不同：这里存的是
+    ``access_token`` / ``refresh_token`` / ``client_id`` / ``client_secret``。
+    ``refresh_token`` 是长期凭据（10 年），**必须**一起存，否则
+    access_token 30 天后过期又要重新授权，等于白做。
+    """
+    meta = PROVIDERS.get(provider)
+    if not meta:
+        return {"success": False, "message": f"不支持的网盘：{provider}"}
+    access_token = str(extra.get("access_token") or "")
+    if not access_token:
+        return {"success": False, "message": "未取到 access_token"}
+
+    ok, message, detail = await meta["module"].verify(access_token)
+    if not ok:
+        return {"success": False, "message": f"未保存：{message}"}
+
+    with session_scope() as session_db:
+        site = _target_site(session_db, provider, site_id)
+        created = False
+        if site is None:
+            site = SiteConfig(
+                name=site_name or f"{meta['label']}",
+                kind=ProviderKind.PANSTORAGE.value,
+                provider=provider,
+                url="",
+                enabled=True,
+                options={},
+            )
+            session_db.add(site)
+            created = True
+        options = dict(site.options or {})
+        options.update(
+            {
+                "access_token": access_token,
+                "refresh_token": str(extra.get("refresh_token") or ""),
+                "client_id": str(extra.get("client_id") or ""),
+                "client_secret": str(extra.get("client_secret") or ""),
+                "expires_in": int(extra.get("expires_in") or 0),
+            }
+        )
+        site.options = options
+        site.api_key = access_token
+        site.enabled = True
+        site.last_status = "授权成功"
+        session_db.flush()
+        return {
+            "success": True,
+            "message": ("已创建站点并保存授权" if created else "授权已更新"),
+            "data": {
+                "site_id": site.id,
+                "site_name": site.name,
+                "provider": provider,
+                "created": created,
+                **detail,
+            },
+        }
+
+
 async def complete_qrcode(
     token: str, *, site_id: int | None = None, site_name: str | None = None
 ) -> dict[str, Any]:
@@ -206,7 +301,17 @@ async def complete_qrcode(
     session = await get_session(token)
     if not session:
         return {"success": False, "message": "会话不存在或已过期"}
-    if session.status != "success" or not session.cookie:
+    if session.status != "success":
+        return {"success": False, "message": f"尚未登录成功（当前：{session.message}）"}
+    # 开放平台授权拿到的是 token 而不是 Cookie，落库字段完全不同
+    if (PROVIDERS.get(session.provider) or {}).get("needs_app_credentials"):
+        result = await apply_openapi_tokens(
+            session.provider, session.extra, site_id=site_id, site_name=site_name
+        )
+        if result.get("success"):
+            await drop_session(token)
+        return result
+    if not session.cookie:
         return {"success": False, "message": f"尚未登录成功（当前：{session.message}）"}
     # 扫码流程已经证明凭据有效，不必再校验一次（多一次请求反而更容易撞风控）
     result = await apply_cookie(

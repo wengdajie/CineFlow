@@ -107,11 +107,39 @@ class QbittorrentDownloader(BaseDownloader):
                     logger.error("%s", self._last_error)
                     await client.aclose()
                     return None
-                if response.status_code != 200 or "Fails" in response.text:
-                    self._last_error = (
-                        f"用户名或密码错误（HTTP {response.status_code}）"
-                    )
+                # ⚠️ 不能用状态码判成败。
+                #
+                # 实测 qBittorrent **5.2.3**：登录成功回的是 **HTTP 204**
+                # （空 body + Set-Cookie），不是老版本的 `200 "Ok."`。
+                # 旧代码 `status_code != 200` 于是把**成功**报成
+                # 「用户名或密码错误（HTTP 204）」——这正是用户遇到的现象：
+                # 账密填对了却一直说密码错。
+                #
+                # 更麻烦的是：qB 对 localhost 默认开「跳过本机认证」，
+                # 此时**故意填错的密码也回 204 + Cookie**（实测三种组合
+                # 正确/错密码/错用户名全是 204），所以状态码根本不携带
+                # 认证结论。唯一可靠的判据是**拿会话去请求一个要认证的接口**。
+                if "Fails" in response.text:
+                    self._last_error = "用户名或密码错误（qBittorrent 返回 Fails）"
                     logger.error("qBittorrent 登录失败（账号或密码错误）: %s", self.base_url)
+                    await client.aclose()
+                    return None
+                if response.status_code not in (200, 204):
+                    self._last_error = (
+                        f"qBittorrent 登录返回异常状态 HTTP {response.status_code}"
+                        f"（{self.base_url}）"
+                    )
+                    logger.error("%s", self._last_error)
+                    await client.aclose()
+                    return None
+                # 用带上会话的请求验证登录是否真的生效
+                verify = await client.get("/api/v2/app/version")
+                if verify.status_code in (401, 403):
+                    self._last_error = (
+                        "用户名或密码错误：qBittorrent 接受了登录请求但会话无效"
+                        f"（校验接口回 HTTP {verify.status_code}）"
+                    )
+                    logger.error("%s: %s", self._last_error, self.base_url)
                     await client.aclose()
                     return None
             else:
