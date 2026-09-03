@@ -175,3 +175,75 @@ def test_category_disabled_keeps_flat_layout(tmp_media, tmp_path, monkeypatch):
     source = tmp_media("不分类剧.S01E01.1080p.WEB-DL.mkv")
     result = transfer_file(source, library_dir=tmp_path / "lib3", mode="copy")
     assert "电视剧" not in str(result.target)
+
+# ---------------------------------------------------------------------------
+# v1.24.0 实机入库暴露的两个命名缺陷
+# ---------------------------------------------------------------------------
+
+
+def test_missing_quality_does_not_produce_literal_unknown():
+    """没有画质信息时不能在文件名里写 "unknown"。
+
+    实机入库产出过 `Big Buck Bunny/Big Buck Bunny - unknown.mp4`：
+    模板是 `{title} ({year}) - {quality}{ext}`，`quality` 取不到时
+    以前填字面量 `"unknown"`。渲染后的逐段清洗专门处理**空**字段
+    （`" - ."` → `"."`），字面量正好绕过它。
+
+    这不只是难看：媒体服务器会按文件名猜画质，`unknown` 是一条会被当真的假信息。
+    """
+    info = meta.parse("Big Buck Bunny.mp4", is_file=True)
+    assert info.resolution is None and info.quality is None  # 前提：真的没有画质
+    rendered = render_name(info, ".mp4")
+    assert "unknown" not in rendered, rendered
+    assert rendered == "Big Buck Bunny/Big Buck Bunny.mp4"
+
+
+def test_real_quality_is_still_kept_in_name():
+    """反向担保：有画质信息时必须照旧写进文件名。
+
+    否则上一条修复就等于把画质标记整个删了 —— 洗版判断要靠它。
+    """
+    info = meta.parse("Sintel.2010.720p.BluRay.x264.mp4", is_file=True)
+    rendered = render_name(info, ".mp4")
+    assert "720p" in rendered, rendered
+    assert rendered.startswith("Sintel (2010)/")
+
+
+def test_transfer_directory_applies_external_year(tmp_path):
+    """任务标题里的年份要能补进文件名。
+
+    实测：种子里的文件就叫 `Big Buck Bunny.mp4`（无年份），而任务标题是
+    `Big Buck Bunny (2008)`。年份不带下来，入库路径就是不带年份的
+    `Big Buck Bunny/`，而 Emby/Jellyfin 靠 `片名 (年份)` 消歧义 ——
+    同名重拍片会被并成一个条目。
+    """
+    src = tmp_path / "src"
+    src.mkdir()
+    video = src / "Big Buck Bunny.mp4"
+    video.write_bytes(b"0" * 2048)
+    lib = tmp_path / "lib"
+
+    results = transfer_directory(
+        src, library_dir=lib, mode=TransferMode.COPY.value,
+        title="Big Buck Bunny", year=2008,
+    )
+    assert results and results[0].success, results
+    assert "Big Buck Bunny (2008)" in str(results[0].target), results[0].target
+
+
+def test_external_year_does_not_override_filename_year(tmp_path):
+    """反向担保：文件名自带年份时，外部年份不得覆盖它。
+
+    文件名里的信息比任务标题更具体（合集种子里每个文件年份可能不同）。
+    """
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "Sintel.2010.720p.mp4").write_bytes(b"0" * 2048)
+    lib = tmp_path / "lib"
+
+    results = transfer_directory(
+        src, library_dir=lib, mode=TransferMode.COPY.value, year=1999,
+    )
+    assert results and results[0].success
+    assert "(2010)" in str(results[0].target), results[0].target
+    assert "1999" not in str(results[0].target), results[0].target

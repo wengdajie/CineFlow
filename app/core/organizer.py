@@ -80,7 +80,11 @@ def render_name(meta: MetaInfo, extension: str, template: str | None = None) -> 
         "season": season,
         "episode": episode,
         "resolution": meta.resolution or "",
-        "quality": " ".join(quality_parts) or "unknown",
+        # 没有画质信息时留**空串**而不是字面量 "unknown"。
+        # 下面的逐段清洗专门处理空字段（" - ." → "."），字面量会把它绕过去，
+        # 实测产出 `Big Buck Bunny - unknown.mp4` 这种文件名（v1.24.0 实机入库）。
+        # 媒体服务器按文件名猜画质，"unknown" 是一个会被当真的假信息。
+        "quality": " ".join(quality_parts),
         "video_codec": meta.video_codec or "",
         "audio_codec": meta.audio_codec or "",
         "effect": meta.effect or "",
@@ -256,10 +260,18 @@ def transfer_directory(
     template: str | None = None,
     title: str | None = None,
     season: int | None = None,
+    year: int | None = None,
     overwrite: bool = False,
     dry_run: bool = False,
 ) -> list[TransferResult]:
-    """整理目录（或单文件）下的所有媒体文件。"""
+    """整理目录（或单文件）下的所有媒体文件。
+
+    ``year`` 由调用方从**任务标题**里解析后传入。单个视频文件名常常只有片名
+    （实测种子里就是 ``Big Buck Bunny.mp4``），而任务标题是
+    ``Big Buck Bunny (2008)``。不把年份带下来，入库路径就退化成不带年份的
+    ``Big Buck Bunny/``，而 Emby/Jellyfin 靠 ``片名 (年份)`` 来消歧义 ——
+    同名重拍片会被并成一个条目（v1.24.0 实机入库暴露）。
+    """
     files = iter_media_files(Path(source))
     if not files:
         return []
@@ -274,6 +286,9 @@ def transfer_directory(
             info = parse(f"{Path(source).name} {path.name}", is_file=True)
         if season is not None and info.season is None:
             info.season = season
+        # 只在文件名自己没解析出年份时才用外部年份，不覆盖更具体的信息
+        if year is not None and info.year is None:
+            info.year = year
         results.append(
             transfer_file(
                 path,

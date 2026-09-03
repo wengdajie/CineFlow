@@ -93,10 +93,46 @@ class Aria2Downloader(BaseDownloader):
         result = await self._call(method, params)
         return str(result) if result else None
 
+    def _content_path(self, entries: list[dict[str, Any]], fallback: str) -> str:
+        """挑出这个任务的"主内容"路径，供入库整理用。
+
+        **不能用 ``files[0]``**（v1.24.0 实测）：aria2 按 **torrent 内的文件序**
+        返回，不是按大小。两个真实种子的实际返回顺序：
+
+        | 种子 | ``files[0]`` | 实际的正片 |
+        |---|---|---|
+        | Big Buck Bunny | ``Big Buck Bunny.en.srt``（**140 B**） | ``.mp4`` 276 MB |
+        | Sintel | ``Sintel.de.srt``（1.6 KB） | ``.mp4`` 129 MB，排在 **9 个 .srt 之后** |
+
+        后果是**静默的**：`content_path` 指向字幕，`iter_media_files()` 对单个
+        `.srt` 返回空列表，于是入库只在日志里留一行"未发现可整理的媒体文件"，
+        任务停在 `completed` 永远不变 `transferred`。用户看到"下载完成"、
+        媒体库里什么都没有，而且没有任何报错。
+
+        多文件种子取**最大的那个文件所在目录**而不是文件本身：正片旁边的字幕
+        也要一起入库，交给 `transfer_directory()` 递归处理最省事。
+        """
+        if not entries:
+            return fallback
+        sized = [
+            (int(entry.get("length") or 0), str(entry.get("path") or ""))
+            for entry in entries
+            if entry.get("path")
+        ]
+        if not sized:
+            return fallback
+        if len(sized) == 1:
+            return sized[0][1]
+        # 最大文件 = 正片；返回它的父目录，让随行字幕一并被整理
+        _, largest = max(sized, key=lambda pair: pair[0])
+        parent = largest.rsplit("/", 1)[0] if "/" in largest else ""
+        return parent or largest
+
     def _to_state(self, item: dict[str, Any]) -> TorrentState:
         total = int(item.get("totalLength") or 0)
         completed = int(item.get("completedLength") or 0)
-        files = [str(entry.get("path") or "") for entry in item.get("files") or []]
+        entries = [entry for entry in item.get("files") or [] if isinstance(entry, dict)]
+        files = [str(entry.get("path") or "") for entry in entries]
         name = ""
         bittorrent = item.get("bittorrent") or {}
         if isinstance(bittorrent, dict):
@@ -112,7 +148,7 @@ class Aria2Downloader(BaseDownloader):
             downloaded=completed,
             speed=int(item.get("downloadSpeed") or 0),
             save_path=str(item.get("dir") or ""),
-            content_path=files[0] if files else str(item.get("dir") or ""),
+            content_path=self._content_path(entries, str(item.get("dir") or "")),
             files=files,
             error=str(item.get("errorMessage") or "") or None,
         )

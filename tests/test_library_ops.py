@@ -480,3 +480,177 @@ def test_download_dir_sibling_prefix_is_outside():
     intruder = root.parent / (root.name + "-evil") / "x.mkv"
     with pytest.raises(ConfigError):
         library_service.resolve_library_path(intruder, must_exist=False)
+
+# ---------------------------------------------------------------------------
+# 入库跳过必须可见 + content_path 指向非媒体文件时回退到目录（v1.24.0 实测）
+# ---------------------------------------------------------------------------
+
+
+def _make_task(*, content_path: str, title: str, status: str | None = None):
+    """建一条 completed 下载任务，meta.content_path 可控。"""
+    from app.db.models import DownloadTask
+    from app.schemas.enums import TaskStatus
+
+    with session_scope() as session:
+        task = DownloadTask(
+            title=title,
+            kind="torrent",
+            link="magnet:?xt=urn:btih:" + "0" * 40,  # link 非空约束
+            status=status or TaskStatus.COMPLETED.value,
+            save_path=str(Path(content_path).parent),
+            meta={"content_path": content_path},
+        )
+        session.add(task)
+        session.flush()
+        return task.id
+
+
+def _drop_task(task_id: int) -> None:
+    from app.db.models import DownloadTask
+
+    with session_scope() as session:
+        row = session.get(DownloadTask, task_id)
+        if row:
+            session.delete(row)
+
+
+def _clear_completed_tasks() -> list[int]:
+    """把库里已完成但未整理的任务先挪走，避免串扰本文件的断言。"""
+    from app.db.models import DownloadTask
+    from app.schemas.enums import TaskStatus
+
+    moved = []
+    with session_scope() as session:
+        for row in session.execute(
+            select(DownloadTask).where(
+                DownloadTask.status == TaskStatus.COMPLETED.value
+            )
+        ).scalars().all():
+            row.status = "paused"
+            moved.append(row.id)
+    return moved
+
+
+def test_transfer_falls_back_to_directory_when_content_path_is_subtitle(
+    tmp_path, monkeypatch
+) -> None:
+    """content_path 指向字幕时，要回退到它所在目录把正片找出来。
+
+    实测（v1.24.0）：aria2 按 torrent 内文件序返回 `files`，
+    `content_path` 拿到的是 **140 字节的 `Big Buck Bunny.en.srt`**，
+    而正片 `.mp4`（276MB）在同一目录里。
+    不回退的话整个任务静默停在 `completed`，媒体库里什么都没有。
+    """
+    import asyncio
+
+    _clear_completed_tasks()
+    src = tmp_path / "downloads" / "Big Buck Bunny"
+    src.mkdir(parents=True)
+    (src / "Big Buck Bunny.en.srt").write_text("1\n00:00:01,000\n字幕\n", encoding="utf-8")
+    video = src / "Big Buck Bunny.mp4"
+    video.write_bytes(b"\x00" * (200 * 1024 * 1024 + 1))  # 要过 MIN_FILE_SIZE_MB
+
+    lib = tmp_path / "library"
+    lib.mkdir()
+    monkeypatch.setattr(settings, "LIBRARY_DIR", lib)
+    monkeypatch.setattr(settings, "DOWNLOAD_DIR", str(tmp_path / "downloads"))
+    monkeypatch.setattr(settings, "TRANSFER_MODE", "copy")
+
+    task_id = _make_task(
+        content_path=str(src / "Big Buck Bunny.en.srt"),
+        title="Big Buck Bunny (2008)",
+    )
+    try:
+        stats = asyncio.run(library_service.transfer_completed_tasks())
+    finally:
+        _drop_task(task_id)
+
+    assert stats["files"] >= 1, f"正片没被入库：{stats}"
+    assert stats["skipped"] == 0, f"回退没生效，任务被跳过：{stats}"
+    mp4s = list(lib.rglob("*.mp4"))
+    assert mp4s, f"库里没有 mp4：{list(lib.rglob('*'))}"
+    # 任务标题里的年份必须落到入库路径上。只断言"有文件入库"是不够的 ——
+    # 注入验证证明：删掉 year 传递后那种断言照样绿（假绿）。
+    assert any("(2008)" in str(p) for p in mp4s), (
+        f"任务标题的年份没进入库路径：{[str(p) for p in mp4s]}"
+    )
+    assert not any("unknown" in p.name for p in mp4s), (
+        f"文件名里出现字面量 unknown：{[p.name for p in mp4s]}"
+    )
+
+
+def test_transfer_applies_task_year_on_direct_path(tmp_path, monkeypatch) -> None:
+    """content_path 直接指向正片时（单文件种子），任务标题的年份也要落到入库路径。
+
+    这条和上面那条走的是 `transfer_completed_tasks` 里**两个不同的调用点**：
+    上面那条 content_path 是字幕，走目录回退分支；这条不回退，走首个调用点。
+    注入验证发现：只有回退分支那条测试时，删掉首个调用点的 `year=` 照样绿。
+    """
+    import asyncio
+
+    _clear_completed_tasks()
+    src = tmp_path / "downloads" / "Big Buck Bunny"
+    src.mkdir(parents=True)
+    video = src / "Big Buck Bunny.mp4"
+    video.write_bytes(b"\x00" * (200 * 1024 * 1024 + 1))  # 要过 MIN_FILE_SIZE_MB
+
+    lib = tmp_path / "library"
+    lib.mkdir()
+    monkeypatch.setattr(settings, "LIBRARY_DIR", lib)
+    monkeypatch.setattr(settings, "DOWNLOAD_DIR", str(tmp_path / "downloads"))
+    monkeypatch.setattr(settings, "TRANSFER_MODE", "copy")
+
+    task_id = _make_task(content_path=str(video), title="Big Buck Bunny (2008)")
+    try:
+        stats = asyncio.run(library_service.transfer_completed_tasks())
+    finally:
+        _drop_task(task_id)
+
+    assert stats["files"] >= 1, f"正片没被入库：{stats}"
+    mp4s = list(lib.rglob("*.mp4"))
+    assert mp4s, f"库里没有 mp4：{list(lib.rglob('*'))}"
+    assert any("(2008)" in str(q) for q in mp4s), (
+        f"任务标题的年份没进入库路径：{[str(q) for q in mp4s]}"
+    )
+
+
+def test_transfer_counts_skipped_tasks_instead_of_silent_log(tmp_path, monkeypatch) -> None:
+    """真的没有媒体文件时，要计入 skipped，而不是只写一行日志。
+
+    只 logger.info 的话返回值是 {"tasks": 0, "files": 0, "failed": 0} ——
+    和"根本没有待整理任务"**一模一样**，调用方无法区分（ADR-82）。
+    """
+    import asyncio
+
+    _clear_completed_tasks()
+    src = tmp_path / "downloads" / "只有字幕的种子"
+    src.mkdir(parents=True)
+    (src / "readme.txt").write_text("no video here", encoding="utf-8")
+
+    lib = tmp_path / "library"
+    lib.mkdir()
+    monkeypatch.setattr(settings, "LIBRARY_DIR", lib)
+    monkeypatch.setattr(settings, "DOWNLOAD_DIR", str(tmp_path / "downloads"))
+
+    task_id = _make_task(content_path=str(src), title="只有字幕的种子")
+    try:
+        stats = asyncio.run(library_service.transfer_completed_tasks())
+    finally:
+        _drop_task(task_id)
+
+    assert stats["skipped"] == 1, f"跳过没被计数：{stats}"
+    assert stats["files"] == 0
+    # 反向担保：不能把跳过算成失败——失败是"试了没成"，跳过是"没东西可试"
+    assert stats["failed"] == 0, f"跳过被错算成失败：{stats}"
+
+
+def test_transfer_with_nothing_to_do_is_distinguishable_from_skipping(monkeypatch) -> None:
+    """反向担保：真的没有待整理任务时 skipped 必须是 0。
+
+    否则 skipped 就成了恒为正的噪声，用户学会忽略它，等于没加。
+    """
+    import asyncio
+
+    _clear_completed_tasks()
+    stats = asyncio.run(library_service.transfer_completed_tasks())
+    assert stats == {"tasks": 0, "files": 0, "failed": 0, "skipped": 0}, stats

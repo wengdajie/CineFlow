@@ -1973,6 +1973,61 @@ check("smoke test 区分超时与取值错误（原先 45s 超时报成断言失
 check("smoke test 跑前清残留（否则 409 会被误诊成别的问题）",
       "def purge_by_name" in _smoke_src)
 
+# ---- v1.24.0 / M57：一次实机 BT 下载查出的整条入库链路（ADR-100）----
+check("ADR-100 记录下载器主文件是启发式（v1.24.0）", "## ADR-100 ·" in _adr)
+check("路线图含里程碑 M57", "里程碑 M57" in roadmap_all)
+check("ADR-100 记录实测的 files[0] 文件序", "140 B" in _adr and "9 个 `.srt` 之后" in _adr)
+
+# aria2 的 files 按 torrent 内文件序返回，files[0] 常常是字幕
+_a2_src = pathlib.Path("app/providers/downloader/aria2.py").read_text(encoding="utf-8")
+check("aria2 有主内容挑选函数（不再用 files[0]）", "def _content_path(" in _a2_src)
+check("aria2 主内容按文件大小挑", "int(entry.get(\"length\") or 0)" in _a2_src)
+check("aria2 多文件种子返回父目录（随行字幕一起入库）",
+      "return parent or largest" in _a2_src)
+check("aria2 单文件种子返回文件本身（返回目录会搂进别的任务）",
+      "if len(sized) == 1:" in _a2_src)
+check("aria2 不再直接用 files[0] 当主内容", "content_path=files[0]" not in _a2_src)
+_dl_t = pathlib.Path("tests/test_downloaders.py").read_text(encoding="utf-8")
+for _t in ("test_aria2_content_path_is_not_the_first_file",
+           "test_aria2_content_path_ignores_leading_subtitle_run",
+           "test_aria2_single_file_content_path_is_the_file_itself",
+           "test_aria2_content_path_falls_back_to_dir_when_no_files"):
+    check(f"aria2 主内容用例 {_t}", _t in _dl_t)
+
+# 入库静默 no-op：{"tasks":0,...} 曾同时表示"没活干"和"全跳过了"（ADR-82 复现）
+_lib_src = pathlib.Path("app/services/library.py").read_text(encoding="utf-8")
+check("入库统计有 skipped 计数", '"skipped": 0' in _lib_src)
+check("入库跳过有明细", "skipped_detail" in _lib_src)
+check("入库跳过会推 WARNING 通知（不能只写日志）",
+      "NotifyLevel.WARNING.value" in _lib_src)
+check("content_path 是非媒体单文件时回退到目录",
+      "if not results and source.is_file():" in _lib_src)
+_lib_t = pathlib.Path("tests/test_library_ops.py").read_text(encoding="utf-8")
+for _t in ("test_transfer_falls_back_to_directory_when_content_path_is_subtitle",
+           "test_transfer_counts_skipped_tasks_instead_of_silent_log",
+           "test_transfer_applies_task_year_on_direct_path"):
+    check(f"入库链路用例 {_t}", _t in _lib_t)
+
+# 命名不许编造信息：逐段清洗只处理空字段，字面量会绕过它
+_org_src = pathlib.Path("app/core/organizer.py").read_text(encoding="utf-8")
+check("缺画质时留空串而非字面量 unknown",
+      '"quality": " ".join(quality_parts),' in _org_src
+      and '"quality": " ".join(quality_parts) or "unknown"' not in _org_src)
+# 任务标题带年份、种子内文件名不带；Emby 靠 `片名 (年份)` 消歧义
+check("transfer_directory 接受外部年份", "year: int | None = None," in _org_src)
+check("外部年份不覆盖文件名自带的年份（后者更具体）",
+      "if year is not None and info.year is None:" in _org_src)
+_lib_year = _lib_src.count("year=info.year")
+check("library 两个调用点都把任务标题年份传下去（一处传漏 = 一个假绿）",
+      _lib_year == 2, f"实际 {_lib_year} 处")
+_org_t = pathlib.Path("tests/test_organizer.py").read_text(encoding="utf-8")
+check("命名不编造 unknown 有用例",
+      "test_missing_quality_does_not_produce_literal_unknown" in _org_t
+      and "test_real_quality_is_still_kept_in_name" in _org_t)
+check("外部年份有反向担保（不覆盖文件名年份）",
+      "test_external_year_does_not_override_filename_year" in _org_t
+      and "test_transfer_directory_applies_external_year" in _org_t)
+
 # 「门禁数字的来源」这段散文自己必须被门禁覆盖 —— 它曾是全文档漂移最严重处
 # 原文写「榜单来源 4 个」，而榜单订阅已在 v1.24.0 下线；真正还在的可数对象是
 # 发现榜分类，所以这一项换成它而不是留个已死的数字。

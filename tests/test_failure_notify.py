@@ -243,7 +243,7 @@ def test_transfer_failure_sends_notification(monkeypatch, capture_notify, tmp_pa
         save_path=str(source),
     )
 
-    def _fail_transfer(src, title=None, season=None):
+    def _fail_transfer(src, title=None, season=None, year=None):
         return [
             TransferResult(
                 success=False,

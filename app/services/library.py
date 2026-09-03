@@ -49,7 +49,12 @@ def _task_content_path(task: DownloadTask) -> Path | None:
 
 async def transfer_completed_tasks() -> dict[str, int]:
     """把所有已完成但未整理的任务转移进媒体库。"""
-    stats = {"tasks": 0, "files": 0, "failed": 0}
+    # skipped 必须单独计数：只在日志里 logger.info 一行的话，返回值是
+    # {"tasks": 0, "files": 0, "failed": 0} —— 和"没有待整理任务"一模一样。
+    # 实测踩到过：aria2 的 content_path 指向字幕，两个任务被静默跳过，
+    # 定时任务与 API 都报"成功"，用户只看到媒体库里什么都没有（ADR-82）。
+    stats: dict[str, Any] = {"tasks": 0, "files": 0, "failed": 0, "skipped": 0}
+    skipped_detail: list[dict[str, str]] = []
     #: 整理失败的文件明细，全部任务处理完后统一推一条
     failures: list[dict[str, str]] = []
     with session_scope() as session:
@@ -88,16 +93,49 @@ async def transfer_completed_tasks() -> dict[str, int]:
 
         if not source:
             logger.warning("任务 #%s 未找到下载文件，跳过整理", snapshot["id"])
+            stats["skipped"] += 1
+            skipped_detail.append(
+                {
+                    "title": snapshot["title"],
+                    "reason": f"未找到下载文件（{snapshot['content_path'] or '无路径'}）",
+                }
+            )
             continue
 
         info = parse(snapshot["title"])
+        season = snapshot["season"] if snapshot["season"] is not None else info.season
         results = transfer_directory(
-            source,
-            title=info.title or None,
-            season=snapshot["season"] if snapshot["season"] is not None else info.season,
+            source, title=info.title or None, season=season, year=info.year
         )
+        if not results and source.is_file():
+            # 下载器给的"主文件"可能不是正片。实测 aria2 按 torrent 内文件序返回，
+            # `files[0]` 是 140 字节的 .srt，而正片在同一目录里。
+            # 单个非媒体文件整理不出东西时，退到它所在目录再试一次 ——
+            # 这比让整个任务静默失败合理得多。
+            parent = source.parent
+            logger.info(
+                "任务 #%s 的 %s 不是媒体文件，回退到目录 %s 重试",
+                snapshot["id"],
+                source.name,
+                parent,
+            )
+            results = transfer_directory(
+                parent, title=info.title or None, season=season, year=info.year
+            )
         if not results:
-            logger.info("任务 #%s 未发现可整理的媒体文件", snapshot["id"])
+            logger.warning(
+                "任务 #%s（%s）在 %s 下未发现可整理的媒体文件",
+                snapshot["id"],
+                snapshot["title"],
+                source,
+            )
+            stats["skipped"] += 1
+            skipped_detail.append(
+                {
+                    "title": snapshot["title"],
+                    "reason": f"{source} 下没有可识别的媒体文件",
+                }
+            )
             continue
 
         stats["tasks"] += 1
@@ -203,6 +241,25 @@ async def transfer_completed_tasks() -> dict[str, int]:
             level=NotifyLevel.ERROR.value,
             event=EventType.TRANSFER_FAILED.value,
             payload={"failed": len(failures)},
+        )
+
+    # 「跳过」和「失败」不一样，但同样不能只写在日志里：
+    # 下载完成却一个文件都没入库，是用户最难自己发现的中间态。
+    if skipped_detail:
+        lines = [
+            f"· {truncate(item['title'], 40)}：{truncate(item['reason'], 60)}"
+            for item in skipped_detail[:10]
+        ]
+        if len(skipped_detail) > 10:
+            lines.append(f"…另有 {len(skipped_detail) - 10} 个")
+        await notify_service.send(
+            f"入库跳过：{len(skipped_detail)} 个任务没找到可整理的媒体文件",
+            "\n".join(lines)
+            + "\n\n下载已完成但没有入库，请检查下载目录里的实际文件"
+            "（常见原因：种子里只有样片/字幕，或下载器与本程序的路径映射不一致）。",
+            level=NotifyLevel.WARNING.value,
+            event=EventType.TRANSFER_FAILED.value,
+            payload={"skipped": len(skipped_detail)},
         )
     return stats
 

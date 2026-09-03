@@ -902,3 +902,100 @@ async def test_qbittorrent_login_fails_keyword_still_detected(
     ok, message = await dl.health_check()
     assert ok is False
     assert "用户名或密码错误" in message, message
+
+# ---------------------------------------------------------------------------
+# aria2 主内容路径：files[0] 是 torrent 内文件序，不是"正片"（v1.24.0 实测）
+# ---------------------------------------------------------------------------
+
+#: 两个真实公开种子的 aria2 `files` 实际返回顺序（实测 aria2 1.37.0）。
+#: 关键点：`.mp4` **不在第一个**。
+_BBB_FILES = [
+    {"length": "140", "path": "K:/media/movies/Big Buck Bunny/Big Buck Bunny.en.srt"},
+    {"length": "276134947", "path": "K:/media/movies/Big Buck Bunny/Big Buck Bunny.mp4"},
+    {"length": "310380", "path": "K:/media/movies/Big Buck Bunny/poster.jpg"},
+]
+#: Sintel 更极端：正片排在 **9 个 .srt 之后**
+_SINTEL_FILES = [
+    {"length": str(1500 + i), "path": f"K:/media/movies/Sintel/Sintel.{lang}.srt"}
+    for i, lang in enumerate(
+        ("de", "en", "es", "fr", "it", "nl", "pl", "pt", "ru")
+    )
+] + [
+    {"length": "129241752", "path": "K:/media/movies/Sintel/Sintel.mp4"},
+    {"length": "46115", "path": "K:/media/movies/Sintel/poster.jpg"},
+]
+
+
+def test_aria2_content_path_is_not_the_first_file() -> None:
+    """content_path 不能取 files[0]。
+
+    实测 aria2 按 **torrent 内文件序**返回，`files[0]` 是 140 字节的字幕。
+    这个 bug 是**静默**的：`iter_media_files()` 对单个 `.srt` 返回空列表，
+    入库只在日志里留一行"未发现可整理的媒体文件"，任务永远停在 `completed`。
+    用户看到"下载完成"、媒体库里什么都没有，没有任何报错。
+    """
+    dl = Aria2Downloader({"url": "http://127.0.0.1:6800"})
+    state = dl._to_state(
+        {
+            "gid": "abc",
+            "status": "complete",
+            "totalLength": "276445467",
+            "completedLength": "276445467",
+            "dir": "K:/media/movies",
+            "bittorrent": {"info": {"name": "Big Buck Bunny"}},
+            "files": _BBB_FILES,
+        }
+    )
+    assert not state.content_path.endswith(".srt"), (
+        f"content_path 指向字幕：{state.content_path}"
+    )
+    # 多文件种子返回目录，随行字幕才能一起被整理
+    assert state.content_path == "K:/media/movies/Big Buck Bunny"
+
+
+def test_aria2_content_path_ignores_leading_subtitle_run() -> None:
+    """正片排在 9 个字幕之后也要挑对（Sintel 实测种子）。"""
+    dl = Aria2Downloader({"url": "http://127.0.0.1:6800"})
+    state = dl._to_state(
+        {
+            "gid": "def",
+            "status": "complete",
+            "totalLength": "129302391",
+            "completedLength": "129302391",
+            "dir": "K:/media/movies",
+            "bittorrent": {"info": {"name": "Sintel"}},
+            "files": _SINTEL_FILES,
+        }
+    )
+    assert state.content_path == "K:/media/movies/Sintel"
+
+
+def test_aria2_single_file_content_path_is_the_file_itself() -> None:
+    """反向担保：单文件任务仍要指向那个文件本身，而不是它的目录。
+
+    否则 ISO/单个 mkv 这类任务的 content_path 会退化成整个下载目录，
+    整理时会把目录里**别的任务**的文件也一起搂进来。
+    """
+    dl = Aria2Downloader({"url": "http://127.0.0.1:6800"})
+    state = dl._to_state(
+        {
+            "gid": "ghi",
+            "status": "complete",
+            "totalLength": "6114656256",
+            "completedLength": "6114656256",
+            "dir": "K:/media/others",
+            "files": [
+                {"length": "6114656256", "path": "K:/media/others/ubuntu-24.04.iso"}
+            ],
+        }
+    )
+    assert state.content_path == "K:/media/others/ubuntu-24.04.iso"
+
+
+def test_aria2_content_path_falls_back_to_dir_when_no_files() -> None:
+    """还没拿到文件列表（元数据阶段）时退回下载目录，不能是空串。"""
+    dl = Aria2Downloader({"url": "http://127.0.0.1:6800"})
+    state = dl._to_state(
+        {"gid": "jkl", "status": "active", "dir": "K:/media/movies", "files": []}
+    )
+    assert state.content_path == "K:/media/movies"
