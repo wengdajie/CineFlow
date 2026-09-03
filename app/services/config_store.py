@@ -71,6 +71,10 @@ def _spec_list() -> list[FieldSpec]:
         FieldSpec("SEARCH_MAX_PER_SITE", "int", "单站安全阀", minimum=0, maximum=5000,
                   hint="单站最多贡献多少条，0=不限；仅防异常站点返回上万条，日常不必调"),
         FieldSpec("SEARCH_CONCURRENCY", "int", "并发数", minimum=1, maximum=64),
+    FieldSpec("SEARCH_ALIAS_EXPAND", "bool", "别名扩展搜索",
+              hint="用 TMDB 原名/各地区译名一起搜，并让别名参与标题匹配；"
+                   "修「国际站搜到英文标题却被判不匹配而整站丢掉」。"
+                   "未配 TMDB_API_KEY 时自动降级为仅用原标题"),
         FieldSpec("SEARCH_BREAKER_ENABLED", "bool", "慢站熔断",
                   hint="连不通的站会吃满整个超时预算，而聚合搜索要等最慢的那个"),
         FieldSpec("SEARCH_BREAKER_THRESHOLD", "int", "熔断阈值", minimum=1, maximum=20,

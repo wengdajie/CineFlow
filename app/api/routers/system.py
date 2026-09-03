@@ -151,6 +151,9 @@ SETTING_GROUPS: list[dict[str, Any]] = [
             # v1.15.0 补上，并由 test_settings_groups_cover_every_editable_key 钉住：
             # 以后往白名单加项忘了挂分组，测试直接转红。
             "SEARCH_MAX_PER_SITE",
+            # v1.20.0：别名扩展（默认开）。修的是「国际站搜到了却被自己
+            # 的标题过滤器整站丢掉」这个静默缺陷，见 services/title_alias.py
+            "SEARCH_ALIAS_EXPAND",
             "SEARCH_BREAKER_ENABLED",
             "SEARCH_BREAKER_THRESHOLD",
             "SEARCH_BREAKER_COOLDOWN_MINUTES",

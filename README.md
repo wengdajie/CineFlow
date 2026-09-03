@@ -27,8 +27,8 @@
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)](#-docker-部署推荐)
-[![Tests](https://img.shields.io/badge/tests-1389%20passed-brightgreen)](docs/14-开发指南.md)
-[![Version](https://img.shields.io/badge/version-1.19.0-blue)](docs/08-变更日志.md)
+[![Tests](https://img.shields.io/badge/tests-1422%20passed-brightgreen)](docs/14-开发指南.md)
+[![Version](https://img.shields.io/badge/version-1.20.0-blue)](docs/08-变更日志.md)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 </div>
@@ -117,7 +117,7 @@ CineFlow 是一个**从零实现**的 NAS 影视自动化项目，设计上参�
 | 🧩 **可扩展** | 插件系统 + 事件订阅 + 不写代码接入任意站点（`api_generic` / `html_generic`） |
 | ⬇️ **按资源选下载器** | 磁力/种子 → qB/TR/迅雷，网页视频 → yt-dlp，网盘直链 → aria2；**缺对应下载器时直接说明去哪儿加什么**，而不是投给一个必然失败的下载器 |
 | 🤖 **AI 分析站点** | 填个网址，AI 判断该用哪种适配器并填好字段；**只出建议，本地试搜通过后你确认才落库**（默认关闭，开启才会外发页面正文） |
-| 🎨 **界面** | 暗色 / 浅色一键切换，设置页**多列布局**（69 项在线可改、改完即生效；14 项需重启的收进折叠卡片），**下载器在设置页按真实表单配置**（含**限速时段**：白天限速、夜里跑满），多用户三档权限 |
+| 🎨 **界面** | 暗色 / 浅色一键切换，设置页**多列布局**（70 项在线可改、改完即生效；14 项需重启的收进折叠卡片），**下载器在设置页按真实表单配置**（含**限速时段**：白天限速、夜里跑满），多用户三档权限 |
 
 > 📖 **每一项的完整说明、字段解释与实现细节** → **[docs/12-功能特性详解.md](docs/12-功能特性详解.md)**
 

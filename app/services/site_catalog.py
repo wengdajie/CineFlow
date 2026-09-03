@@ -86,6 +86,44 @@ BT_SITE_PRESETS: list[dict[str, Any]] = [
         },
     },
     {
+        "id": "torrents_csv",
+        "name": "Torrents-CSV 公开 BT 搜索",
+        "kind": ProviderKind.INDEXER.value,
+        "provider": "torrents_csv",
+        "url": "https://torrents-csv.com/service",
+        "priority": 18,
+        "description": "**零配置、免 API Key、支持中文关键词**的公开 BT 搜索。"
+                       "聚合自 DHT 与主流公开站（海盗湾/1337x/Zooqle/YTS 等），"
+                       "带做种数/体积/更新时间。实测中文 65 条、英文 75 条/3 页。",
+        "measured": "凡人修仙传 65 条、庆余年 4 条、沙丘 3 条、dune 75 条/3 页",
+        "caveat": "单页上限 25 条，翻页最多 3 页（75 条）；中文短词搜到的结果较少",
+        "verified": True,
+        "options": {
+            "max_pages": 3,
+            "local_filter": True,
+            "note": "公开 BT 搜索。零配置，填好地址即可启用。接口本身免费，"
+                    "部署量大的场景建议自建反代。",
+        },
+    },
+    {
+        "id": "animetosho",
+        "name": "AnimeTosho 动漫索引",
+        "kind": ProviderKind.INDEXER.value,
+        "provider": "animetosho",
+        "url": "https://feed.animetosho.org",
+        "priority": 22,
+        "description": "动漫全量镜像（Nyaa/AniDex/TokyoTosho），中英文可搜。"
+                       "产出 .torrent 直链，不依赖 DHT。实测中文关键词 75 条。",
+        "measured": "凡人修仙传 75 条、葬送的芙莉莲 75 条、Frieren 70 条",
+        "caveat": "只收动漫，非动漫题材搜索命中率为零",
+        "verified": True,
+        "options": {
+            "local_filter": False,
+            "note": "备注：local_filter=False 刻意为之——中文关键词只能匹配到罗马音标题，"
+                    "按字面过滤会把正确结果全误杀。",
+        },
+    },
+    {
         "id": "cilixiong",
         "name": "磁力熊 Cilixiong",
         "kind": ProviderKind.INDEXER.value,
@@ -155,6 +193,34 @@ RSS_FEED_PRESETS: list[dict[str, Any]] = [
         "aggregate": True,
         "measured": "200 状态码，30 个 item",
         "description": "体量小但质量稳定，可作为蜜柑/花园的补充源。",
+    },
+
+    {
+        "id": "miobt",
+        "name": "MioBT 动漫最新",
+        "url": "http://www.miobt.com/rss.xml",
+        "dialect": "generic",
+        "aggregate": True,
+        "measured": "200 状态码，RSS 正常解析（acgnx 系模板）",
+        "description": "acgnx 系动漫 RSS，与爱恋动漫同模板。",
+    },
+    {
+        "id": "comicat",
+        "name": "漫猫动漫最新",
+        "url": "http://www.comicat.org/rss.xml",
+        "dialect": "generic",
+        "aggregate": True,
+        "measured": "200 状态码，RSS 正常解析（acgnx 系模板）",
+        "description": "acgnx 系动漫 RSS，与爱恋动漫同模板。",
+    },
+    {
+        "id": "animetosho_rss",
+        "name": "AnimeTosho 全站最新",
+        "url": "https://feed.animetosho.org/rss2",
+        "dialect": "generic",
+        "aggregate": True,
+        "measured": "200 状态码，大量 item（常规 200+ 条）",
+        "description": "AnimeTosho 全站 RSS，覆盖 Nyaa/AniDex/TokyoTosho 的动漫更新。",
     },
     {
         "id": "kisssub",

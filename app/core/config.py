@@ -115,6 +115,10 @@ class Settings(BaseSettings):
     #: 单站安全阀：防某站返回上万条拖死后续处理（0=不限）。公平性由轮转交错保证，不靠砍量
     SEARCH_MAX_PER_SITE: int = 300
     SEARCH_CONCURRENCY: int = 8
+    #: 别名扩展：用 TMDB 的原名/各地区译名一起去搜，并让这些别名
+    #: 也算「标题匹配」。修的是「国际站搜到了却被自己过滤掉」这个静默缺陷
+    #: （实测 AnimeTosho 74 条 → 过滤后 0 条）。未配 TMDB_API_KEY 时自动降级。
+    SEARCH_ALIAS_EXPAND: bool = True
     #: 搜索熔断：一个站连续 N 次「吃满超时预算且零结果」就冷却一段时间。
     #: asyncio.gather 要等最慢的站，所以一个连不通的站会决定所有人的等待时间
     #: （实测 YouTube 连不上时把 25s 预算吃满，其余站 5s 内全回来了）。

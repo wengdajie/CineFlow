@@ -172,6 +172,54 @@ class TmdbClient:
             ]
         return data
 
+    async def alternative_titles(
+        self, tmdb_id: int, media_type: str, *, countries: tuple[str, ...] = ("US", "CN", "TW", "HK", "JP", "GB")
+    ) -> list[str]:
+        """取该作品的**别名清单**（原名 + 各地区译名）。
+
+        **为什么搜索需要它**：国际站（Nyaa/AnimeTosho/公开 BT 源）索引的是
+        英文/罗马音标题，而用户订阅时填的是中文名。只拿中文名去搜，
+        这些站要么零命中，要么命中的条目**在后续标题相关性过滤里被判定为
+        「与订阅名称不匹配」而全部丢掉** —— 实测「凡人修仙传」在 AnimeTosho
+        能取回 74 条，过滤后剩 0 条，因为它们全叫
+        ``A Record of a Mortal's Journey to Immortality``。
+
+        因此别名既要用于**扩展搜索关键词**，也要喂给标题过滤器当同义词。
+
+        返回值已去重且**保序**：原名优先，其次按 ``countries`` 的顺序。
+        未配 TMDB_API_KEY 时返回空列表（安全降级，不影响主流程）。
+        """
+        path = (
+            f"/movie/{tmdb_id}/alternative_titles"
+            if media_type == MediaType.MOVIE.value
+            else f"/tv/{tmdb_id}/alternative_titles"
+        )
+        payload = await self._get(path)
+        if not payload:
+            return []
+        # movie 用 "titles"、tv 用 "results"，两者字段名不同
+        entries = payload.get("titles") or payload.get("results") or []
+        by_country: dict[str, list[str]] = {}
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            title = str(entry.get("title") or "").strip()
+            country = str(entry.get("iso_3166_1") or "").strip().upper()
+            if title:
+                by_country.setdefault(country, []).append(title)
+        ordered: list[str] = []
+        for country in countries:
+            ordered.extend(by_country.get(country, []))
+        # 去重保序
+        seen: set[str] = set()
+        unique: list[str] = []
+        for title in ordered:
+            lowered = title.lower()
+            if lowered not in seen:
+                seen.add(lowered)
+                unique.append(title)
+        return unique
+
     async def season_episodes(self, tmdb_id: int, season: int) -> list[dict[str, Any]]:
         """获取某季的分集信息（用于计算缺集与追新）。"""
         payload = await self._get(f"/tv/{tmdb_id}/season/{season}")

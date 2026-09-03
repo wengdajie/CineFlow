@@ -26,6 +26,46 @@ DEFAULT_SITES = [
         "options": {"note": "填入 Jackett/Prowlarr 的 Torznab 地址与 API Key"},
     },
     {
+        # v1.20.0：**默认启用**的两个零配置 BT 源。
+        #
+        # 为什么默认开：用户反馈「大部分内容无法返回 BT 资源」。实测根因之一是
+        # v1.19.0 装完只有 1 个 indexer 默认启用（磁力熊，只收电影/剧集），
+        # 而覆盖面最广的 torznab **必须先自己部署 Jackett** —— 对「装完就想用」
+        # 的用户等于零 BT 覆盖。这两个源都是公开接口、免鉴权、无需填任何东西，
+        # 因此是唯一可以「默认就有效」的 BT 覆盖面。
+        #
+        # 收录凭据（见 services/site_catalog.py 的实测表）：
+        # torrents-csv 中文「凡人修仙传」65 条 / animetosho「鬼灭之刃」57 条。
+        "name": "Torrents-CSV 公开搜索",
+        "kind": ProviderKind.INDEXER.value,
+        "provider": "torrents_csv",
+        "url": "https://torrents-csv.com/service",
+        "enabled": True,
+        "priority": 18,
+        "options": {
+            "note": "公开 BT 搜索，零配置免鉴权，支持中文关键词。"
+                    "聚合自 DHT 与主流公开站，带做种数/体积/发布时间。"
+                    "单页 25 条，默认翻 3 页",
+            "max_pages": 3,
+            "local_filter": True,
+        },
+    },
+    {
+        "name": "AnimeTosho 动漫",
+        "kind": ProviderKind.INDEXER.value,
+        "provider": "animetosho",
+        "url": "https://feed.animetosho.org",
+        "enabled": True,
+        "priority": 22,
+        "options": {
+            "note": "动漫全量镜像（Nyaa/AniDex/TokyoTosho），零配置，中英文可搜，"
+                    "产出 .torrent 直链。只收动漫，非动漫题材命中为零",
+            # 刻意关掉本地过滤：中文关键词命中的是罗马音标题，
+            # 按中文字面过滤会把正确结果全部误杀
+            "local_filter": False,
+        },
+    },
+    {
         "name": "Nyaa 动漫",
         "kind": ProviderKind.INDEXER.value,
         "provider": "nyaa",

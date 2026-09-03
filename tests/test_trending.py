@@ -283,6 +283,11 @@ def test_trending_api(client, auth_headers):
         assert client.get(path, headers=auth_headers).status_code == 200
 
     # 未启用站点时实时榜应优雅返回空
+    # 注意：必须先禁用所有 indexer，否则新添加的默认启用站点（如 AnimeTosho）
+    # 会做真实网络请求，破坏测试隔离
+    for site in client.get("/api/v1/sites", headers=auth_headers).json():
+        if site.get("kind") == "indexer" and site.get("enabled"):
+            client.patch(f"/api/v1/sites/{site['id']}", json={"enabled": False}, headers=auth_headers)
     live = client.get("/api/v1/trending/live", headers=auth_headers)
     assert live.status_code == 200
     assert live.json()["data"]["items"] == []

@@ -17,6 +17,8 @@ from app.providers.base import Resource, SearchProvider
 from app.schemas.enums import MediaType
 from app.services import search_breaker
 from app.services import sites as site_service
+from app.services.title_alias import aliases_for, title_match_variants
+from app.services.title_alias import enabled as alias_enabled
 from app.utils.http import FetchError
 from app.utils.strings import normalize
 
@@ -324,6 +326,27 @@ def enforce_site_share(ranked: list[dict[str, Any]], limit: int) -> list[dict[st
     return merged
 
 
+async def _expand_aliases(
+    title: str, media_type: str | None, extra_keywords: list[str] | None
+) -> list[str]:
+    """交互式搜索的别名扩展（订阅走 search_for_subscribe 自己那条路）。
+
+    交互搜索没有 tmdb_id，只有用户敲进去的片名，所以要先识别一次。
+    识别结果**带缓存**（见 title_alias.CACHE_TTL），连着搜同一部剧不会反复打 TMDB。
+
+    调用方已显式给了 ``extra_keywords`` 时**不再自动扩展**：
+    那是调用方（如订阅）已经算好的，再叠一层会让关键词数翻倍、
+    每个站点的超时预算被摊薄（ADR-66 的教训）。
+    """
+    if extra_keywords or not alias_enabled():
+        return []
+    try:
+        return await aliases_for(title, media_type=media_type)
+    except Exception as exc:  # pragma: no cover - 别名失败只降级
+        logger.warning("别名扩展失败（仅用原标题）: %s", exc)
+        return []
+
+
 async def search(
     title: str,
     *,
@@ -368,12 +391,13 @@ async def search_detailed(
 ) -> tuple[list[dict[str, Any]], list[SiteOutcome]]:
     """同 ``search``，但额外返回每个站点的诊断结果。"""
     started = time.perf_counter()
+    aliases = await _expand_aliases(title, media_type, extra_keywords)
     keywords = build_keywords(
         title,
         media_type=media_type,
         season=season,
         episode=episode,
-        extra=extra_keywords,
+        extra=list(extra_keywords or []) + aliases,
     )
     if not keywords:
         return [], []
@@ -419,7 +443,9 @@ async def search_detailed(
     # 标题相关性过滤：避免站点返回大量无关结果
     effective_rule = rule or FilterRule()
     if not effective_rule.title_keywords:
-        effective_rule.title_keywords = _title_variants(title)
+        # 别名必须一起进白名单：否则国际站命中的英文标题会被判
+        # 「与订阅名称不匹配」而整站丢掉（实测 74 → 0）
+        effective_rule.title_keywords = _title_variants(title, aliases=aliases or None)
 
     payload = [resource.to_dict() for resource in collected]
     # 规则组（有序偏好）在硬过滤与评分之后生效，只影响排序/兜底剔除
@@ -489,12 +515,13 @@ async def search_stream(
     单站最多 ``SEARCH_MAX_PER_SITE``，全局最多 ``SEARCH_MAX_RESULTS * 2``。
     """
     started = time.perf_counter()
+    aliases = await _expand_aliases(title, media_type, extra_keywords)
     keywords = build_keywords(
         title,
         media_type=media_type,
         season=season,
         episode=episode,
-        extra=extra_keywords,
+        extra=list(extra_keywords or []) + aliases,
     )
     active_providers = providers if providers is not None else site_service.search_providers()
     if not keywords or not active_providers:
@@ -519,7 +546,7 @@ async def search_stream(
 
     effective_rule = rule or FilterRule()
     if not effective_rule.title_keywords:
-        effective_rule.title_keywords = _title_variants(title)
+        effective_rule.title_keywords = _title_variants(title, aliases=aliases or None)
 
     group = None
     try:
@@ -628,24 +655,9 @@ async def search_stream(
     }
 
 
-def _title_variants(title: str) -> list[str]:
-    """生成标题匹配变体（用于相关性过滤）。"""
-    import re
-
-    base = normalize(title).strip()
-    if not base:
-        return []
-    variants = {base}
-    # 中英混合标题：中英文各自成为一个变体
-    chinese = "".join(re.findall(r"[\u4e00-\u9fff0-9]+", base))
-    if len(chinese) >= 2:
-        variants.add(chinese)
-    english = " ".join(re.findall(r"[A-Za-z]+", base))
-    if len(english) >= 3:
-        variants.add(english)
-        variants.add(english.replace(" ", "."))
-        variants.add(english.replace(" ", ""))
-    return [re.escape(item) for item in variants if item]
+def _title_variants(title: str, aliases: list[str] | None = None) -> list[str]:
+    """生成标题匹配变体，可选带别名（让国际站命中的英文标题不被误判为不匹配）。"""
+    return title_match_variants(title, aliases=aliases)
 
 
 def _save_results(
@@ -730,9 +742,29 @@ def _save_results(
 
 
 async def search_for_subscribe(subscribe: Any, missing: list[int] | None = None) -> list[dict[str, Any]]:
-    """针对订阅生成搜索请求（自动带上缺集与过滤规则）。"""
+    """针对订阅生成搜索请求（自动带上缺集、过滤规则、以及别名扩展）。"""
     rule = FilterRule.from_subscribe(subscribe)
-    rule.title_keywords = _title_variants(subscribe.title)
+    # 别名扩展：从 MediaItem 的 original_title 取（零额外请求），
+    # 再做 TMDB 查询补全更多地区的译名
+    subscribe_aliases: list[str] = []
+    try:
+        media = getattr(subscribe, "media", None)
+        if media is not None:
+            orig = getattr(media, "original_title", None)
+            if orig:
+                subscribe_aliases.append(str(orig))
+        tmdb_id = getattr(subscribe, "tmdb_id", None)
+        if tmdb_id and alias_enabled():
+            extra = await aliases_for(
+                subscribe.title,
+                media_type=subscribe.media_type,
+                tmdb_id=int(tmdb_id) if tmdb_id else None,
+                original_title=subscribe_aliases[0] if subscribe_aliases else None,
+            )
+            subscribe_aliases.extend(extra)
+    except Exception:
+        pass  # 别名失败只降级，不影响搜索
+    rule.title_keywords = _title_variants(subscribe.title, aliases=subscribe_aliases or None)
     if missing:
         rule.episodes = missing
 
@@ -743,7 +775,7 @@ async def search_for_subscribe(subscribe: Any, missing: list[int] | None = None)
         season=subscribe.season,
         episode=episode,
         rule=rule,
-        # 订阅可以绑定自己的规则组；没绑就由 load_group 退回全局默认组
+        extra_keywords=subscribe_aliases or None,
         rule_group_id=getattr(subscribe, "rule_group_id", None),
         save_history=False,
     )

@@ -68,6 +68,8 @@ def load_builtin_providers() -> None:
         "app.providers.indexer.torznab",
         "app.providers.indexer.rss",
         "app.providers.indexer.nyaa",
+        "app.providers.indexer.torrents_csv",
+        "app.providers.indexer.animetosho",
         "app.providers.indexer.generic_api",
         "app.providers.indexer.generic_html",
         "app.providers.indexer.mukaku",

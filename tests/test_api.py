@@ -94,6 +94,8 @@ DEFAULT_ENABLED_SITES = {
     "KK 网盘搜",
     "追剧 zhuiju.us",
     "磁力熊 Cilixiong",
+    "Torrents-CSV 公开搜索",
+    "AnimeTosho 动漫",
 }
 
 

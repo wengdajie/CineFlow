@@ -46,8 +46,8 @@ from app.providers.registry import list_providers, load_builtin_providers  # noq
 load_builtin_providers()
 providers = list_providers()
 names = {p["name"] for p in providers}
-check("Provider 总数 32", len(providers) == 32, f"实际 {len(providers)}")
-check("README 声明 32 个 Provider", "32 个注册 Provider" in README)
+check("Provider 总数 34", len(providers) == 34, f"实际 {len(providers)}")
+check("README 声明 34 个 Provider", "34 个注册 Provider" in README)
 # v1.16.0：百度网盘的**扫码登录**早就有了，存储 Provider 却一直缺失，
 # 导致登录成功后建出的站点是「僵尸站点」（总览查不到、转存/保活全静默跳过）。
 check("baidu 存储 Provider 已注册", "baidu" in names)
@@ -70,11 +70,11 @@ for table in ("audit_logs", "pan_saves", "pan_subscribes", "strm_records",
     check(f"新增表 {table} 存在", table in Base.metadata.tables)
 
 # ---- 默认站点 ----
-from app.db.init_db import DEFAULT_SITES
-from app.services import presets as presets_service  # noqa: E402  # noqa: E402
+from app.db.init_db import DEFAULT_SITES  # noqa: E402
+from app.services import presets as presets_service  # noqa: E402
 
-check("默认示例站点 20 条", len(DEFAULT_SITES) == 20, f"实际 {len(DEFAULT_SITES)}")
-check("文档声明 20 条示例站点", "写入 20 条" in README)
+check("默认示例站点 22 条", len(DEFAULT_SITES) == 22, f"实际 {len(DEFAULT_SITES)}")
+check("文档声明 22 条示例站点", "写入 22 条" in README)
 # v1.16.0：删站的判据是「详情页能否取到真链接」，不是首页状态码。
 # 这几个站实测搜不出东西（详见 docs/04 ADR-74），不该再出现在内置清单里。
 _REMOVED_SITES = ("yyets", "wp_film")
@@ -123,6 +123,8 @@ DEFAULT_ENABLED_SITES = {
     "KK 网盘搜",
     "追剧 zhuiju.us",
     "磁力熊 Cilixiong",
+    "Torrents-CSV 公开搜索",
+    "AnimeTosho 动漫",
 }
 check(
     "需配置的示例站点默认禁用",
@@ -297,8 +299,8 @@ check("README 说明定时任务可改期", "定时任务" in README and "cron" 
 
 # ---- 测试文件 ----
 test_files = sorted(p.name for p in pathlib.Path("tests").glob("test_*.py"))
-check("测试文件 55 个", len(test_files) == 55, str(test_files))
-check("README 声明 55 个测试文件", "55 个测试文件" in README)
+check("测试文件 56 个", len(test_files) == 56, str(test_files))
+check("README 声明 56 个测试文件", "56 个测试文件" in README)
 for name in ("test_custom_sites.py", "test_radar.py", "test_trending.py",
              "test_panstorage.py", "test_chatops.py", "test_nfo.py",
              "test_scraper.py", "test_webdav.py", "test_strm_sync.py",
@@ -326,9 +328,9 @@ if _badge and _guide:
     check("README 徽章与开发指南的测试数一致",
           _badge.group(1) == _guide.group(1),
           f"徽章 {_badge.group(1)} vs 指南 {_guide.group(1)}")
-check("README 版本号 1.19.0", "1.19.0" in README_ONLY)
+check("README 版本号 1.20.0", "1.20.0" in README_ONLY)
 version_src = pathlib.Path("app/core/version.py").read_text(encoding="utf-8")
-check("代码版本号为 1.19.0", 'APP_VERSION = "1.19.0"' in version_src)
+check("代码版本号为 1.20.0", 'APP_VERSION = "1.20.0"' in version_src)
 check("README 声明 314 项接口用例", "314 项真实 HTTP 接口用例" in README)
 check("scripts/README 声明 314 项", "314 项接口用例" in SCRIPTS_README)
 
@@ -617,7 +619,7 @@ from app.services import config_store  # noqa: E402
 
 cfgstore_src = pathlib.Path("app/services/config_store.py").read_text(encoding="utf-8")
 check("可编辑配置白名单存在", "EDITABLE" in cfgstore_src)
-check("可编辑配置项 69 个", len(config_store.EDITABLE) == 69, f"实际 {len(config_store.EDITABLE)}")
+check("可编辑配置项 70 个", len(config_store.EDITABLE) == 70, f"实际 {len(config_store.EDITABLE)}")
 for func in ("coerce", "update", "reset", "apply_overrides", "describe"):
     check(f"配置仓库函数 {func}", f"def {func}" in cfgstore_src)
 # 不可热改的键绝不能进白名单：改了不生效比改不了更糟
@@ -1710,6 +1712,25 @@ check("FAQ 解释 RSS 加了没反应", "首次拉取" in _faq)
 check("FAQ 解释 Docker 怎么更新", "docker compose pull" in _faq)
 check("API 文档列出 RSS 端点", "/rss-feeds/preview" in API_DOC)
 check("API 文档列出更新检测端点", "/system/update/check" in API_DOC)
+
+check("变更日志含 v1.20.0", "## v1.20.0" in _chg118)
+check("ADR-84 记录公开源收录判据",
+      "## ADR-84 ·" in (docs_dir / "04-决策记录.md").read_text(encoding="utf-8"))
+check("ADR-85 记录别名双用",
+      "## ADR-85 ·" in (docs_dir / "04-决策记录.md").read_text(encoding="utf-8"))
+check("ADR-86 记录零配置默认启用",
+      "## ADR-86 ·" in (docs_dir / "04-决策记录.md").read_text(encoding="utf-8"))
+check("路线图含里程碑 M52", "里程碑 M52" in roadmap_all)
+check("竞品文档含 v1.20.0 对标结论",
+      "v1.20.0 对标结论" in (docs_dir / "09-竞品对标与差距分析.md").read_text(encoding="utf-8"))
+check("12.2 提及 Prowlarr", "Prowlarr" in (docs_dir / "09-竞品对标与差距分析.md").read_text(encoding="utf-8"))
+check("12.3 提及跨语言标题匹配差异化",
+      "跨语言标题匹配" in (docs_dir / "09-竞品对标与差距分析.md").read_text(encoding="utf-8"))
+check("新 Provider 文件存在", pathlib.Path("app/providers/indexer/torrents_csv.py").exists())
+check("新 Provider 文件存在", pathlib.Path("app/providers/indexer/animetosho.py").exists())
+check("别名模块存在", pathlib.Path("app/services/title_alias.py").exists())
+check("BT 覆盖测试文件存在", pathlib.Path("tests/test_bt_coverage.py").exists())
+
 check("README 致谢 Auto_Bangumi", "Auto_Bangumi" in README_ONLY)
 
 print()
