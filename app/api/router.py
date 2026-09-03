@@ -17,7 +17,6 @@ from app.api.routers import (
     pan_subscribes,
     plugins,
     radar,
-    ranking,
     rss_feeds,
     rule_groups,
     schedules,
@@ -40,7 +39,6 @@ api_router.include_router(trending.router)
 api_router.include_router(images.router)
 api_router.include_router(subscribes.router)
 api_router.include_router(radar.router)
-api_router.include_router(ranking.router)
 api_router.include_router(rule_groups.router)
 api_router.include_router(rss_feeds.router)
 api_router.include_router(downloads.router)

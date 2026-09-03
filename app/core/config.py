@@ -150,18 +150,6 @@ class Settings(BaseSettings):
         "(KHTML, like Gecko) Chrome/124.0 Safari/537.36 CineFlow/1.0"
     )
 
-    # ---------- 刮削（NFO + 图片） ----------
-    #: 入库后是否自动生成 NFO（媒体服务器识别率的决定性因素）
-    SCRAPE_ENABLED: bool = True
-    #: 是否连同海报/背景图一起下载到本地
-    SCRAPE_IMAGES: bool = True
-    #: 已有 NFO 时是否覆盖（默认不覆盖，尊重用户手工修正）
-    SCRAPE_OVERWRITE: bool = False
-    #: 媒体库补刮巡检的 cron（补齐历史文件缺失的 NFO），空表示关闭
-    SCRAPE_CRON: str = "30 4 * * *"
-    #: 单次补刮最多处理多少个文件，避免一次打满 TMDB 限速
-    SCRAPE_BATCH: int = 200
-
     # ---------- 媒体分类归档 ----------
     #: 是否按「电影/剧集/动漫/纪录片/综艺」二级归档
     CATEGORY_ENABLED: bool = False
@@ -242,12 +230,6 @@ class Settings(BaseSettings):
     #: 限速时段巡检间隔（分钟），0 表示关闭。默认 10 分钟：
     #: 时段切换只需分钟级精度，查太勤没有意义
     SPEED_LIMIT_INTERVAL_MINUTES: int = 10
-
-    # ---------- 榜单订阅 ----------
-    #: 榜单自动订阅巡检间隔（分钟），0 表示关闭
-    RANKING_INTERVAL_MINUTES: int = 720
-    #: 单次巡检最多自动创建多少个订阅（防止一次刷进上百个）
-    RANKING_MAX_PER_RUN: int = 5
 
     # ---------- 网盘管理 ----------
     #: 盘搜命中网盘资源时是否自动转存进已配置的网盘存储

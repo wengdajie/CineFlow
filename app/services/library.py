@@ -2,15 +2,23 @@
 
 from __future__ import annotations
 
+import os
+import shutil
 from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
 
 from app.core.config import settings
+from app.core.exceptions import ConfigError, NotFoundError
 from app.core.logger import get_logger
 from app.core.meta import parse
-from app.core.organizer import iter_media_files, transfer_directory
+from app.core.organizer import (
+    is_media_file,
+    is_subtitle_file,
+    iter_media_files,
+    transfer_directory,
+)
 from app.db.models import DownloadTask, LibraryFile, MediaItem, TransferRecord
 from app.db.session import session_scope
 from app.schemas.enums import EventType, MediaType, NotifyLevel, TaskStatus
@@ -159,22 +167,6 @@ async def transfer_completed_tasks() -> dict[str, int]:
                 event=EventType.TRANSFER_COMPLETED.value,
                 payload={"task_id": snapshot["id"], "files": success_files},
             )
-            # 刮削 NFO 与图片。**best-effort**：失败只记日志，绝不影响入库结果
-            if settings.SCRAPE_ENABLED:
-                from app.services import scraper
-
-                for result in results:
-                    if not (result.success and result.target):
-                        continue
-                    try:
-                        await scraper.scrape_file(
-                            result.target,
-                            result.meta,
-                            overwrite=settings.SCRAPE_OVERWRITE,
-                        )
-                    except Exception as exc:
-                        logger.warning("刮削失败 %s: %s", result.target, exc)
-
             # 洗版收尾：新版本已确实落地，此时才删旧文件（失败下载不会留空洞）
             if snapshot.get("upgrade_for"):
                 from app.services import upgrade as upgrade_service
@@ -281,19 +273,40 @@ async def refresh_media_servers(path: str | None = None) -> int:
 
 
 def scan_library(root: str | Path | None = None) -> dict[str, int]:
-    """扫描媒体库目录，重建文件索引。"""
-    library_root = Path(root or settings.LIBRARY_DIR)
-    stats = {"scanned": 0, "added": 0}
-    if not library_root.exists():
-        return stats
+    r"""扫描媒体库目录，重建文件索引。
 
-    files = iter_media_files(library_root)
+    返回 ``scanned`` / ``added`` / ``removed`` 三个计数。
+
+    **``removed`` 是 v1.24.0 补的**：在此之前扫描只会往索引里加行，从不删行。
+    后果实测到过 —— 把 ``CF_LIBRARY_DIR`` 从 ``D:\...\library`` 改到
+    ``K:\media\library`` 之后，旧库那一行永远留在索引里：目录早已不存在，
+    而它又落在允许根目录之外，所以连 ``delete_entry`` 都清不掉（会报"超出允许范围"，
+    这是对的），索引里就出现一条**任何操作都碰不到的僵尸行**。
+    它会污染 `library_stats` 计数与缺集判断（`existing_episodes` 认为某集已有，
+    于是订阅不再去补），属于"静默错"而不是"看得见的错"。
+
+    清理口径**只删文件确实不存在的行**，不按根目录过滤 —— 用户可能临时把
+    ``LIBRARY_DIR`` 指到别处，不该因此把还在盘上的旧库记录抹掉。
+    """
+    library_root = Path(root or settings.LIBRARY_DIR)
+    stats = {"scanned": 0, "added": 0, "removed": 0}
+
+    files = iter_media_files(library_root) if library_root.exists() else []
     stats["scanned"] = len(files)
     with session_scope() as session:
-        known = {
-            row[0]
-            for row in session.execute(select(LibraryFile.path)).all()
-        }
+        rows = list(session.execute(select(LibraryFile)).scalars())
+        known = {row.path for row in rows}
+
+        # 先清僵尸行：文件不在了，索引就不该还留着
+        for row in rows:
+            raw = row.path or ""
+            if not raw or Path(raw).exists():
+                continue
+            session.delete(row)
+            known.discard(raw)
+            stats["removed"] += 1
+            logger.info("清理失效索引：%s（文件已不存在）", raw)
+
         for path in files:
             if str(path) in known:
                 continue
@@ -306,7 +319,10 @@ def scan_library(root: str | Path | None = None) -> dict[str, int]:
                 size = 0
             _register_library_file(session, path, info, size)
             stats["added"] += 1
-    logger.info("媒体库扫描完成：共 %d 个文件，新增 %d", stats["scanned"], stats["added"])
+    logger.info(
+        "媒体库扫描完成：共 %d 个文件，新增 %d，清理失效 %d",
+        stats["scanned"], stats["added"], stats["removed"],
+    )
     return stats
 
 
@@ -379,4 +395,339 @@ def library_stats() -> dict[str, Any]:
         "movies": movies,
         "episodes": episodes,
         "series": series,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 本地文件操作（重命名 / 移动 / 删除）
+# ---------------------------------------------------------------------------
+#: 本项目**不做刮削**（v1.24.0 起移除，见 ADR-96）。媒体库页的定位是
+#: "看本地下载到了什么 + 手工收拾一下"，因此只提供浏览 / 重命名 / 移动 / 删除。
+#:
+#: 允许操作的根目录被限制在下面两个：
+#:   - ``settings.LIBRARY_DIR``  整理入库后的媒体库
+#:   - ``settings.DOWNLOAD_DIR`` 下载器落地目录（用户实测配置为 K:\media）
+#: 任何解析后落在这两个根之外的路径都会被拒绝，用来挡 ``../`` 穿越、
+#: 绝对路径注入以及指向库外的符号链接（三种都有单测覆盖）。
+
+
+def library_roots() -> list[Path]:
+    """允许被浏览/操作的根目录（去重且保持顺序）。"""
+    roots: list[Path] = []
+    seen: set[str] = set()
+    for raw in (settings.LIBRARY_DIR, settings.DOWNLOAD_DIR):
+        try:
+            resolved = Path(raw).resolve()
+        except OSError:  # pragma: no cover - 盘符掉线等极端情况
+            continue
+        key = os.path.normcase(str(resolved))
+        if key in seen:
+            continue
+        seen.add(key)
+        roots.append(resolved)
+    return roots
+
+
+def _is_within(path: Path, root: Path) -> bool:
+    """``path`` 是否等于 ``root`` 或位于其下（大小写不敏感，Windows 必需）。"""
+    target = os.path.normcase(str(path))
+    base = os.path.normcase(str(root))
+    if target == base:
+        return True
+    return target.startswith(base.rstrip("\\/") + os.sep)
+
+
+def resolve_library_path(raw: str | Path, *, must_exist: bool = True) -> Path:
+    """把用户传入的路径解析为受限根目录内的真实路径。
+
+    解析用 ``Path.resolve()``（会展开 ``..`` 与符号链接），再逐个根做前缀比对。
+    不在任何根内 -> ``ConfigError``；要求存在却不存在 -> ``NotFoundError``。
+    """
+    text = str(raw or "").strip()
+    if not text:
+        raise ConfigError("路径不能为空")
+    try:
+        path = Path(text).expanduser().resolve()
+    except OSError as exc:
+        raise ConfigError(f"路径无法解析：{exc}") from exc
+    roots = library_roots()
+    if not any(_is_within(path, root) for root in roots):
+        allowed = "、".join(str(root) for root in roots)
+        raise ConfigError(f"路径超出允许范围：{path}（只允许 {allowed} 之内）")
+    if must_exist and not path.exists():
+        raise NotFoundError(f"路径不存在：{path}")
+    return path
+
+
+def _entry_kind(path: Path) -> str:
+    """给前端一个能直接显示的类型标签。"""
+    if path.is_dir():
+        return "dir"
+    if is_media_file(path):
+        return "media"
+    if is_subtitle_file(path):
+        return "subtitle"
+    return "file"
+
+
+def _dir_size(path: Path) -> tuple[int, int]:
+    """目录内文件总大小与文件个数；单文件直接返回自身大小。"""
+    if path.is_file():
+        try:
+            return path.stat().st_size, 1
+        except OSError:
+            return 0, 1
+    total = 0
+    count = 0
+    for child in path.rglob("*"):
+        if not child.is_file():
+            continue
+        count += 1
+        try:
+            total += child.stat().st_size
+        except OSError:
+            continue
+    return total, count
+
+
+def browse_library(path: str | Path | None = None) -> dict[str, Any]:
+    """列出某个目录下的条目（用于媒体库页"看本地下载了什么"）。
+
+    ``path`` 为空时列出所有允许的根目录本身，这样前端不用预先知道盘符。
+    """
+    roots = library_roots()
+    if not str(path or "").strip():
+        items = []
+        for root in roots:
+            exists = root.exists()
+            size, count = _dir_size(root) if exists else (0, 0)
+            items.append(
+                {
+                    "name": str(root),
+                    "path": str(root),
+                    "kind": "dir",
+                    "size": size,
+                    "children": count,
+                    "exists": exists,
+                    "modified": None,
+                }
+            )
+        return {"path": None, "parent": None, "roots": [str(r) for r in roots], "items": items}
+
+    current = resolve_library_path(path)
+    if current.is_file():
+        # 直接给文件路径时退回它所在目录，避免前端点了文件就卡死
+        current = current.parent
+
+    parent: str | None = None
+    if not any(_is_within(current, root) and current == root for root in roots):
+        candidate = current.parent
+        if any(_is_within(candidate, root) for root in roots):
+            parent = str(candidate)
+
+    items = []
+    try:
+        children = sorted(
+            current.iterdir(), key=lambda p: (not p.is_dir(), os.path.normcase(p.name))
+        )
+    except OSError as exc:
+        raise ConfigError(f"目录无法读取：{exc}") from exc
+    for child in children:
+        kind = _entry_kind(child)
+        if kind == "dir":
+            size, count = 0, 0
+        else:
+            try:
+                size, count = child.stat().st_size, 0
+            except OSError:
+                size, count = 0, 0
+        try:
+            modified = int(child.stat().st_mtime)
+        except OSError:
+            modified = None
+        items.append(
+            {
+                "name": child.name,
+                "path": str(child),
+                "kind": kind,
+                "size": size,
+                "children": count,
+                "exists": True,
+                "modified": modified,
+            }
+        )
+    return {
+        "path": str(current),
+        "parent": parent,
+        "roots": [str(r) for r in roots],
+        "items": items,
+    }
+
+
+#: Windows 文件名禁用字符 + 控制字符。命名校验放在服务层而不是路由层，
+#: 因为定时任务/脚本也可能调用这些函数。
+_INVALID_NAME_CHARS = set('<>:"/\\|?*')
+
+
+def _validate_name(name: str) -> str:
+    """校验新文件名：不能带路径分隔符，不能是 ``.``/``..``，不能含保留字符。"""
+    cleaned = str(name or "").strip()
+    if not cleaned:
+        raise ConfigError("新名称不能为空")
+    if cleaned in {".", ".."}:
+        raise ConfigError("新名称不合法")
+    bad = sorted(_INVALID_NAME_CHARS & set(cleaned))
+    if bad:
+        raise ConfigError("新名称含非法字符：" + " ".join(bad))
+    if len(cleaned) > 255:
+        raise ConfigError("新名称过长（上限 255 字符）")
+    return cleaned
+
+
+def _reindex_paths(old: Path, new: Path) -> int:
+    """路径变动后同步 ``library_files`` 索引，返回受影响行数。
+
+    重命名目录会连带影响目录下所有已入库文件，所以这里做前缀替换而不是等值替换。
+    """
+    old_text = str(old)
+    new_text = str(new)
+    changed = 0
+    with session_scope() as session:
+        rows = list(session.execute(select(LibraryFile)).scalars())
+        for row in rows:
+            current = row.path or ""
+            if os.path.normcase(current) == os.path.normcase(old_text):
+                row.path = new_text
+                changed += 1
+            elif os.path.normcase(current).startswith(
+                os.path.normcase(old_text.rstrip("\\/") + os.sep)
+            ):
+                row.path = new_text + current[len(old_text):]
+                changed += 1
+    return changed
+
+
+def _forget_paths(target: Path) -> int:
+    """删除后清理索引（含目录下所有条目），返回删除行数。"""
+    text = str(target)
+    removed = 0
+    with session_scope() as session:
+        rows = list(session.execute(select(LibraryFile)).scalars())
+        for row in rows:
+            current = row.path or ""
+            if os.path.normcase(current) == os.path.normcase(text) or os.path.normcase(
+                current
+            ).startswith(os.path.normcase(text.rstrip("\\/") + os.sep)):
+                session.delete(row)
+                removed += 1
+    return removed
+
+
+def rename_entry(path: str | Path, new_name: str) -> dict[str, Any]:
+    """重命名媒体库/下载目录里的文件或目录。"""
+    source = resolve_library_path(path)
+    name = _validate_name(new_name)
+    target = source.parent / name
+    if os.path.normcase(str(target)) == os.path.normcase(str(source)):
+        return {
+            "source": str(source),
+            "target": str(target),
+            "reindexed": 0,
+            "message": "名称未变化",
+        }
+    # 解析一次目标，确保 name 里即使塞了怪东西也跑不出允许范围
+    resolve_library_path(target, must_exist=False)
+    if target.exists():
+        raise ConfigError(f"目标已存在：{target}")
+    try:
+        source.rename(target)
+    except OSError as exc:
+        raise ConfigError(f"重命名失败：{exc}") from exc
+    reindexed = _reindex_paths(source, target)
+    logger.info("重命名 %s -> %s（同步索引 %d 条）", source, target, reindexed)
+    return {
+        "source": str(source),
+        "target": str(target),
+        "reindexed": reindexed,
+        "message": f"已重命名为 {name}",
+    }
+
+
+def move_entry(
+    path: str | Path, dest_dir: str | Path, *, overwrite: bool = False
+) -> dict[str, Any]:
+    """把文件或目录移动到另一个（同样受限的）目录下。"""
+    source = resolve_library_path(path)
+    destination = resolve_library_path(dest_dir, must_exist=False)
+    if destination.exists() and not destination.is_dir():
+        raise ConfigError(f"目标不是目录：{destination}")
+    if source.is_dir() and _is_within(destination, source):
+        raise ConfigError("不能把目录移动到它自己内部")
+    target = destination / source.name
+    if os.path.normcase(str(target)) == os.path.normcase(str(source)):
+        return {
+            "source": str(source),
+            "target": str(target),
+            "reindexed": 0,
+            "message": "已在目标目录，无需移动",
+        }
+    if target.exists():
+        if not overwrite:
+            raise ConfigError(f"目标已存在：{target}（勾选覆盖后重试）")
+        try:
+            if target.is_dir():
+                shutil.rmtree(target)
+            else:
+                target.unlink()
+        except OSError as exc:
+            raise ConfigError(f"覆盖目标失败：{exc}") from exc
+    destination.mkdir(parents=True, exist_ok=True)
+    try:
+        # shutil.move 能跨盘（K: -> D:），Path.rename 不能，媒体库和下载盘常常不同盘
+        shutil.move(str(source), str(target))
+    except OSError as exc:
+        raise ConfigError(f"移动失败：{exc}") from exc
+    reindexed = _reindex_paths(source, target)
+    logger.info("移动 %s -> %s（同步索引 %d 条）", source, target, reindexed)
+    return {
+        "source": str(source),
+        "target": str(target),
+        "reindexed": reindexed,
+        "message": f"已移动到 {destination}",
+    }
+
+
+def delete_entry(path: str | Path, *, recursive: bool = False) -> dict[str, Any]:
+    """删除文件或目录。
+
+    删目录必须显式 ``recursive=True``：否则只允许删空目录。这样"点错一下清空整个
+    媒体库"需要两个条件同时成立，而不是一个手滑。
+    """
+    target = resolve_library_path(path)
+    if any(os.path.normcase(str(target)) == os.path.normcase(str(root)) for root in library_roots()):
+        raise ConfigError(f"不允许删除根目录：{target}")
+    size, count = _dir_size(target)
+    if target.is_dir():
+        entries = list(target.iterdir())
+        if entries and not recursive:
+            raise ConfigError(
+                f"目录非空（{len(entries)} 个条目），需确认递归删除"
+            )
+        try:
+            shutil.rmtree(target) if entries else target.rmdir()
+        except OSError as exc:
+            raise ConfigError(f"删除失败：{exc}") from exc
+    else:
+        try:
+            target.unlink()
+        except OSError as exc:
+            raise ConfigError(f"删除失败：{exc}") from exc
+    forgotten = _forget_paths(target)
+    logger.info("删除 %s（%d 字节 / %d 文件，清理索引 %d 条）", target, size, count, forgotten)
+    return {
+        "path": str(target),
+        "size": size,
+        "files": count,
+        "forgotten": forgotten,
+        "message": f"已删除 {target.name}",
     }

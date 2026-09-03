@@ -106,12 +106,7 @@ def _spec_list() -> list[FieldSpec]:
         FieldSpec("PAN_SUBSCRIBE_INTERVAL_MINUTES", "int", "分享追更间隔(分)",
                   minimum=0, maximum=10080, reschedule=True),
         FieldSpec("PAN_SUBSCRIBE_MAX_FAILURES", "int", "分享失效阈值", minimum=1, maximum=100),
-        # ---- 刮削与分类 ----
-        FieldSpec("SCRAPE_ENABLED", "bool", "入库自动刮削"),
-        FieldSpec("SCRAPE_IMAGES", "bool", "下载海报图片"),
-        FieldSpec("SCRAPE_OVERWRITE", "bool", "覆盖已有 NFO"),
-        FieldSpec("SCRAPE_CRON", "str", "补刮 cron", reschedule=True),
-        FieldSpec("SCRAPE_BATCH", "int", "单次补刮上限", minimum=1, maximum=5000),
+        # ---- 分类 ----
         FieldSpec("CATEGORY_ENABLED", "bool", "分类归档",
                   hint="开启后会在媒体库下多一级分类目录，老库请谨慎"),
         # ---- STRM ----
@@ -150,10 +145,6 @@ def _spec_list() -> list[FieldSpec]:
                   choices=("priority", "least_tasks", "round_robin"),
                   hint="多下载器时如何分配任务"),
         FieldSpec("DOWNLOADER_FAILOVER", "bool", "失败自动换下载器"),
-        # ---- 榜单订阅 ----
-        FieldSpec("RANKING_INTERVAL_MINUTES", "int", "榜单订阅巡检(分)",
-                  minimum=0, maximum=10080, reschedule=True),
-        FieldSpec("RANKING_MAX_PER_RUN", "int", "单次最多建订阅", minimum=1, maximum=100),
         # ---- 通知与元数据 ----
         FieldSpec("METADATA_CACHE_TTL", "int", "元数据缓存(秒)", minimum=60, maximum=864000),
         FieldSpec("TMDB_LANGUAGE", "str", "TMDB 语言"),

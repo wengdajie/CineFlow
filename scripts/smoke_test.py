@@ -676,13 +676,24 @@ call("POST", "/pan-subscribes/999999/check", token=token, expect=(404,))
 call("GET", "/pan-subscribes", expect=(401,))
 
 print("\n" + "=" * 70)
-print("9g) 刮削与洗版：媒体库补刮 / 订阅洗版试算")
+print("9g) 媒体库本地文件操作与洗版：浏览 / 越界防护 / 订阅洗版试算")
 print("=" * 70)
-scraped = call("POST", "/library/scrape", token=token, body={"limit": 20, "overwrite": False})
-print(
-    f"       补刮：扫描 {scraped.get('scanned')} 刮削 {scraped.get('scraped')} "
-    f"跳过 {scraped.get('skipped')} 降级 {scraped.get('degraded')}"
-)
+# 刮削已于 v1.24.0 下线（ADR-96），这一段改测顶替它的能力
+roots = call("GET", "/library/browse", token=token)
+print(f"       可浏览根目录 {len(roots.get('roots') or [])} 个：{roots.get('roots')}")
+if roots.get("roots"):
+    listing = call(
+        "GET", "/library/browse?path=" + urllib.parse.quote(roots["roots"][0]), token=token
+    )
+    print(f"       首个根目录下 {len(listing.get('items') or [])} 个条目")
+# 越界必须 400 且带可读原因，而不是静默成功（ADR-82）
+outside = call("POST", "/library/delete", token=token,
+               body={"path": "C:\\Windows\\System32"}, expect=(400,))
+ok = "超出允许范围" in json.dumps(outside, ensure_ascii=False)
+results.append((ok, "CHECK", "库外路径被拒且给出原因", 200 if ok else 0))
+print(f"{'PASS' if ok else 'FAIL'} 200 CHECK  库外路径被拒且给出原因")
+# 已下线的补刮端点必须 404，防止「删一半」
+call("POST", "/library/scrape", token=token, body={"limit": 1}, expect=(404,))
 if sub_id:
     up = call("POST", f"/subscribes/{sub_id}/upgrade", token=token, body={"dry_run": True})
     print(f"       洗版试算：{up.get('message')}")
@@ -691,12 +702,12 @@ print(f"       批量洗版：{batch_up.get('message')}")
 call("POST", "/subscribes/999999/upgrade", token=token, body={"dry_run": True}, expect=(404,))
 
 print("\n" + "=" * 70)
-print("9h) 设置页新配置组（刮削 / STRM / 分享追更与洗版）")
+print("9h) 设置页新配置组（分类 / STRM / 分享追更与洗版）")
 print("=" * 70)
 settings_body = call("GET", "/system/settings", token=token)
 titles = [group["title"] for group in settings_body.get("groups") or []]
 print(f"       配置分组 {len(titles)} 个：{titles}")
-for expected in ("刮削与分类", "STRM 同步", "分享追更与洗版"):
+for expected in ("分类", "STRM 同步", "分享追更与洗版"):
     ok = expected in titles
     results.append((ok, "CHECK", f"设置分组「{expected}」", 200 if ok else 0))
     print(f"{'PASS' if ok else 'FAIL'} 200 CHECK  设置分组「{expected}」")
@@ -717,7 +728,7 @@ results.append((ok, "CHECK", "可编辑项均带 type 元信息", 200 if ok else
 print(f"{'PASS' if ok else 'FAIL'} 200 CHECK  可编辑项均带 type 元信息")
 
 # 改一个「运行期读取即生效」的键，然后确认读回来是新值
-updated = call("PUT", "/system/settings", token=token, body={"values": {"RANKING_MAX_PER_RUN": 7}})
+updated = call("PUT", "/system/settings", token=token, body={"values": {"PAN_TRANSFER_BATCH": 7}})
 print(f"       改配置：{updated.get('message')}")
 after = call("GET", "/system/settings", token=token)
 current = next(
@@ -725,7 +736,7 @@ current = next(
         item
         for group in after.get("groups") or []
         for item in group.get("items") or []
-        if item.get("key") == "RANKING_MAX_PER_RUN"
+        if item.get("key") == "PAN_TRANSFER_BATCH"
     ),
     {},
 )
@@ -738,7 +749,7 @@ call("PUT", "/system/settings", token=token, body={"values": {"SECRET_KEY": "x"}
 call("PUT", "/system/settings", token=token, body={"values": {"DATA_DIR": "/tmp"}}, expect=(400,))
 call("PUT", "/system/settings", token=token,
      body={"values": {"DOWNLOADER_STRATEGY": "不存在"}}, expect=(400,))
-call("POST", "/system/settings/reset", token=token, body={"keys": ["RANKING_MAX_PER_RUN"]})
+call("POST", "/system/settings/reset", token=token, body={"keys": ["PAN_TRANSFER_BATCH"]})
 call("POST", "/system/settings/reset", token=token, body={"keys": None})
 call("GET", "/system/settings", expect=(401,))
 
@@ -783,7 +794,7 @@ if op_token:
     # operator 能干活，但改不了系统配置与用户
     call("GET", "/site-health", token=op_token)
     call("PUT", "/system/settings", token=op_token,
-         body={"values": {"RANKING_MAX_PER_RUN": 9}}, expect=(403,))
+         body={"values": {"PAN_TRANSFER_BATCH": 9}}, expect=(403,))
     call("GET", "/users", token=op_token, expect=(403,))
     call("POST", "/rule-groups", token=op_token,
          body={"name": "operator 不该能建", "levels": [{"resolution": "1080p"}]}, expect=(403,))
@@ -817,33 +828,14 @@ call("POST", "/site-health/check/999999", token=token, expect=(404,))
 call("GET", "/site-health", expect=(401,))
 
 print("\n" + "=" * 70)
-print("9l) 榜单自动订阅：规则 CRUD / 试算 / 执行（dry-run 不留垃圾订阅）")
+print("9l) 榜单自动订阅已下线（v1.24.0，ADR-96）：整组端点必须 404")
 print("=" * 70)
-rank_created = call(
-    "POST",
-    "/ranking-rules",
-    token=token,
-    body={
-        "name": "冒烟测试榜单",
-        "source": "tmdb_trending",
-        "media_type": "tv",
-        "limit": 3,
-        "min_vote": 7.0,
-        "enabled": False,
-    },
-)
-rank_id = (rank_created.get("data") or {}).get("id")
-print(f"       榜单规则 id={rank_id}")
-rank_list = call("GET", "/ranking-rules", token=token)
-print(f"       榜单规则共 {rank_list.get('total')} 条，来源 {len(rank_list.get('sources') or [])} 个")
-call("POST", "/ranking-rules", token=token, body={"name": "x", "source": "不存在的榜"}, expect=(400,))
-if rank_id:
-    call("PATCH", f"/ranking-rules/{rank_id}", token=token, body={"limit": 5})
-    preview = call("POST", f"/ranking-rules/{rank_id}/preview", token=token)
-    print(f"       榜单试算：候选 {preview.get('total')} 条（无 TMDB Key 时为 0 属正常）")
-    call("POST", f"/ranking-rules/{rank_id}/run", token=token, body={"dry_run": True})
-call("PATCH", "/ranking-rules/999999", token=token, body={"limit": 5}, expect=(404,))
-call("GET", "/ranking-rules", expect=(401,))
+# 删功能最怕留半截：端点摘了但前端还在调、或路由还挂着。这里逐个确认真没了。
+for gone in ("/ranking-rules", "/ranking-rules/1", "/ranking-rules/1/preview",
+             "/ranking-rules/1/run", "/ranking-rules/run-all"):
+    call("GET", gone, token=token, expect=(404, 405))
+print("       /ranking-rules 全组已下线")
+rank_id = None
 
 print("\n" + "=" * 70)
 print("9m) 过滤规则组：内置模板 / CRUD / 试算分层排序")
@@ -907,7 +899,7 @@ print("=" * 70)
 schedules = call("GET", "/schedules", token=token)
 keys = [item.get("key") for item in schedules.get("items") or []]
 print(f"       内置任务 {len(keys)} 个：{keys}")
-for expected in ("site_health", "ranking"):
+for expected in ("site_health", "rss"):
     ok = expected in keys
     results.append((ok, "CHECK", f"任务「{expected}」已注册", 200 if ok else 0))
     print(f"{'PASS' if ok else 'FAIL'} 200 CHECK  任务「{expected}」已注册")
@@ -1244,8 +1236,6 @@ if sub_id:
     call("DELETE", f"/subscribes/{sub_id}", token=token)
 if ps_id:
     call("DELETE", f"/pan-subscribes/{ps_id}", token=token)
-if rank_id:
-    call("DELETE", f"/ranking-rules/{rank_id}", token=token)
 if rss_id:
     call("DELETE", f"/rss-feeds/{rss_id}", token=token)
 if group_id:

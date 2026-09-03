@@ -522,15 +522,37 @@ class RssPreviewRequest(BaseModel):
     limit: int = Field(default=20, ge=1, le=100, description="最多返回多少条")
 
 
-# ---------------- 刮削与洗版 ----------------
-class ScrapeRequest(BaseModel):
-    """批量补刮 NFO 与图片。"""
+# ---------------- 媒体库本地文件操作 ----------------
+#: v1.24.0 起本项目不做刮削（ADR-96），媒体库页只做「看本地下载 + 手工收拾」，
+#: 因此这里是重命名/移动/删除三个请求体。路径合法性由服务层
+#: ``library.resolve_library_path`` 统一把关（只允许媒体库与下载目录内）。
+class LibraryRenameRequest(BaseModel):
+    """重命名媒体库/下载目录内的文件或目录。"""
 
-    path: str | None = Field(default=None, description="要刮削的目录，留空用媒体库根目录")
-    limit: int = Field(default=200, ge=1, le=5000, description="单次最多处理多少个文件")
-    overwrite: bool = Field(default=False, description="已有 NFO 是否覆盖重写")
+    path: str = Field(min_length=1, description="要重命名的绝对路径")
+    new_name: str = Field(
+        min_length=1, max_length=255, description="新名称（只是文件名，不能带路径分隔符）"
+    )
 
 
+class LibraryMoveRequest(BaseModel):
+    """把文件或目录移动到另一个目录（可跨盘）。"""
+
+    path: str = Field(min_length=1, description="要移动的绝对路径")
+    dest_dir: str = Field(min_length=1, description="目标目录的绝对路径")
+    overwrite: bool = Field(default=False, description="目标同名时是否先删掉再移")
+
+
+class LibraryDeleteRequest(BaseModel):
+    """删除文件或目录。"""
+
+    path: str = Field(min_length=1, description="要删除的绝对路径")
+    recursive: bool = Field(
+        default=False, description="删非空目录必须显式置 True，避免一次手滑清库"
+    )
+
+
+# ---------------- 洗版 ----------------
 class UpgradeRequest(BaseModel):
     """洗版试算/执行。"""
 
@@ -612,36 +634,6 @@ class SettingsReset(BaseModel):
 
 
 # ---------------- 榜单自动订阅（v1.5.0） ----------------
-class RankingRuleCreate(BaseModel):
-    """一条榜单订阅规则：从哪个榜、取多少、满足什么条件就自动订阅。"""
-
-    name: str = Field(min_length=1)
-    source: str = Field(default="tmdb_trending", description="tmdb_trending/tmdb_popular/tmdb_top_rated/local_trending")
-    media_type: MediaType = MediaType.TV
-    limit: int = Field(default=10, ge=1, le=100, description="从榜单取前 N 条")
-    min_vote: float = Field(default=0, ge=0, le=10, description="TMDB 评分下限")
-    min_year: int | None = Field(default=None, description="年份下限，过滤老片")
-    include: str | None = Field(default=None, description="标题必须包含（任一）")
-    exclude: str | None = Field(default=None, description="标题命中即跳过")
-    subscribe_defaults: dict[str, Any] = Field(default_factory=dict, description="自动建订阅时套用的默认字段")
-    enabled: bool = True
-
-
-class RankingRuleUpdate(BaseModel):
-    name: str | None = None
-    source: str | None = None
-    media_type: MediaType | None = None
-    limit: int | None = Field(default=None, ge=1, le=100)
-    min_vote: float | None = Field(default=None, ge=0, le=10)
-    min_year: int | None = None
-    include: str | None = None
-    exclude: str | None = None
-    subscribe_defaults: dict[str, Any] | None = None
-    enabled: bool | None = None
-    reset_handled: bool = Field(default=False, description="清空已处理记录，让规则重新扫全榜")
-
-
-# ---------------- 过滤规则组（v1.5.0） ----------------
 class RuleLevelIn(BaseModel):
     """规则组里的一层。所有条件都可留空，留空即不限制。"""
 

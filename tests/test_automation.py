@@ -265,10 +265,8 @@ def test_all_builtin_jobs_are_registered_and_resolvable():
         "strm_sync",
         "speed_limit",
         "site_health",
-        "ranking",
         "zhuiju_sync",
         "rss",
-        "scrape",
         "upgrade",
         "library",
     ]
@@ -281,12 +279,16 @@ def test_all_builtin_jobs_are_registered_and_resolvable():
 
 
 def test_new_jobs_are_off_by_default_when_feature_disabled():
-    """危险/重活任务默认不能自己跑起来：洗版默认关，刮削跟随开关。"""
+    """危险/重活任务默认不能自己跑起来：洗版默认关。
+
+    v1.24.0 起刮削整体下线（ADR-96），原来的 ``specs["scrape"]`` 断言随之删除 ——
+    不是判断被推翻，是那个任务不存在了。
+    """
     from app.core.config import settings
     from app.services.scheduler import builtin_specs
 
     specs = {spec.key: spec for spec in builtin_specs()}
     assert specs["upgrade"].enabled is bool(settings.UPGRADE_ENABLED)
-    assert specs["scrape"].enabled is bool(settings.SCRAPE_ENABLED and settings.SCRAPE_CRON)
+    assert "scrape" not in specs
     # STRM 同步默认间隔为 0 = 关闭（多数用户没有网盘）
     assert specs["strm_sync"].enabled is bool(settings.STRM_SYNC_INTERVAL_MINUTES > 0)

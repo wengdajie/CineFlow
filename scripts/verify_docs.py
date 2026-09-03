@@ -63,10 +63,12 @@ for expected in ("api_generic", "html_generic", "mukaku", "pan_generic",
 # ---- 数据库表 ----
 from app.db.models import Base  # noqa: E402
 
-check("21 张表", len(Base.metadata.tables) == 21, f"实际 {len(Base.metadata.tables)}")
-check("README 声明 21 张表", "21 张表" in README)
+check("20 张表", len(Base.metadata.tables) == 20, f"实际 {len(Base.metadata.tables)}")
+check("README 声明 20 张表", "20 张表" in README)
+check("ranking_rules 表已随榜单订阅下线（ADR-96）",
+      "ranking_rules" not in Base.metadata.tables)
 for table in ("audit_logs", "pan_saves", "pan_subscribes", "strm_records",
-              "site_health", "ranking_rules", "filter_rule_groups"):
+              "site_health", "filter_rule_groups"):
     check(f"新增表 {table} 存在", table in Base.metadata.tables)
 
 # ---- 默认站点 ----
@@ -173,12 +175,13 @@ for key, default in (("RADAR_ENABLED", True), ("RADAR_INTERVAL_MINUTES", 15),
 # ---- 调度任务 ----
 scheduler_src = pathlib.Path("app/services/scheduler.py").read_text(encoding="utf-8")
 job_ids = re.findall(r'^JOB_\w+ = "([^"]+)"', scheduler_src, re.M)
-check("内置调度任务 16 个", len(job_ids) == 16, str(job_ids))
-check("README 声明 16 内置任务", "16 内置任务" in README)
+check("内置调度任务 14 个", len(job_ids) == 14, str(job_ids))
+check("README 声明 14 内置任务", "14 内置任务" in README)
 for job in ("cineflow.radar", "cineflow.pan_transfer", "cineflow.pan_subscribe",
             "cineflow.pan_keepalive",
-            "cineflow.strm_sync", "cineflow.scrape", "cineflow.upgrade",
-            "cineflow.site_health", "cineflow.ranking", "cineflow.zhuiju_sync"):
+            # cineflow.scrape / cineflow.ranking 已下线（v1.24.0，ADR-96）
+            "cineflow.strm_sync", "cineflow.upgrade",
+            "cineflow.site_health", "cineflow.zhuiju_sync"):
     check(f"任务已注册 {job}", job in job_ids)
 
 # ---- API 端点 ----
@@ -191,16 +194,16 @@ try:
         for m in methods
         if m.lower() in ("get", "post", "patch", "delete", "put")
     )
-    check("API 端点 185 个", total == 185, f"实际 {total}")
-    check("README 声明 185 个端点", "185 个端点" in README and "共 185 个" in README)
+    check("API 端点 181 个", total == 181, f"实际 {total}")
+    check("README 声明 181 个端点", "181 个端点" in README and "共 181 个" in README)
     paths = set(spec["paths"])
     for path in ("/api/v1/users", "/api/v1/users/{user_id}",
                  "/api/v1/system/settings", "/api/v1/system/settings/reset",
                  "/api/v1/site-health", "/api/v1/site-health/records",
                  "/api/v1/site-health/check", "/api/v1/site-health/check/{site_id}",
-                 "/api/v1/ranking-rules", "/api/v1/ranking-rules/{rule_id}",
-                 "/api/v1/ranking-rules/{rule_id}/preview",
-                 "/api/v1/ranking-rules/{rule_id}/run", "/api/v1/ranking-rules/run-all",
+                 # v1.24.0：/ranking-rules 全组下线，换成媒体库本地文件操作
+                 "/api/v1/library/browse", "/api/v1/library/rename",
+                 "/api/v1/library/move", "/api/v1/library/delete",
                  "/api/v1/rule-groups", "/api/v1/rule-groups/{group_id}",
                  "/api/v1/rule-groups/{group_id}/preview",
                  "/api/v1/radar/run", "/api/v1/radar/feed", "/api/v1/radar/jobs",
@@ -232,22 +235,22 @@ except Exception as exc:
 # ---- router 数量 ----
 router_src = pathlib.Path("app/api/router.py").read_text(encoding="utf-8")
 router_count = router_src.count("api_router.include_router(")
-check("router 25 个", router_count == 25, f"实际 {router_count}")
-check("README 声明 25 个 router", "25 个 router" in README)
+check("router 24 个", router_count == 24, f"实际 {router_count}")
+check("README 声明 24 个 router", "24 个 router" in README)
 for name in ("trending", "schedules", "pan", "chatops", "strm", "pan_subscribes",
-             "users", "site_health", "ranking", "rule_groups"):
+             "users", "site_health", "rule_groups"):
     check(f"router {name} 已挂载", f"{name}.router" in router_src)
 
 # ---- 前端页面 ----
 app_js = pathlib.Path("web/assets/app.js").read_text(encoding="utf-8")
 pages_block = app_js[app_js.index("const PAGES"): app_js.index("];", app_js.index("const PAGES"))]
 page_count = pages_block.count("{ key:")
-check("前端页面 23 个", page_count == 23, f"实际 {page_count}")
-check("README 声明点检 23 个页面", "23 个页面" in README)
-check("scripts/README 声明 23 个页面", "23 个前端页面" in SCRIPTS_README)
+check("前端页面 22 个", page_count == 22, f"实际 {page_count}")
+check("README 声明点检 22 个页面", "22 个页面" in README)
+check("scripts/README 声明 22 个页面", "22 个前端页面" in SCRIPTS_README)
 check("前端含热度排行页", '"trending"' in app_js and "pageTrending" in app_js)
 check("前端含定时任务页", '"schedules"' in app_js and "pageSchedules" in app_js)
-check("README 声明 23 个功能页", "23 个功能页" in README)
+check("README 声明 22 个功能页", "22 个功能页" in README)
 check("前端含追新雷达页", '"radar"' in app_js and "pageRadar" in app_js)
 check("前端含站点发现弹窗", "discoverDialog" in app_js)
 check("前端含预设选择器", "presetPicker" in app_js)
@@ -299,14 +302,15 @@ check("README 说明定时任务可改期", "定时任务" in README and "cron" 
 
 # ---- 测试文件 ----
 test_files = sorted(p.name for p in pathlib.Path("tests").glob("test_*.py"))
-check("测试文件 58 个", len(test_files) == 58, str(test_files))
-check("README 声明 58 个测试文件", "58 个测试文件" in README)
+check("测试文件 56 个", len(test_files) == 56, str(test_files))
+check("README 声明 56 个测试文件", "56 个测试文件" in README)
 for name in ("test_custom_sites.py", "test_radar.py", "test_trending.py",
-             "test_panstorage.py", "test_chatops.py", "test_nfo.py",
-             "test_scraper.py", "test_webdav.py", "test_strm_sync.py",
+             # test_nfo / test_scraper / test_ranking 已随功能下线（ADR-96）
+             "test_panstorage.py", "test_chatops.py", "test_library_ops.py",
+             "test_webdav.py", "test_strm_sync.py",
              "test_pan_subscribe.py", "test_upgrade.py", "test_categories.py",
              "test_config_store.py", "test_rules.py", "test_site_health.py",
-             "test_ranking.py", "test_rule_groups.py", "test_users.py"):
+             "test_rule_groups.py", "test_users.py"):
     check(f"README 提及 {name}", name in README)
 
 # ---- 脚本 ----
@@ -333,16 +337,17 @@ _aria2_src = pathlib.Path("app/providers/downloader/aria2.py").read_text(encodin
 check("aria2 会跟随 followedBy 到数据 GID", "followedBy" in _aria2_src and "_follow" in _aria2_src)
 _dl_tests = pathlib.Path("tests/test_downloaders.py").read_text(encoding="utf-8")
 check("aria2 磁力 GID 跟随有回归用例", "test_aria2_magnet_get_follows_to_data_gid" in _dl_tests)
-check("README 版本号 1.23.0", "1.23.0" in README_ONLY)
+check("README 版本号 1.24.0", "1.24.0" in README_ONLY)
 version_src = pathlib.Path("app/core/version.py").read_text(encoding="utf-8")
-check("代码版本号为 1.23.0", 'APP_VERSION = "1.23.0"' in version_src)
+check("代码版本号为 1.24.0", 'APP_VERSION = "1.24.0"' in version_src)
 check("README 声明 314 项接口用例", "314 项真实 HTTP 接口用例" in README)
 check("scripts/README 声明 314 项", "314 项接口用例" in SCRIPTS_README)
 
 # ---- 服务模块 ----
+# scraper / ranking 已删除（ADR-96），library 顶上来负责本地文件操作
 for module in ("radar", "discovery", "presets", "trending", "settings_store",
-               "pan_storage", "scraper", "strm_sync", "pan_subscribe", "upgrade",
-               "config_store", "site_health", "ranking", "rule_groups"):
+               "pan_storage", "library", "strm_sync", "pan_subscribe", "upgrade",
+               "config_store", "site_health", "rule_groups"):
     check(f"服务模块 app/services/{module}.py 存在",
           pathlib.Path(f"app/services/{module}.py").exists())
     check(f"README 提及 {module} 服务", module in README)
@@ -503,29 +508,65 @@ check("敏感配置脱敏", "_mask" in system_src and "已设置" in system_src)
 check("前端含设置页", "pageSettings" in app_js)
 check("README 说明设置页", "设置页" in README)
 
-# ---- NFO 刮削（M5） ----
-nfo_src = pathlib.Path("app/core/nfo.py").read_text(encoding="utf-8")
-check("NFO 渲染模块在 core（无 IO，可离线单测）", "app/core/nfo.py")
-for func in ("build_movie_nfo", "build_tvshow_nfo", "build_season_nfo",
-             "build_episode_nfo", "build_for", "parse_nfo_tmdb_id"):
-    check(f"NFO 函数 {func}", f"def {func}" in nfo_src)
-check("NFO 覆盖四种根节点",
-      all(f'ET.Element("{tag}")' in nfo_src
-          for tag in ("movie", "tvshow", "season", "episodedetails")))
-check("NFO 图片命名符合媒体服务器惯例", "IMAGE_FILENAMES" in nfo_src and "fanart" in nfo_src)
-check("core/nfo 不做网络请求", "httpx" not in nfo_src and "async def" not in nfo_src)
-scraper_src = pathlib.Path("app/services/scraper.py").read_text(encoding="utf-8")
-for func in ("scrape_file", "scrape_library"):
-    check(f"刮削服务函数 {func}", f"def {func}" in scraper_src)
-check("刮削支持 TMDB 不可用降级", "degraded" in scraper_src)
-check("刮削默认不覆盖已有 NFO", "overwrite" in scraper_src)
+# ---- 刮削已下线（原 M5，v1.24.0 移除，ADR-96） ----
+# 原来这里有 20 条「刮削功能存在」的断言。用户明确划界「项目不负责刮削」后
+# 整块反转成「确实已经拆干净」—— 删功能最容易留下半截：模块删了配置还在、
+# 端点删了前端按钮还在，那种状态比不删更糟。
+check("core/nfo.py 已删除", not pathlib.Path("app/core/nfo.py").exists())
+check("services/scraper.py 已删除", not pathlib.Path("app/services/scraper.py").exists())
+check("test_nfo.py 已删除", not pathlib.Path("tests/test_nfo.py").exists())
+check("test_scraper.py 已删除", not pathlib.Path("tests/test_scraper.py").exists())
 for key in ("SCRAPE_ENABLED", "SCRAPE_IMAGES", "SCRAPE_OVERWRITE", "SCRAPE_CRON",
             "SCRAPE_BATCH"):
-    check(f"配置项 {key} 存在", hasattr(settings, key))
-    check(f"README 提及 CF_{key}", f"CF_{key}" in README)
-check("补刮端点已挂载", "def scrape" in pathlib.Path("app/api/routers/library.py").read_text(encoding="utf-8"))
-check("前端含补刮按钮", "补刮 NFO" in app_js)
-check("README 说明 NFO 刮削", "NFO" in README and "刮削" in README)
+    check(f"配置项 {key} 已移除", not hasattr(settings, key))
+    check(f"README 不再提 CF_{key}", f"CF_{key}" not in README)
+library_router_src = pathlib.Path("app/api/routers/library.py").read_text(encoding="utf-8")
+check("补刮端点已摘除", "/scrape" not in library_router_src)
+check("前端无补刮按钮", "补刮 NFO" not in app_js and "/library/scrape" not in app_js)
+check("刮削任务已从调度移除",
+      "JOB_SCRAPE" not in pathlib.Path("app/services/scheduler.py").read_text(encoding="utf-8"))
+check("ScrapeRequest schema 已移除",
+      "ScrapeRequest" not in pathlib.Path("app/schemas/models.py").read_text(encoding="utf-8"))
+# 未被推翻的部分：改名引擎不是刮削，必须还在
+check("整理改名引擎保留（organizer + meta 不属于刮削）",
+      pathlib.Path("app/core/organizer.py").exists()
+      and "def render_name" in pathlib.Path("app/core/organizer.py").read_text(encoding="utf-8"))
+
+# ---- 媒体库本地文件操作（M54，v1.24.0） ----
+# 换掉刮削后，媒体库页要能干真正被需要的活：看本地下载 + 改名/移动/删除。
+library_svc = pathlib.Path("app/services/library.py").read_text(encoding="utf-8")
+for func in ("library_roots", "resolve_library_path", "browse_library",
+             "rename_entry", "move_entry", "delete_entry"):
+    check(f"媒体库文件操作函数 {func}", f"def {func}" in library_svc)
+for route in ("/browse", "/rename", "/move", "/delete"):
+    check(f"媒体库端点 {route} 已挂载", f'"{route}"' in library_router_src)
+check("路径操作限定在媒体库与下载目录之内（挡穿越）",
+      "LIBRARY_DIR" in library_svc and "DOWNLOAD_DIR" in library_svc
+      and "超出允许范围" in library_svc)
+check("新名称拒绝路径分隔符", "_INVALID_NAME_CHARS" in library_svc)
+check("删非空目录需显式递归确认", "recursive" in library_svc and "非空" in library_svc)
+check("不允许删根目录", "不允许删除根目录" in library_svc)
+check("路径变动后同步 library_files 索引",
+      "def _reindex_paths" in library_svc and "def _forget_paths" in library_svc)
+check("跨盘移动用 shutil.move（媒体库与下载盘常不同盘）", "shutil.move" in library_svc)
+check("前端含本地文件浏览器", "libraryBrowser" in app_js and "libraryCwd" in app_js)
+check("前端浏览目录直接读盘而非读索引", "/library/browse" in app_js)
+check("媒体库文件操作有独立测试", pathlib.Path("tests/test_library_ops.py").exists())
+# 兄弟目录同前缀边界（K:\mediaX vs K:\media）：ADR-96 点名了这条，就必须真有测试钉住。
+# 注入验证实测：去掉 `+ os.sep` 后原有越界用例**全绿**，是这条补上才转红的。
+_lib_tests = pathlib.Path("tests/test_library_ops.py").read_text(encoding="utf-8")
+check("同前缀兄弟目录被判为库外", "test_is_within_requires_separator_boundary" in _lib_tests
+      and "test_sibling_dir_with_shared_prefix_is_outside" in _lib_tests)
+# scan 清僵尸行：换 LIBRARY_DIR 后旧库那行文件已不存在、又在允许范围外，
+# delete_entry 清不掉（正确），扫描是唯一入口 —— 不清就成了污染统计的静默错。
+check("扫描会清理失效索引行", '"removed"' in library_svc and "文件已不存在" in library_svc)
+check("失效索引清理有测试", "test_scan_removes_index_rows_whose_file_is_gone" in _lib_tests
+      and "test_scan_removes_rows_outside_allowed_roots_when_file_gone" in _lib_tests)
+# RETIRED 白名单能让文档检查跳过某路径，所以必须有反向担保证明"跳过是因为它真没了"
+_doc_ep = pathlib.Path("tests/test_doc_endpoints.py").read_text(encoding="utf-8")
+check("已下线端点白名单有反向担保", "RETIRED" in _doc_ep
+      and "test_retired_endpoints_are_really_gone" in _doc_ep)
+check("媒体库文件操作测试自带建表（可单文件跑）", "def _tables" in _lib_tests)
 
 # ---- WebDAV（M6） ----
 dav_src = pathlib.Path("app/providers/panstorage/webdav.py").read_text(encoding="utf-8")
@@ -638,7 +679,7 @@ from app.services import config_store  # noqa: E402
 
 cfgstore_src = pathlib.Path("app/services/config_store.py").read_text(encoding="utf-8")
 check("可编辑配置白名单存在", "EDITABLE" in cfgstore_src)
-check("可编辑配置项 70 个", len(config_store.EDITABLE) == 70, f"实际 {len(config_store.EDITABLE)}")
+check("可编辑配置项 63 个", len(config_store.EDITABLE) == 63, f"实际 {len(config_store.EDITABLE)}")
 for func in ("coerce", "update", "reset", "apply_overrides", "describe"):
     check(f"配置仓库函数 {func}", f"def {func}" in cfgstore_src)
 # 不可热改的键绝不能进白名单：改了不生效比改不了更糟
@@ -715,25 +756,22 @@ for key in ("DOWNLOADER_STRATEGY", "DOWNLOADER_FAILOVER"):
     check(f"README 提及 CF_{key}", f"CF_{key}" in README)
 check("策略默认 priority（与旧行为一致）", settings.DOWNLOADER_STRATEGY == "priority")
 
-# ---- 榜单自动订阅（M15） ----
-from app.services import ranking as ranking_service  # noqa: E402
-
-ranking_src = pathlib.Path("app/services/ranking.py").read_text(encoding="utf-8")
-for func in ("list_rules", "create", "update", "delete", "fetch_candidates",
-             "filter_candidates", "run_rule", "run"):
-    check(f"榜单服务函数 {func}", f"def {func}" in ranking_src)
-check("榜单来源 4 个", len(ranking_service.SOURCES) == 4, str(list(ranking_service.SOURCES)))
-check("榜单记 handled_ids（用户删掉的订阅不该被加回来）", "handled_ids" in ranking_src)
-check("handled_ids 有截断上限", "500" in ranking_src)
-check("榜单单次有上限", "RANKING_MAX_PER_RUN" in ranking_src)
-check("榜单支持 dry_run 试算", "dry_run" in ranking_src)
-check("筛选逻辑是纯函数（可离线单测）", "def filter_candidates" in ranking_src)
+# ---- 榜单自动订阅已下线（原 M15，v1.24.0 移除，ADR-96） ----
+# 用户要求「去掉榜单订阅」。这块原有 22 条断言，同样整体反转成「拆干净了」。
+check("services/ranking.py 已删除", not pathlib.Path("app/services/ranking.py").exists())
+check("routers/ranking.py 已删除", not pathlib.Path("app/api/routers/ranking.py").exists())
+check("test_ranking.py 已删除", not pathlib.Path("tests/test_ranking.py").exists())
 for key in ("RANKING_INTERVAL_MINUTES", "RANKING_MAX_PER_RUN"):
-    check(f"配置项 {key} 存在", hasattr(settings, key))
-    check(f"README 提及 CF_{key}", f"CF_{key}" in README)
-check("TMDB Provider 提供榜单接口",
-      "def ranking" in pathlib.Path("app/providers/metadata/tmdb.py").read_text(encoding="utf-8"))
-check("前端含榜单订阅页", '"ranking"' in app_js and "pageRanking" in app_js)
+    check(f"配置项 {key} 已移除", not hasattr(settings, key))
+    check(f"README 不再提 CF_{key}", f"CF_{key}" not in README)
+check("ranking 路由未注册",
+      "ranking" not in pathlib.Path("app/api/router.py").read_text(encoding="utf-8"))
+check("RankingRule 表已移除",
+      "class RankingRule" not in pathlib.Path("app/db/models.py").read_text(encoding="utf-8"))
+check("前端无榜单订阅页", "pageRanking" not in app_js and "ranking-rules" not in app_js)
+# 未被推翻的部分（ADR-43 结论仍成立）：本地资源热榜喂搜索/发现页，是另一件事
+check("本地资源热榜保留", pathlib.Path("app/services/trending.py").exists()
+      and pathlib.Path("app/api/routers/trending.py").exists())
 
 # ---- 自定义过滤规则组（M16） ----
 rules_src = pathlib.Path("app/core/rules.py").read_text(encoding="utf-8")

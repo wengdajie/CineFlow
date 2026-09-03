@@ -31,10 +31,8 @@ JOB_VIDEO_SUBSCRIBE = "cineflow.video_subscribe"
 JOB_SPEED_LIMIT = "cineflow.speed_limit"
 JOB_PAN_KEEPALIVE = "cineflow.pan_keepalive"
 JOB_STRM_SYNC = "cineflow.strm_sync"
-JOB_SCRAPE = "cineflow.scrape"
 JOB_UPGRADE = "cineflow.upgrade"
 JOB_SITE_HEALTH = "cineflow.site_health"
-JOB_RANKING = "cineflow.ranking"
 JOB_ZHUIJU_SYNC = "cineflow.zhuiju_sync"
 JOB_RSS = "cineflow.rss"
 _PLUGIN_PREFIX = "plugin."
@@ -188,15 +186,6 @@ def builtin_specs() -> list[JobSpec]:
             ),
         ),
         JobSpec(
-            key="ranking",
-            job_id=JOB_RANKING,
-            name="榜单自动订阅",
-            description="按已启用的榜单规则自动建订阅（TMDB 热门/高分等），单次有数量上限",
-            trigger="interval",
-            minutes=settings.RANKING_INTERVAL_MINUTES or 720,
-            enabled=bool(settings.RANKING_INTERVAL_MINUTES > 0),
-        ),
-        JobSpec(
             key="zhuiju_sync",
             job_id=JOB_ZHUIJU_SYNC,
             name="社区站点清单同步（awesome-zhuiju-free）",
@@ -215,15 +204,6 @@ def builtin_specs() -> list[JobSpec]:
             trigger="interval",
             minutes=settings.RSS_INTERVAL_MINUTES or 20,
             enabled=bool(settings.RSS_INTERVAL_MINUTES > 0),
-        ),
-        JobSpec(
-            key="scrape",
-            job_id=JOB_SCRAPE,
-            name="媒体库补刮（NFO + 图片）",
-            description="为缺少 NFO 的历史文件补齐元数据，提升媒体服务器识别率",
-            trigger="cron",
-            cron=settings.SCRAPE_CRON or "30 4 * * *",
-            enabled=bool(settings.SCRAPE_ENABLED and settings.SCRAPE_CRON),
         ),
         JobSpec(
             key="upgrade",
@@ -326,9 +306,7 @@ class SchedulerService:
         from app.services import pan_storage as pan_service
         from app.services import pan_subscribe as pan_subscribe_service
         from app.services import radar as radar_service
-        from app.services import ranking as ranking_service
         from app.services import rss_feeds as rss_service
-        from app.services import scraper as scraper_service
         from app.services import site_health as health_service
         from app.services import speed_limit as speed_limit_service
         from app.services import strm_sync as strm_service
@@ -353,14 +331,9 @@ class SchedulerService:
             "video_subscribe": (video_subscribe_service.check_all, {}),
             "pan_keepalive": (pan_service.keep_alive_all, {}),
             "strm_sync": (strm_service.sync_all, {}),
-            "scrape": (
-                scraper_service.scrape_library,
-                {"limit": settings.SCRAPE_BATCH},
-            ),
             "upgrade": (upgrade_service.run, {}),
             "site_health": (health_service.check_all, {}),
             "speed_limit": (speed_limit_service.apply_now, {}),
-            "ranking": (ranking_service.run, {}),
             "zhuiju_sync": (zhuiju_service.sync, {}),
             "rss": (
                 rss_service.run,

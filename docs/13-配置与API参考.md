@@ -20,6 +20,8 @@ YAML 里的二级 key 会拍平成 `CF_<父>_<子>`，例如 `tmdb.api_key` → 
 | 端口 | `CF_PORT` | `6060` | |
 | 管理员 | `CF_SUPERUSER` / `CF_SUPERUSER_PASSWORD` | `admin` / `cineflow` | 仅首次启动生效 |
 | 密钥 | `CF_SECRET_KEY` | — | **务必改成随机串** |
+| 下载目录 | `CF_DOWNLOAD_DIR` | `/downloads` | 下载器落盘根目录 |
+| 媒体库目录 | `CF_LIBRARY_DIR` | `/library` | 整理入库根目录；`link` 模式下**必须与 `CF_DOWNLOAD_DIR` 同卷**，跨卷会静默降级为复制（ADR-96）|
 | 转移模式 | `CF_TRANSFER_MODE` | `link` | `link`/`copy`/`move`/`softlink`/`strm` |
 | 订阅巡检 | `CF_SUBSCRIBE_INTERVAL_MINUTES` | `30` | 分钟 |
 | 追新雷达 | `CF_RADAR_ENABLED` | `true` | 站点最新流巡检总开关 |
@@ -27,11 +29,6 @@ YAML 里的二级 key 会拍平成 `CF_<父>_<子>`，例如 `tmdb.api_key` → 
 | 雷达取量 | `CF_RADAR_LIMIT_PER_SITE` | `100` | 每站最多取多少条最新资源 |
 | 下载同步 | `CF_DOWNLOAD_CHECK_INTERVAL_MINUTES` | `5` | 分钟 |
 | 媒体库扫描 | `CF_LIBRARY_SCAN_CRON` | `0 4 * * *` | 5 段 cron |
-| NFO 刮削 | `CF_SCRAPE_ENABLED` | `true` | 入库后自动写 NFO，媒体服务器不用猜 |
-| 刮削图片 | `CF_SCRAPE_IMAGES` | `true` | 同时下载 poster / fanart |
-| 覆盖 NFO | `CF_SCRAPE_OVERWRITE` | `false` | 默认不冲掉你手工改过的 NFO |
-| 补刮周期 | `CF_SCRAPE_CRON` | `30 4 * * *` | 给历史文件补 NFO；留空关闭 |
-| 补刮批量 | `CF_SCRAPE_BATCH` | `200` | 单次最多刮几个文件，防打满 TMDB 限速 |
 | 分类归档 | `CF_CATEGORY_ENABLED` | `false` | 开启后按 电影/电视剧/动漫/纪录片/综艺/儿童 分二级目录 |
 | STRM 链接模式 | `CF_STRM_LINK_MODE` | `proxy` | `proxy`=写 302 端点（不过期）/ `direct`=写临时直链 |
 | STRM 同步周期 | `CF_STRM_SYNC_INTERVAL_MINUTES` | `0` | 分钟，`0`=关闭自动同步 |
@@ -60,8 +57,6 @@ YAML 里的二级 key 会拍平成 `CF_<父>_<子>`，例如 `tmdb.api_key` → 
 | 站点自动停用 | `CF_SITE_AUTO_DISABLE` | `false` | 连续失败是否自动禁用站点；默认关闭 |
 | 下载器策略 | `CF_DOWNLOADER_STRATEGY` | `priority` | `priority` / `least_tasks` / `round_robin` |
 | 下载器换源 | `CF_DOWNLOADER_FAILOVER` | `true` | 投递失败时自动换下一个下载器 |
-| 榜单订阅周期 | `CF_RANKING_INTERVAL_MINUTES` | `720` | 分钟，`0`=关闭 |
-| 榜单单次上限 | `CF_RANKING_MAX_PER_RUN` | `5` | 一次最多自动建几个订阅，防刷爆 |
 | 视频追更周期 | `CF_VIDEO_SUBSCRIBE_INTERVAL_MINUTES` | `120` | 分钟，`0`=关闭。UP 主更新频率远低于剧集，查太勤只增加被风控概率 |
 | 告警去抖窗口 | `CF_NOTIFY_ALERT_COOLDOWN_MINUTES` | `360` | 分钟，`0`=不去抖。同一条告警（站点掉线/网盘失效）的最短重复间隔 |
 | 限速时段周期 | `CF_SPEED_LIMIT_INTERVAL_MINUTES` | `10` | 分钟，`0`=关闭。时段切换只需分钟级精度 |
@@ -112,7 +107,7 @@ curl -X POST -H "X-API-Token: your-token" \
      http://127.0.0.1:6060/api/v1/subscribes/run-all
 ```
 
-主要端点分组（共 185 个端点）：
+主要端点分组（共 181 个端点）：
 
 | 前缀 | 用途 |
 |---|---|
@@ -156,7 +151,7 @@ cineflow/
 │   │                  mediaserver/ notify/ metadata/(tmdb douban bangumi)
 │   ├── services/      sites search notify download library subscribe scheduler
 │   │                  radar trending discovery presets settings_store
-│   │                  pan_storage scraper strm_sync pan_subscribe upgrade
+│   │                  pan_storage library strm_sync pan_subscribe upgrade
 │   │                  config_store site_health ranking rule_groups
 │   │                  video_subscribe speed_limit changelog
 │   │                  download_routing ai_site zhuiju search_breaker
@@ -168,7 +163,7 @@ cineflow/
 │   └── main.py        应用入口（lifespan / CORS / 静态资源）
 ├── web/               index.html + assets/(app.js style.css)  ← 零依赖前端
 ├── plugins/           auto_cleanup pan_transfer daily_digest  ← 示例插件
-├── tests/             58 个测试文件
+├── tests/             56 个测试文件（含 test_library_ops.py：本地文件操作与越界防护）
 ├── scripts/           smoke_test / ui_check / demo_pipeline 验证脚本
 ├── docs/              16 篇维护文档（现状/架构/路线图/决策/运维/站点接入/变更日志/竞品对标…）
 ├── config/            config.yaml.example

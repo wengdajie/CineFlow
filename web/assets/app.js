@@ -710,7 +710,6 @@
     { key: "subscribes", label: "订阅追新", icon: "star", group: "追剧" },
     { key: "radar", label: "追新雷达", icon: "radar", group: "追剧" },
     { key: "rssfeeds", label: "RSS 追新", icon: "rss", group: "追剧" },
-    { key: "ranking", label: "榜单订阅", icon: "trophy", group: "追剧" },
     { key: "rules", label: "过滤规则组", icon: "layers", group: "追剧" },
     { key: "schedules", label: "定时任务", icon: "clock", group: "追剧" },
     { key: "downloads", label: "下载任务", icon: "download", group: "入库" },
@@ -882,7 +881,7 @@
           el("span", { text: "运行状态" }),
         ]),
         statusItem("调度器", badge(info.scheduler_running, "运行中", "已停止")),
-        statusItem("TMDB 刮削", badge(info.tmdb_enabled, "已启用", "未配置")),
+        statusItem("TMDB 元数据", badge(info.tmdb_enabled, "已启用", "未配置")),
         statusItem("整理模式", el("span", { class: "tag brand", text: info.transfer_mode })),
         statusItem("版本", el("span", { class: "tag", text: "v" + info.version })),
         el("div", { class: "status-paths dim tiny mono" }, [
@@ -2912,7 +2911,7 @@
             icon(
               { subscribe: "star", radar: "radar", download: "download", library: "library",
                 pan_transfer: "cloud", pan_subscribe: "link", strm_sync: "film",
-                scrape: "box", upgrade: "chart" }[row.key] || "clock",
+                upgrade: "chart" }[row.key] || "clock",
               "sm"
             ),
             el("span", { text: row.name }),
@@ -3291,11 +3290,19 @@
     );
   }
 
+  //: 媒体库页当前浏览到哪个目录。
+  //: 本项目**不做刮削**（v1.24.0，ADR-96）：这一页只回答"本地下载到了什么"，
+  //: 并允许就地重命名/移动/删除。目录状态放在闭包外，重绘后不会跳回根。
+  let libraryCwd = null;
+
   async function pageLibrary() {
-    shell(loading(), "媒体库", "已入库文件与手动整理");
-    const [stats, files] = await Promise.all([
+    shell(loading(), "媒体库", "本地文件浏览与整理");
+    const [stats, files, browse] = await Promise.all([
       api("/library/stats"),
       api("/library/files?limit=300"),
+      api("/library/browse" + (libraryCwd ? "?path=" + encodeURIComponent(libraryCwd) : ""))
+        // 盘符掉线/目录被手工删掉时不能让整页白屏，降级成空列表并把原因显示出来
+        .catch((error) => ({ items: [], roots: [], path: libraryCwd, error: error.message })),
     ]);
     const data = stats.data;
 
@@ -3306,9 +3313,10 @@
         statCard("剧集数", data.series, data.episodes + " 集", "tv"),
         statCard("电影数", data.movies, null, "film"),
       ]),
+      libraryBrowser(browse),
       el("div", { class: "card flush" }, [
         el("div", { class: "card-head" }, [
-          el("h3", {}, [icon("inbox", "sm"), el("span", { text: "入库文件" })]),
+          el("h3", {}, [icon("inbox", "sm"), el("span", { text: "已入库索引" })]),
         ]),
         table(
           [
@@ -3353,34 +3361,8 @@
       }
     });
 
-    // 补刮按钮：只处理缺 NFO 的文件，可反复点，因此不做二次确认
-    const scrape = el("button", { class: "btn" }, [
-      icon("box", "sm"),
-      el("span", { text: "补刮 NFO" }),
-    ]);
-    scrape.addEventListener("click", async () => {
-      scrape.disabled = true;
-      scrape.querySelector("span").textContent = "刮削中…";
-      try {
-        const result = await api("/library/scrape", {
-          method: "POST",
-          body: { limit: 200, overwrite: false },
-        });
-        const degraded = result.degraded ? "（其中 " + result.degraded + " 个因 TMDB 不可用写了最小 NFO）" : "";
-        toast(
-          "扫描 " + result.scanned + " 个 · 新刮 " + result.scraped + " 个 · 跳过 " + result.skipped + " 个" + degraded,
-          "ok"
-        );
-      } catch (error) {
-        toast(error.message, "err");
-      }
-      scrape.disabled = false;
-      scrape.querySelector("span").textContent = "补刮 NFO";
-    });
-
-    shell(content, "媒体库", data.files + " 个文件 · " + fmtSize(data.size), [
+    shell(content, "媒体库", data.files + " 个文件 · " + fmtSize(data.size) + (browse.path ? " · " + browse.path : ""), [
       iconButton("手动整理", "plus", transferForm),
-      scrape,
       scan,
       iconButton("刷新媒体服务器", "server", async () => {
         try {
@@ -3390,6 +3372,190 @@
           toast(error.message, "err");
         }
       }),
+    ]);
+  }
+
+  // ---------------- 本地文件浏览与整理 ----------------
+  //: 本项目不负责刮削（ADR-96）。媒体库页的定位是「看本地下载到了什么」，
+  //: 因此这里直接读盘（`GET /library/browse`）而不是读 `library_files` 索引 ——
+  //: 下载器刚落地、还没整理入库的文件在索引里是查不到的，只看索引会让用户
+  //: 以为文件没下下来。索引另开一张表展示，两者互补。
+  const LIB_KIND_ICONS = { dir: "folder", media: "film", subtitle: "logs", file: "box" };
+  const LIB_KIND_LABELS = { dir: "目录", media: "视频", subtitle: "字幕", file: "文件" };
+
+  function libraryBrowser(browse) {
+    const items = browse.items || [];
+    const roots = browse.roots || [];
+    // 写操作入口按角色隐藏（真正鉴权在服务端，OperatorUser 依赖）
+    const canWrite = canDo("operator");
+
+    const go = (path) => {
+      libraryCwd = path;
+      pageLibrary();
+    };
+
+    // 面包屑：根目录按钮 + 当前路径。父级来自后端，前端不自己拼路径，
+    // 免得 Windows 盘根（K:\）这类边界算错。
+    const crumbs = el("div", { class: "row tight wrap center" }, [
+      el("button", {
+        class: "btn sm ghost" + (browse.path ? "" : " on"),
+        text: "全部位置",
+        onclick: () => go(null),
+      }),
+      ...(browse.parent
+        ? [
+            (() => {
+              const up = el("button", { class: "btn sm ghost" }, [
+                icon("back", "sm"),
+                el("span", { text: "上一级" }),
+              ]);
+              up.addEventListener("click", () => go(browse.parent));
+              return up;
+            })(),
+          ]
+        : []),
+      browse.path ? el("code", { class: "mono tiny", text: browse.path }) : null,
+    ]);
+
+    const rowActions = (row) => {
+      if (!canWrite) return el("span", { class: "dim tiny", text: "只读" });
+      const buttons = [];
+      if (row.kind === "dir") {
+        buttons.push(iconButton("打开", "eye", () => go(row.path), "sm ghost"));
+      }
+      buttons.push(
+        iconButton(
+          "重命名",
+          "edit",
+          () =>
+            modal(
+              "重命名",
+              [
+                { key: "new_name", label: "新名称", value: row.name,
+                  hint: "只改名字，不能带路径分隔符；目录改名会连带更新库内索引" },
+              ],
+              async (values) => {
+                const result = await api("/library/rename", {
+                  method: "POST",
+                  body: { path: row.path, new_name: values.new_name },
+                });
+                toast(result.message, "ok");
+                pageLibrary();
+              },
+              "重命名"
+            ),
+          "sm ghost"
+        )
+      );
+      buttons.push(
+        iconButton(
+          "移动",
+          "folder",
+          () =>
+            modal(
+              "移动到",
+              [
+                { key: "dest_dir", label: "目标目录", value: browse.path || roots[0] || "",
+                  hint: "必须在媒体库或下载目录之内；不存在会自动创建，可跨盘" },
+                { key: "overwrite", label: "目标同名则覆盖", type: "checkbox", value: false },
+              ],
+              async (values) => {
+                const result = await api("/library/move", {
+                  method: "POST",
+                  body: { path: row.path, dest_dir: values.dest_dir, overwrite: values.overwrite },
+                });
+                toast(result.message, "ok");
+                pageLibrary();
+              },
+              "移动"
+            ),
+          "sm ghost"
+        )
+      );
+      buttons.push(
+        iconButton(
+          "删除",
+          "trash",
+          () =>
+            modal(
+              "删除 " + row.name,
+              [
+                {
+                  key: "recursive",
+                  label: "递归删除（目录连同内容）",
+                  type: "checkbox",
+                  value: false,
+                  hint: "删非空目录必须勾这一项 —— 少一步确认，一次手滑就没了",
+                },
+              ],
+              async (values) => {
+                const result = await api("/library/delete", {
+                  method: "POST",
+                  body: { path: row.path, recursive: values.recursive },
+                });
+                toast(result.message + "（释放 " + fmtSize(result.size) + "）", "ok");
+                pageLibrary();
+              },
+              "确认删除"
+            ),
+          "sm ghost danger"
+        )
+      );
+      return el("div", { class: "row tight" }, buttons);
+    };
+
+    const body = browse.error
+      ? el("div", { class: "notice warn" }, [
+          icon("alert", "sm"),
+          el("span", { text: "目录读取失败：" + browse.error }),
+        ])
+      : table(
+          [
+            {
+              title: "名称",
+              render: (row) =>
+                el("div", { class: "row tight center" }, [
+                  icon(LIB_KIND_ICONS[row.kind] || "box", "sm"),
+                  row.kind === "dir"
+                    ? el("a", {
+                        href: "javascript:void(0)",
+                        text: row.name,
+                        onclick: () => go(row.path),
+                      })
+                    : el("span", { text: row.name }),
+                ]),
+            },
+            { title: "类型", render: (row) => LIB_KIND_LABELS[row.kind] || row.kind },
+            {
+              title: "大小",
+              class: "num",
+              render: (row) =>
+                row.kind === "dir"
+                  ? row.children
+                    ? row.children + " 个文件 · " + fmtSize(row.size)
+                    : "-"
+                  : fmtSize(row.size),
+            },
+            {
+              title: "修改时间",
+              render: (row) =>
+                row.modified ? new Date(row.modified * 1000).toLocaleString() : "-",
+            },
+            { title: "操作", render: rowActions },
+          ],
+          items,
+          browse.path
+            ? "这个目录是空的"
+            : "还没有可浏览的目录（媒体库与下载目录都不存在）"
+        );
+
+    return el("div", { class: "card flush" }, [
+      el("div", { class: "card-head" }, [
+        el("h3", {}, [icon("folder", "sm"), el("span", { text: "本地文件" })]),
+        el("div", { class: "dim tiny", text: "只读盘上的真实情况，可重命名/移动/删除" }),
+      ]),
+      el("div", { class: "pad" }, [crumbs]),
+      body,
     ]);
   }
 
@@ -7430,298 +7596,6 @@
     );
   }
 
-  // ---------------- 榜单自动订阅 ----------------
-  function rankingForm(row, sources, onDone) {
-    const current = row || {};
-    const defaults = current.subscribe_defaults || {};
-    modal(
-      row ? "编辑榜单规则 · " + row.name : "新建榜单规则",
-      [
-        { key: "name", label: "规则名称", value: current.name || "", placeholder: "如：每周高分新剧" },
-        {
-          key: "source",
-          label: "榜单来源",
-          type: "select",
-          value: current.source || "tmdb_trending",
-          options: sources.map((item) => ({ value: item.value, label: item.label })),
-          hint: "TMDB 榜需要配置 CF_TMDB_API_KEY；没配就用「本地资源热度榜」",
-        },
-        {
-          key: "media_type",
-          label: "类型",
-          type: "select",
-          value: current.media_type || "tv",
-          options: [
-            { value: "tv", label: "剧集" },
-            { value: "movie", label: "电影" },
-          ],
-        },
-        { key: "limit", label: "取榜单前 N 条", type: "number", value: current.limit || 10, hint: "1~100" },
-        { key: "min_vote", label: "评分下限", type: "number", value: current.min_vote || 0, hint: "0 表示不限；TMDB 评分 0~10" },
-        { key: "min_year", label: "年份下限", type: "number", value: current.min_year || "", hint: "留空不限，填 2024 就只要今年之后的" },
-        { key: "include", label: "标题必须包含", value: current.include || "", placeholder: "留空不限，多个用 | 分隔" },
-        { key: "exclude", label: "标题命中即跳过", value: current.exclude || "", placeholder: "真人秀|综艺" },
-        {
-          key: "best_version",
-          label: "自动订阅时开启「最优版本」",
-          type: "checkbox",
-          value: !!defaults.best_version,
-          hint: "会参与洗版（默认关闭，洗版会删旧文件）",
-        },
-        { key: "enabled", label: "启用（参与定时巡检）", type: "checkbox", value: row ? !!current.enabled : true },
-        row
-          ? {
-              key: "reset_handled",
-              label: "清空已处理记录",
-              type: "checkbox",
-              value: false,
-              hint: "默认不会把你删掉的订阅再加回来；勾选后会重新扫一遍全榜",
-            }
-          : null,
-      ].filter(Boolean),
-      async (values) => {
-        const payload = {
-          name: values.name,
-          source: values.source,
-          media_type: values.media_type,
-          limit: Number(values.limit) || 10,
-          min_vote: Number(values.min_vote) || 0,
-          min_year: values.min_year === null || values.min_year === "" ? null : Number(values.min_year),
-          include: values.include || null,
-          exclude: values.exclude || null,
-          subscribe_defaults: { best_version: !!values.best_version },
-          enabled: !!values.enabled,
-        };
-        if (row) {
-          payload.reset_handled = !!values.reset_handled;
-          await api("/ranking-rules/" + row.id, { method: "PATCH", body: payload });
-          toast("已保存", "ok");
-        } else {
-          if (!payload.name) throw new Error("规则名称必填");
-          await api("/ranking-rules", { method: "POST", body: payload });
-          toast("榜单规则已创建", "ok");
-        }
-        if (onDone) onDone();
-      },
-      row ? "保存" : "创建",
-      {
-        wide: true,
-        lead:
-          "让「最近有什么好剧」自动变成订阅。单次最多新建的数量由 CF_RANKING_MAX_PER_RUN 限制，" +
-          "避免一次刷进上百个订阅。",
-      }
-    );
-  }
-
-  /** 试算结果弹窗：先看清会订阅哪些，再决定要不要真的执行。 */
-  function showRankingPreview(rule, result) {
-    const listOf = (rows) =>
-      el(
-        "div",
-        { class: "list" },
-        rows.slice(0, 12).map((item) =>
-          el("div", { class: "list-row" }, [
-            el("span", { class: "tiny", text: item.title }),
-            el("span", { class: "dim tiny", text: item.reason || "" }),
-          ])
-        )
-      );
-
-    panelModal(
-      "试算 · " + rule.name,
-      result.message,
-      el("div", { class: "grid" }, [
-        (result.items || []).length
-          ? el("div", { class: "card soft" }, [
-              el("div", { class: "card-head" }, [el("h3", { text: "将新增订阅（" + result.items.length + "）" })]),
-              el(
-                "div",
-                { class: "list" },
-                result.items.map((item) =>
-                  el("div", { class: "list-row" }, [
-                    el("span", { text: item.title }),
-                    el("span", { class: "dim tiny", text: (item.year || "-") + " · 评分 " + (item.vote_average || "-") }),
-                  ])
-                )
-              ),
-            ])
-          : emptyBox("这一轮不会新增订阅", "info"),
-        (result.skipped || []).length
-          ? el("div", { class: "card soft" }, [
-              el("div", { class: "card-head" }, [el("h3", { text: "跳过（" + result.skipped.length + "）" })]),
-              listOf(result.skipped),
-            ])
-          : null,
-        (result.rejected || []).length
-          ? el("div", { class: "card soft" }, [
-              el("div", { class: "card-head" }, [el("h3", { text: "未通过条件（" + result.rejected.length + "）" })]),
-              listOf(result.rejected),
-            ])
-          : null,
-      ]),
-      true
-    );
-  }
-
-  async function pageRanking() {
-    shell(loading(), "榜单订阅", "把热门榜/高分榜自动变成订阅");
-    const [data, schedules] = await Promise.all([
-      api("/ranking-rules"),
-      api("/schedules").catch(() => ({ items: [] })),
-    ]);
-    const list = data.items || [];
-    const sources = data.sources || [];
-    const job = (schedules.items || []).find((item) => item.key === "ranking");
-
-    const enabled = list.filter((item) => item.enabled).length;
-    const created = list.reduce((sum, item) => sum + (item.created_count || 0), 0);
-
-    const stats = el("div", { class: "grid cols-4" }, [
-      statCard("榜单规则", String(list.length), "配置好的自动订阅规则", "trophy"),
-      statCard("启用中", String(enabled), "会被定时任务执行", "play"),
-      statCard("累计新增订阅", String(created), "由榜单自动创建的订阅数", "star"),
-      statCard(
-        "巡检周期",
-        job ? (job.trigger === "cron" ? job.cron : (job.minutes || 0) + " 分钟") : "-",
-        job && job.enabled ? "下次 " + fmtRelative(job.next_run_at) : "任务未启用",
-        "clock"
-      ),
-    ]);
-
-    const jobCard = el("div", { class: "card" }, [
-      el("div", { class: "card-head" }, [
-        el("h3", {}, [icon("clock", "sm"), el("span", { text: "定时执行" })]),
-        job ? el("span", { class: "tag " + (job.enabled ? "brand" : "warn"), text: job.enabled ? "已启用" : "已关闭" }) : null,
-      ]),
-      el("div", { class: "muted" }, [
-        el("span", {
-          text: job
-            ? "内置任务「" + job.name + "」按周期跑全部启用规则；周期可在这里或「定时任务」页修改。"
-            : "调度信息不可用，请检查调度器状态。",
-        }),
-      ]),
-      job && canDo("admin")
-        ? el("div", { class: "row tight", style: "margin-top:12px" }, [
-            iconButton("修改周期", "edit", () => scheduleForm(job, pageRanking), "sm primary"),
-            iconButton("立即执行", "play", () => runSchedule(job, pageRanking), "sm"),
-          ])
-        : null,
-    ]);
-
-    const listCard = el("div", { class: "card flush" }, [
-      el("div", { class: "card-head" }, [
-        el("h3", {}, [icon("trophy", "sm"), el("span", { text: "规则（" + list.length + "）" })]),
-        canDo("admin") ? iconButton("新建", "plus", () => rankingForm(null, sources, pageRanking), "sm primary") : null,
-      ]),
-      table(
-        [
-          {
-            title: "规则",
-            render: (row) =>
-              el("div", {}, [
-                el("div", { class: "row tight center" }, [
-                  el("span", { text: row.name }),
-                  row.enabled ? null : el("span", { class: "tag", text: "已停用" }),
-                ]),
-                el("div", { class: "cell-sub tiny", text: row.source_label }),
-              ]),
-          },
-          { title: "类型", render: (row) => typeLabel(row.media_type) },
-          {
-            title: "条件",
-            render: (row) =>
-              el("div", { class: "stack tiny" }, [
-                el("div", { class: "dim", text: "取前 " + row.limit + " 条" }),
-                row.min_vote ? el("div", { class: "dim", text: "评分 ≥ " + row.min_vote }) : null,
-                row.min_year ? el("div", { class: "dim", text: "年份 ≥ " + row.min_year }) : null,
-                row.include ? el("div", { class: "dim", text: "含 " + row.include }) : null,
-                row.exclude ? el("div", { class: "dim", text: "排除 " + row.exclude }) : null,
-              ]),
-          },
-          { title: "已建订阅", class: "num", render: (row) => String(row.created_count || 0) },
-          { title: "已处理", class: "num", render: (row) => String(row.handled_count || 0) },
-          {
-            title: "最近执行",
-            render: (row) =>
-              el("div", {}, [
-                el("div", { text: fmtRelative(row.last_run_at) }),
-                row.last_result
-                  ? el("div", { class: "cell-sub truncate", title: row.last_result, text: row.last_result })
-                  : null,
-              ]),
-          },
-          {
-            title: "操作",
-            render: (row) =>
-              el("div", { class: "row tight" }, [
-                iconButton("试算", "info", async () => {
-                  try {
-                    const result = await api("/ranking-rules/" + row.id + "/preview", { method: "POST" });
-                    showRankingPreview(row, result);
-                  } catch (error) {
-                    toast(error.message, "err");
-                  }
-                }, "sm ghost"),
-                canDo("operator")
-                  ? iconButton("执行", "play", async () => {
-                      if (!confirm("立即执行「" + row.name + "」？会真的创建订阅。")) return;
-                      try {
-                        const result = await api("/ranking-rules/" + row.id + "/run", { method: "POST" });
-                        toast(result.message || "执行完成", "ok");
-                        pageRanking();
-                      } catch (error) {
-                        toast(error.message, "err");
-                      }
-                    }, "sm")
-                  : null,
-                canDo("admin") ? iconButton("编辑", "edit", () => rankingForm(row, sources, pageRanking), "sm ghost") : null,
-                canDo("admin")
-                  ? iconButton("删除", "trash", async () => {
-                      if (!confirm("确定删除榜单规则「" + row.name + "」？已创建的订阅不受影响。")) return;
-                      try {
-                        await api("/ranking-rules/" + row.id, { method: "DELETE" });
-                        toast("已删除", "ok");
-                        pageRanking();
-                      } catch (error) {
-                        toast(error.message, "err");
-                      }
-                    }, "sm danger")
-                  : null,
-              ]),
-          },
-        ],
-        list,
-        "还没有榜单规则。点「新建」选一个榜单来源，之后会自动把上榜作品变成订阅"
-      ),
-    ]);
-
-    const actions = [iconButton("刷新", "refresh", () => pageRanking())];
-    if (canDo("operator") && list.length) {
-      actions.unshift(
-        iconButton("执行全部", "play", async () => {
-          if (!confirm("立即执行所有启用规则？会真的创建订阅。")) return;
-          try {
-            const result = await api("/ranking-rules/run-all", { method: "POST" });
-            toast((result.rules || 0) + " 条规则执行完成，新增 " + (result.created || 0) + " 个订阅", "ok");
-            pageRanking();
-          } catch (error) {
-            toast(error.message, "err");
-          }
-        }, "primary")
-      );
-    }
-    if (canDo("admin")) {
-      actions.unshift(iconButton("新建规则", "plus", () => rankingForm(null, sources, pageRanking), "primary"));
-    }
-
-    shell(
-      el("div", { class: "grid" }, [stats, jobCard, listCard]),
-      "榜单订阅",
-      list.length ? list.length + " 条规则 · 累计新增 " + created + " 个订阅" : "把榜单变成自动订阅",
-      actions
-    );
-  }
-
   // ---------------- 过滤规则组 ----------------
   /** 层级用「每行一层」的文本编辑：字段少、可复制粘贴，比动态表单更好用也更耐改。 */
   function levelsToText(levels) {
@@ -8818,7 +8692,6 @@
     radar: pageRadar,
     sites: pageSites,
     sitehealth: pageSiteHealth,
-    ranking: pageRanking,
     rules: pageRuleGroups,
     users: pageUsers,
     plugins: pagePlugins,

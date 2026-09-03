@@ -113,6 +113,5 @@ class EventType(StrEnum):
     CHAT_COMMAND = "chat.command"
     SITE_UNHEALTHY = "site.unhealthy"
     SITE_RECOVERED = "site.recovered"
-    RANKING_SUBSCRIBED = "ranking.subscribed"
     PLUGIN_ACTION = "plugin.action"
     SYSTEM_ERROR = "system.error"

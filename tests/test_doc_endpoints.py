@@ -47,6 +47,22 @@ THIRD_PARTY = {
     "/repos/{repo}/releases/latest",
 }
 
+#: **已下线**的本项目端点。
+#: 路线图与变更日志是历史记录，不能为了让检查通过就把"曾经有过什么"抹掉；
+#: 但也不能让"文档写了个不存在的端点"这条检查失效 —— 那正是它要抓的问题。
+#: 折中：下线的端点显式登记在这里，并由 ``test_retired_endpoints_are_really_gone``
+#: 反向钉住"它确实已经不存在了"。哪天不小心把它加回来，那条测试会红。
+RETIRED = {
+    # v1.24.0：刮削整体下线（ADR-96）
+    "/library/scrape",
+    # v1.24.0：榜单自动订阅整体下线（ADR-96）
+    "/ranking-rules",
+    "/ranking-rules/{rule_id}",
+    "/ranking-rules/{rule_id}/preview",
+    "/ranking-rules/{rule_id}/run",
+    "/ranking-rules/run-all",
+}
+
 def _is_absolute(path: str) -> bool:
     """是否写成了本项目的绝对路径。
 
@@ -165,7 +181,7 @@ def test_relative_paths_resolve_under_api_v1(real_paths):
     """
     broken: list[str] = []
     for path, places in sorted(_scan().items()):
-        if _is_absolute(path) or path in THIRD_PARTY:
+        if _is_absolute(path) or path in THIRD_PARTY or path in RETIRED:
             continue
         if _normalize("/api/v1" + path) in real_paths:
             continue
@@ -183,3 +199,20 @@ def test_third_party_list_is_not_ours(real_paths):
     """THIRD_PARTY 里的路径不该是本项目的端点。"""
     ours = [p for p in THIRD_PARTY if _normalize("/api/v1" + p) in real_paths]
     assert not ours, f"这些被标为第三方，其实是本项目端点：{ours}"
+
+
+def test_retired_endpoints_are_really_gone(real_paths):
+    """RETIRED 名单必须名副其实。
+
+    这是 RETIRED 白名单的反向担保：白名单能让检查跳过某个路径，
+    所以必须有一条测试证明"跳过是因为它真没了"，而不是被人拿来消警告。
+    """
+    alive = [
+        p
+        for p in RETIRED
+        if _normalize("/api/v1" + p) in real_paths or _normalize(p) in real_paths
+    ]
+    assert not alive, (
+        f"这些端点被登记为已下线，但实际还在提供服务：{alive}"
+        "（要么从 RETIRED 移除，要么确认下线没做干净）"
+    )

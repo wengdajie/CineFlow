@@ -10,7 +10,13 @@ from sqlalchemy import select
 from app.api.deps import CurrentUser, DbSession, OperatorUser
 from app.core.organizer import transfer_directory
 from app.db.models import LibraryFile, TransferRecord
-from app.schemas.models import ScrapeRequest, TransferRequest, TransferResultOut
+from app.schemas.models import (
+    LibraryDeleteRequest,
+    LibraryMoveRequest,
+    LibraryRenameRequest,
+    TransferRequest,
+    TransferResultOut,
+)
 from app.services import library as library_service
 
 router = APIRouter(prefix="/library", tags=["媒体库"])
@@ -56,6 +62,39 @@ def files(
     }
 
 
+@router.get("/browse", summary="浏览本地目录")
+def browse(user: CurrentUser, path: str | None = None) -> dict[str, Any]:
+    """列出媒体库/下载目录下的条目；``path`` 为空时返回可用根目录。
+
+    这是媒体库页「查看本地下载情况」的数据源：直接读盘而不是读索引，
+    因为下载器刚落地的文件还没入库，只看 ``library_files`` 会看不到。
+    """
+    return {"success": True, **library_service.browse_library(path)}
+
+
+@router.post("/rename", summary="重命名文件/目录")
+def rename(payload: LibraryRenameRequest, user: OperatorUser) -> dict[str, Any]:
+    return {"success": True, **library_service.rename_entry(payload.path, payload.new_name)}
+
+
+@router.post("/move", summary="移动文件/目录")
+def move(payload: LibraryMoveRequest, user: OperatorUser) -> dict[str, Any]:
+    return {
+        "success": True,
+        **library_service.move_entry(
+            payload.path, payload.dest_dir, overwrite=payload.overwrite
+        ),
+    }
+
+
+@router.post("/delete", summary="删除文件/目录")
+def delete(payload: LibraryDeleteRequest, user: OperatorUser) -> dict[str, Any]:
+    return {
+        "success": True,
+        **library_service.delete_entry(payload.path, recursive=payload.recursive),
+    }
+
+
 @router.post("/scan", summary="扫描媒体库")
 def scan(user: OperatorUser, path: str | None = None) -> dict[str, Any]:
     return {"success": True, **library_service.scan_library(path)}
@@ -90,21 +129,6 @@ def transfer(payload: TransferRequest, user: OperatorUser) -> dict[str, Any]:
         "succeeded": sum(1 for item in items if item.success),
         "items": items,
     }
-
-
-@router.post("/scrape", summary="批量补刮 NFO 与图片")
-async def scrape(payload: ScrapeRequest, user: OperatorUser) -> dict[str, Any]:
-    """给媒体库里**缺 NFO** 的文件补刮元数据。
-
-    默认不覆盖已有 NFO，因此可以反复执行；TMDB 不可用时会退化成
-    只含标题/年份的最小 NFO（统计里的 ``degraded``），不会整批失败。
-    """
-    from app.services import scraper as scraper_service
-
-    result = await scraper_service.scrape_library(
-        payload.path, limit=payload.limit, overwrite=payload.overwrite
-    )
-    return {"success": True, **result}
 
 
 @router.post("/refresh", summary="刷新媒体服务器")

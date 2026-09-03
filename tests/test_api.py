@@ -508,19 +508,9 @@ def test_pan_subscribe_unknown_id_returns_404(client, auth_headers):
     )
 
 
-# ------------------------------------------------------------- 刮削与洗版接口
-def test_library_scrape_endpoint(client, auth_headers, tmp_media):
-    """补刮接口：对空库也要返回统计而不是报错。"""
-    response = client.post(
-        "/api/v1/library/scrape",
-        json={"limit": 5, "overwrite": False},
-        headers=auth_headers,
-    )
-    assert response.status_code == 200, response.text
-    body = response.json()
-    assert {"scanned", "scraped", "skipped", "degraded"} <= set(body)
-
-
+# ------------------------------------------------------------------- 洗版接口
+#: 原 test_library_scrape_endpoint 已删除：刮削在 v1.24.0 整体下线（ADR-96）。
+#: 「旧端点必须 404」这条断言迁到 tests/test_library_ops.py::test_api_scrape_endpoint_is_gone。
 def test_subscribe_upgrade_endpoint(client, auth_headers):
     """洗版试算：未开最优版本的订阅要明确说明，不存在的回 404。"""
     created = client.post(
@@ -561,7 +551,7 @@ def test_settings_groups_include_new_features(client, auth_headers):
     titles = {group["title"] for group in body["groups"]}
     assert {"刮削与分类", "STRM 同步", "分享追更与洗版"} <= titles
     keys = {item["key"] for group in body["groups"] for item in group["items"]}
-    assert {"SCRAPE_ENABLED", "STRM_LINK_MODE", "UPGRADE_ENABLED", "CATEGORY_ENABLED"} <= keys
+    assert {"STRM_LINK_MODE", "UPGRADE_ENABLED", "CATEGORY_ENABLED"} <= keys
 
 
 def test_migrate_columns_upgrades_legacy_table(tmp_path):
@@ -660,8 +650,6 @@ def test_settings_groups_include_v150_features(client, auth_headers):
         "SITE_AUTO_DISABLE",
         "DOWNLOADER_STRATEGY",
         "DOWNLOADER_FAILOVER",
-        "RANKING_INTERVAL_MINUTES",
-        "RANKING_MAX_PER_RUN",
     } <= keys
     # 每一项都要带出界面渲染所需的元信息，否则设置页没法画控件
     sample = next(
@@ -677,7 +665,6 @@ def test_v150_endpoints_smoke(client, auth_headers):
     for path in (
         "/api/v1/site-health",
         "/api/v1/site-health/records",
-        "/api/v1/ranking-rules",
         "/api/v1/rule-groups",
         "/api/v1/users",
     ):
@@ -690,24 +677,24 @@ def test_settings_update_and_reset(client, auth_headers):
     """在线改配置要真生效，并且能恢复默认。"""
     from app.core.config import settings
 
-    original = settings.RANKING_MAX_PER_RUN
+    original = settings.SEARCH_TIMEOUT
     try:
         response = client.put(
             "/api/v1/system/settings",
             headers=auth_headers,
-            json={"values": {"RANKING_MAX_PER_RUN": original + 3}},
+            json={"values": {"SEARCH_TIMEOUT": original + 3}},
         )
         assert response.status_code == 200, response.text
         # 关键点：改完 settings 单例要立刻是新值，否则"能改"只是假象
-        assert original + 3 == settings.RANKING_MAX_PER_RUN
+        assert original + 3 == settings.SEARCH_TIMEOUT
 
         reset = client.post(
             "/api/v1/system/settings/reset",
             headers=auth_headers,
-            json={"keys": ["RANKING_MAX_PER_RUN"]},
+            json={"keys": ["SEARCH_TIMEOUT"]},
         )
         assert reset.status_code == 200
-        assert original == settings.RANKING_MAX_PER_RUN
+        assert original == settings.SEARCH_TIMEOUT
     finally:
         client.post(
             "/api/v1/system/settings/reset", headers=auth_headers, json={"keys": None}
@@ -761,8 +748,8 @@ def test_subscribe_accepts_rule_group(client, auth_headers):
 
 
 def test_schedules_expose_v150_jobs(client, auth_headers):
-    """站点健康与榜单订阅两个新任务要出现在调度列表里。"""
+    """站点健康任务要出现在调度列表里（榜单订阅已于 v1.24.0 移除）。"""
     response = client.get("/api/v1/schedules", headers=auth_headers)
     assert response.status_code == 200
     keys = {item["key"] for item in response.json()["items"]}
-    assert {"site_health", "ranking"} <= keys
+    assert {"site_health"} <= keys

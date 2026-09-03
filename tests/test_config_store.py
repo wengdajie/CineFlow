@@ -28,7 +28,7 @@ def test_editable_whitelist_excludes_restart_only_keys():
         assert not config_store.is_editable(key), f"{key} 不该可在线修改"
     # 运行期读取即生效的项必须在白名单里
     for key in ("TRANSFER_MODE", "SEARCH_TIMEOUT", "SUBSCRIBE_INTERVAL_MINUTES",
-                "DOWNLOADER_STRATEGY", "RANKING_MAX_PER_RUN", "SITE_HEALTH_ENABLED"):
+                "DOWNLOADER_STRATEGY", "SITE_HEALTH_ENABLED"):
         assert config_store.is_editable(key), f"{key} 应该可在线修改"
 
 
@@ -50,9 +50,9 @@ def test_describe_reports_metadata():
 @pytest.mark.parametrize(
     ("key", "raw", "expected"),
     [
-        ("SCRAPE_ENABLED", "true", True),
-        ("SCRAPE_ENABLED", "关闭", False),
-        ("SCRAPE_ENABLED", 1, True),
+        ("CATEGORY_ENABLED", "true", True),
+        ("CATEGORY_ENABLED", "关闭", False),
+        ("CATEGORY_ENABLED", 1, True),
         ("SEARCH_TIMEOUT", "45", 45),
         ("UPGRADE_SCORE_DELTA", "12.5", 12.5),
         ("PREFER_RESOLUTIONS", "2160p, 1080p", ["2160p", "1080p"]),
@@ -69,14 +69,14 @@ def test_coerce_valid(key, raw, expected):
 @pytest.mark.parametrize(
     ("key", "raw"),
     [
-        ("SCRAPE_ENABLED", "maybe"),      # 非布尔
+        ("CATEGORY_ENABLED", "maybe"),    # 非布尔
         ("SEARCH_TIMEOUT", "abc"),        # 非数字
         ("SEARCH_TIMEOUT", "1.5"),        # 整数项给了小数
         ("SEARCH_TIMEOUT", 1),            # 低于下限 3
         ("SEARCH_TIMEOUT", 99999),        # 高于上限 300
         ("DOWNLOADER_STRATEGY", "random"),  # 非法枚举
         ("LIBRARY_SCAN_CRON", "not a cron"),  # 非法 cron
-        ("SCRAPE_CRON", "60 25 * * *"),   # 越界 cron
+        ("LIBRARY_SCAN_CRON", "60 25 * * *"),  # 越界 cron
         ("NOT_A_KEY", "x"),               # 不在白名单
     ],
 )
@@ -88,7 +88,7 @@ def test_coerce_rejects(key, raw):
 def test_cron_validation_shares_scheduler_rules():
     """cron 校验必须复用调度器的解析器，否则设置页放过、调度器起不来。"""
     assert config_store.coerce("LIBRARY_SCAN_CRON", "30 3 * * *") == "30 3 * * *"
-    assert config_store.coerce("SCRAPE_CRON", "") == ""
+    assert config_store.coerce("LIBRARY_SCAN_CRON", "") == ""
 
 
 # ---------------- update / 立即生效 / 持久化 ----------------

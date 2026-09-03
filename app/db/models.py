@@ -444,39 +444,6 @@ class SiteHealthRecord(IdMixin, TimestampMixin, Base):
     message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
-class RankingRule(IdMixin, TimestampMixin, Base):
-    """榜单自动订阅规则。
-
-    对标 MoviePilot 的「榜单订阅」：把某个榜单（TMDB 热门/高分/趋势）
-    的前 N 项自动变成订阅，免得每部剧都手动加。
-    """
-
-    __tablename__ = "ranking_rules"
-    __table_args__ = (UniqueConstraint("name", name="uq_ranking_rule_name"),)
-
-    name: Mapped[str] = mapped_column(String(128), index=True)
-    #: 榜单来源：tmdb_trending / tmdb_popular / tmdb_top_rated / local_trending
-    source: Mapped[str] = mapped_column(String(32), default="tmdb_trending", index=True)
-    media_type: Mapped[str] = mapped_column(String(16), default=MediaType.TV.value)
-    #: 取榜单前多少项参与匹配
-    limit: Mapped[int] = mapped_column(Integer, default=10)
-    #: 最低评分门槛（TMDB vote_average），0 表示不限
-    min_vote: Mapped[float] = mapped_column(Float, default=0.0)
-    #: 只要这些年份之后的（避免把老片全刷进来）
-    min_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    #: 标题包含/排除关键词
-    include: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    exclude: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    #: 创建订阅时套用的过滤条件（resolution/quality/include/exclude 等）
-    subscribe_defaults: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
-    enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
-    #: 已由本规则创建过的 tmdb_id，避免用户删掉订阅后又被自动加回来
-    handled_ids: Mapped[list[int]] = mapped_column(JSON, default=list)
-    last_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    last_result: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_count: Mapped[int] = mapped_column(Integer, default=0)
-
-
 class VideoSubscribe(IdMixin, TimestampMixin, Base):
     """网页视频订阅（UP 主 / YouTube 频道 / 播放列表 更新自动下载）。
 

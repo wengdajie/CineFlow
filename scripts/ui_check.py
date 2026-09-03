@@ -19,7 +19,6 @@ PAGES = [
     ("trending", "热度排行"),
     ("subscribes", "订阅追新"),
     ("radar", "追新雷达"),
-    ("ranking", "榜单订阅"),
     ("rules", "过滤规则组"),
     ("schedules", "定时任务"),
     ("downloads", "下载任务"),
@@ -558,8 +557,9 @@ def main():
         page.wait_for_timeout(1500)
         body = page.inner_text("body")
         print(f"   定时任务页含「定时任务」：{'定时任务' in body}")
+        # 「媒体库补刮」「榜单订阅」两个任务已于 v1.24.0 下线（ADR-96）
         for name in ("订阅巡检", "追新雷达", "下载状态同步", "媒体库全量扫描", "网盘待转存",
-                     "网盘分享追更", "STRM 同步", "媒体库补刮", "洗版巡检"):
+                     "网盘分享追更", "STRM 同步", "洗版巡检"):
             print(f"   任务「{name}」显示：{name in body}")
         page.screenshot(path=str(SHOTS / "22-schedules.png"), full_page=True)
 
@@ -676,7 +676,7 @@ def main():
         page.wait_for_timeout(1500)
         body = page.inner_text("body")
         print(f"   设置页含「设置」：{'设置' in body}")
-        for name in ("网盘管理", "ChatOps 机器人", "调度", "刮削与分类", "STRM 同步", "分享追更与洗版"):
+        for name in ("网盘管理", "ChatOps 机器人", "调度", "分类", "STRM 同步", "分享追更与洗版"):
             print(f"   配置分组「{name}」显示：{name in body}")
         print(f"   敏感项已脱敏：{'已设置' in body or 'SECRET_KEY' in body}")
 
@@ -885,20 +885,28 @@ def main():
             errors.append("[pansub] 未找到「新建任务」按钮")
 
         print("\n" + "=" * 68)
-        print("6l) 交互测试：媒体库补刮 / 订阅洗版试算")
+        print("6l) 交互测试：媒体库本地文件浏览（面包屑 / 重命名弹窗）")
         print("=" * 68)
+        # 刮削已于 v1.24.0 下线（ADR-96），这一段改点检顶替它的「本地文件」卡片
         page.goto(f"{BASE}/#library", wait_until="networkidle")
         page.wait_for_timeout(1400)
         body = page.inner_text("body")
-        print(f"   媒体库页含「补刮 NFO」按钮：{'补刮' in body}")
-        scrape = page.get_by_text("补刮 NFO", exact=False).first
-        if scrape.count():
-            scrape.click()
-            page.wait_for_timeout(3000)
-            print(f"   补刮后页面文本长度：{len(page.inner_text('body'))}")
-            page.screenshot(path=str(SHOTS / "35-library-scrape.png"), full_page=True)
+        print(f"   媒体库页含「本地文件」卡片：{'本地文件' in body}")
+        print(f"   含「已入库索引」表：{'已入库索引' in body}")
+        print(f"   已无「补刮 NFO」按钮：{'补刮' not in body}")
+        if "补刮" in body:
+            errors.append("[library] 刮削已下线，但页面上还有「补刮」入口")
+        if "本地文件" not in body:
+            errors.append("[library] 未找到「本地文件」浏览卡片")
+        # 「全部位置」是面包屑根按钮，点它应当列出可用根目录
+        roots_btn = page.get_by_text("全部位置", exact=False).first
+        if roots_btn.count():
+            roots_btn.click()
+            page.wait_for_timeout(1200)
+            print(f"   点「全部位置」后文本长度：{len(page.inner_text('body'))}")
         else:
-            errors.append("[library] 未找到「补刮 NFO」按钮")
+            errors.append("[library] 未找到面包屑「全部位置」按钮")
+        page.screenshot(path=str(SHOTS / "35-library-browse.png"), full_page=True)
 
         print("\n" + "=" * 68)
         print("6m) 交互测试：站点健康页（概览 / 手动探测）")
@@ -925,32 +933,22 @@ def main():
             errors.append("[sitehealth] 未找到「立即巡检」按钮")
 
         print("\n" + "=" * 68)
-        print("6n) 交互测试：榜单订阅页（新建规则弹窗 / 试算）")
+        print("6n) 交互测试：榜单订阅页已下线（v1.24.0，ADR-96）")
         print("=" * 68)
+        # 删页面最怕留半截：菜单项删了但路由还在（或反之）。两头都点一下。
         page.goto(f"{BASE}/#ranking", wait_until="networkidle")
-        page.wait_for_timeout(1500)
+        page.wait_for_timeout(1200)
         body = page.inner_text("body")
-        print(f"   榜单订阅页含「榜单订阅」：{'榜单订阅' in body}")
-        print(f"   含概览卡：{all(word in body for word in ('榜单规则', '启用中', '巡检周期'))}")
-        print(f"   含定时执行卡：{'定时执行' in body}")
-        page.screenshot(path=str(SHOTS / "38-ranking.png"), full_page=True)
-
-        new_rule = wait_button(page, "新建")
-        if new_rule:
-            new_rule.click()
-            page.wait_for_timeout(900)
-            modal = page.locator(".modal")
-            fields = page.locator(".modal .field").count()
-            print(f"   榜单规则弹窗渲染：{modal.count() > 0}（字段 {fields} 个）")
-            if modal.count():
-                modal_text = page.inner_text(".modal")
-                print(f"   弹窗含来源选择：{'来源' in modal_text}")
-                print(f"   弹窗含评分门槛：{'评分' in modal_text}")
-                print(f"   弹窗含数量上限：{'数量' in modal_text or '条数' in modal_text}")
-                page.screenshot(path=str(SHOTS / "39-ranking-modal.png"))
-            close_modal(page)
-        else:
-            errors.append("[ranking] 未找到「新建」按钮")
+        gone = "榜单规则" not in body and "巡检周期" not in body
+        print(f"   #ranking 已不再渲染榜单订阅页：{gone}")
+        if not gone:
+            errors.append("[ranking] 榜单订阅已下线，但 #ranking 仍渲染出该页")
+        page.goto(f"{BASE}/#dashboard", wait_until="networkidle")
+        page.wait_for_timeout(900)
+        nav = page.inner_text("body")
+        if "榜单订阅" in nav:
+            errors.append("[ranking] 侧边栏仍有「榜单订阅」菜单项")
+        print(f"   侧边栏已无「榜单订阅」入口：{'榜单订阅' not in nav}")
 
         print("\n" + "=" * 68)
         print("6o) 交互测试：过滤规则组页（内置模板 / 试算分层）")
@@ -1022,7 +1020,7 @@ def main():
         body = page.inner_text("body")
         print(f"   设置页含分组标题：{'站点健康' in body}")
         print(f"   含下载器调度分组：{'下载器' in body}")
-        print(f"   含榜单订阅分组：{'榜单' in body}")
+        print(f"   含 RSS 追新分组：{'RSS' in body}")
         inputs = page.locator(".card input, .card select").count()
         print(f"   可编辑控件 {inputs} 个")
         if inputs == 0:
