@@ -305,8 +305,8 @@ check("README 说明定时任务可改期", "定时任务" in README and "cron" 
 
 # ---- 测试文件 ----
 test_files = sorted(p.name for p in pathlib.Path("tests").glob("test_*.py"))
-check("测试文件 58 个", len(test_files) == 58, str(test_files))
-check("README 声明 58 个测试文件", "58 个测试文件" in README)
+check("测试文件 59 个", len(test_files) == 59, str(test_files))
+check("README 声明 59 个测试文件", "59 个测试文件" in README)
 for name in ("test_custom_sites.py", "test_radar.py", "test_trending.py",
              # test_nfo / test_scraper / test_ranking 已随功能下线（ADR-96）
              "test_panstorage.py", "test_chatops.py", "test_library_ops.py",
@@ -340,9 +340,14 @@ _aria2_src = pathlib.Path("app/providers/downloader/aria2.py").read_text(encodin
 check("aria2 会跟随 followedBy 到数据 GID", "followedBy" in _aria2_src and "_follow" in _aria2_src)
 _dl_tests = pathlib.Path("tests/test_downloaders.py").read_text(encoding="utf-8")
 check("aria2 磁力 GID 跟随有回归用例", "test_aria2_magnet_get_follows_to_data_gid" in _dl_tests)
-check("README 版本号 1.26.0", "1.26.0" in README_ONLY)
+check("README 版本号 1.27.0", "1.27.0" in README_ONLY)
 version_src = pathlib.Path("app/core/version.py").read_text(encoding="utf-8")
-check("代码版本号为 1.26.0", 'APP_VERSION = "1.26.0"' in version_src)
+check("代码版本号为 1.27.0", 'APP_VERSION = "1.27.0"' in version_src)
+# pyproject 的版本号此前漂移了 25 个版本（1.1.0 vs 1.26.0）——
+# 因为门禁只校验 README 与 version.py，没人看打包元数据。
+# 这条断言让「三处版本号」必须同源。
+_pyproject = pathlib.Path("pyproject.toml").read_text(encoding="utf-8")
+check("pyproject 版本号与代码一致", 'version = "1.27.0"' in _pyproject)
 check("README 声明 314 项接口用例", "314 项真实 HTTP 接口用例" in README)
 check("scripts/README 声明 321 项", "321 项接口用例" in SCRIPTS_README)
 
@@ -2129,6 +2134,43 @@ check("bitsearch 区分「零结果」与「解析失效」", "_NO_RESULT_MARKER
 # bt4g 必须校验根节点：HTML 错误页也是合法 XML
 _b4 = pathlib.Path("app/providers/indexer/bt4g.py").read_text(encoding="utf-8")
 check("bt4g 校验 RSS 根节点", 'root.tag.lower() != "rss"' in _b4)
+
+# ---- v1.27.0 / M60：站点会自己失效（ADR-103）----
+check("ADR-103 记录站点侧失效与四个可验证问题（v1.27.0）", "## ADR-103 ·" in _adr)
+check("路线图有里程碑 M60", "里程碑 M60 ·" in roadmap_all)
+check("ADR-103 写明 BT4G 5 个镜像全失效的实测", "5 个镜像" in _adr or "5/5" in _adr)
+check("ADR-103 引用 ADR-34 拒绝绕验证码", "ADR-34" in _adr)
+
+# 人机验证识别：拦截页回 HTTP 200，靠状态码分不出来
+_http_src = pathlib.Path("app/utils/http.py").read_text(encoding="utf-8")
+check("http 层提供 is_cf_challenge", "def is_cf_challenge(" in _http_src)
+check("人机验证有长度闸门防误判大页面", "8192" in _http_src)
+check("人机验证标记含 cf_chl_out", "cf_chl_out" in _http_src)
+
+# 两个 Provider 都要接进去，且 health_check 不能把异常抛给 API 层
+for _name in ("bt4g", "bitsearch"):
+    _src = pathlib.Path(f"app/providers/indexer/{_name}.py").read_text(encoding="utf-8")
+    check(f"{_name} 接入人机验证识别", "is_cf_challenge(" in _src)
+    check(f"{_name} health_check 捕获 FetchError 而非抛出",
+          "except FetchError as exc:" in _src)
+
+# Bitsearch 是唯一可用的通用磁力源：翻页 + 镜像回退 + 部分成功不丢结果
+check("bitsearch 有备用域名", "FALLBACK_BASES" in _bs)
+check("bitsearch 支持翻页", "_DEFAULT_MAX_PAGES" in _bs and "max_pages" in _bs)
+check("bitsearch 跨页按 infohash 去重", "def _dedupe_key(" in _bs)
+check("bitsearch 翻页失败保留已取回结果", "first_error" in _bs)
+
+# 已知失效的预设必须默认关闭，且 site_payload 真的读这个字段
+check("site_payload 尊重预设的 enabled 字段", 'preset.get("enabled") is False' in _catalog_src)
+check("bt4g 预设如实标记未验证", '"verified": False' in _catalog_src)
+
+_v127 = pathlib.Path("tests/test_bt_coverage_v127.py").read_text(encoding="utf-8")
+for _t in ("test_大页面即使含挑战路径也不误判",
+           "test_解析拦截页报人机验证而非改版",
+           "test_第二页失败保留第一页结果",
+           "test_主域名不可达时换备用域名",
+           "test_请求启用也不会启用已失效的源"):
+    check(f"v1.27.0 回归用例 {_t}", _t in _v127)
 
 # 假种识别的两道闸门
 _filters_src = pathlib.Path("app/core/filters.py").read_text(encoding="utf-8")

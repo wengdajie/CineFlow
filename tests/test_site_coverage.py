@@ -141,10 +141,21 @@ class TestSiteCatalog:
         assert site_catalog.list_bt_presets()
 
     def test_every_bt_preset_has_evidence(self) -> None:
-        """``measured`` 是收录凭据。缺了它，"实测可用"就成了一句空话。"""
+        """``measured`` 是收录凭据。缺了它，"实测可用"就成了一句空话。
+
+        ``verified`` 原先断言恒为 True，那是把"清单里的站点永远可用"当成了
+        不变量 —— 站点是别人的，随时会变。v1.27.0 实测 BT4G 全部 5 个镜像
+        都上了 Cloudflare 人机验证，此时**如实写 False** 才是对的：
+        谎报 verified 会让用户以为是自己配错了，去反复折腾代理和域名。
+        真正的不变量是「必须有实测凭据」和「不可用的必须默认关闭」。
+        """
         for preset in site_catalog.list_bt_presets():
             assert preset.get("measured"), f"{preset['id']} 缺少实测凭据"
-            assert preset.get("verified") is True
+            assert isinstance(preset.get("verified"), bool), f"{preset['id']} 未表态"
+            if preset.get("verified") is False:
+                # 已知不可用的源必须默认关闭，否则每次搜索都白等一个死站
+                assert preset.get("enabled") is False, f"{preset['id']} 未验证却默认启用"
+                assert preset.get("caveat"), f"{preset['id']} 未说明为何不可用"
             assert preset.get("provider")
             assert str(preset.get("url", "")).startswith("http")
 

@@ -70,7 +70,7 @@ from app.core.logger import get_logger
 from app.providers.base import Resource, SearchProvider
 from app.providers.registry import register
 from app.schemas.enums import ProviderKind, ResourceKind
-from app.utils.http import FetchError, fetch_text
+from app.utils.http import FetchError, fetch_text, is_cf_challenge
 
 logger = get_logger(__name__)
 
@@ -183,6 +183,14 @@ class Bt4gIndexer(SearchProvider):
         用 ``ElementTree`` 而不是正则：标题里含 ``&amp;``/``<``  等转义，
         正则取出来还得自己反转义一遍，容易漏。
         """
+        # 人机验证要在 XML 解析**之前**判：拦截页是 HTML，
+        # ET 会抛 ParseError，于是错报成「站点已改版」（实测原文案就是这样，
+        # 而改版和上验证码要做的事完全不同 —— 见 is_cf_challenge 文档）。
+        if is_cf_challenge(text):
+            raise FetchError(
+                "BT4G 返回 Cloudflare 人机验证页（无法绕过，按 ADR-34 不做逆向）。"
+                "该站已对 RSS 端点启用校验，请改用其它 BT 源或换镜像域名"
+            )
         try:
             root = ET.fromstring(text)
         except ET.ParseError as exc:
@@ -269,7 +277,13 @@ class Bt4gIndexer(SearchProvider):
         )
         if not text:
             return False, "无法连接 BT4G（检查网络/代理，或换一个镜像域名）"
-        resources = self._parse(text)
+        # 契约是**返回** (bool, str)，不是抛异常：调用方
+        # （sites.py 的 /test 端点、site_health 的巡检）都直接解包，
+        # 抛出去会变成 HTTP 500，用户看到的是「服务器错误」而不是原因。
+        try:
+            resources = self._parse(text)
+        except FetchError as exc:
+            return False, str(exc)[:255]
         if not resources:
             return False, "接口连通但未解析到磁力（站点可能已改版）"
         return True, f"连通正常，搜索「1080p」返回 {len(resources)} 条"

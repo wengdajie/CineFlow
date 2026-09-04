@@ -122,6 +122,42 @@ def describe_http_error(exc: Exception) -> tuple[str, int | None, str]:
     return f"{type(exc).__name__}: {str(exc)[:120]}", None, "error"
 
 
+#: Cloudflare 的「浏览器校验」拦截页特征。
+#:
+#: **为什么需要单独识别**：这种页面回的是 **HTTP 200**，内容是一段 JS，
+#: 靠状态码完全看不出问题。下游拿它去解析只会得到「0 条」或
+#: 「不是合法 RSS」，两者都会把「站点上了人机验证」误报成
+#: 「这个站没有这部片」或「站点改版了」—— 处置动作完全不同（ADR-82）：
+#: 改版要改解析代码，人机验证只能换镜像/等它撤下，改代码没有用。
+#:
+#: 实测（2026-09-04，BT4G 全部 5 个镜像域名）：
+#: ``<title>Security Check</title>`` + ``cf_chl_out`` cookie + rocket-loader，
+#: 长度稳定在 2441~2444 字节。
+#:
+#: 按 ADR-34：**只识别、不绕过**。伪造 ``cf_chl_out`` 属于绕验证码，不做。
+_CF_CHALLENGE_MARKERS = (
+    "cf_chl_out",
+    "<title>Security Check</title>",
+    "Just a moment",
+    "cf-browser-verification",
+    "/cdn-cgi/challenge-platform/",
+)
+
+
+def is_cf_challenge(text: str | None) -> bool:
+    """响应体是否是 Cloudflare/类似的人机校验拦截页。
+
+    只在**短文档**里判定：真实的搜索结果页也可能顺带提到
+    ``/cdn-cgi/`` 之类的静态资源路径，而拦截页实测都在 3KB 以内。
+    不设这道长度闸门会把正常的大页面误判成被拦（假阳性比漏判更糟：
+    会把好站点标成坏的）。
+    """
+    body = str(text or "")
+    if not body or len(body) > 8192:
+        return False
+    return any(marker in body for marker in _CF_CHALLENGE_MARKERS)
+
+
 async def fetch_text_result(
     url: str,
     *,

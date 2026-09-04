@@ -62,7 +62,7 @@ from app.core.logger import get_logger
 from app.providers.base import Resource, SearchProvider
 from app.providers.registry import register
 from app.schemas.enums import ProviderKind, ResourceKind
-from app.utils.http import FetchError, fetch_text_result
+from app.utils.http import FetchError, fetch_text_result, is_cf_challenge
 from app.utils.strings import parse_size
 
 logger = get_logger(__name__)
@@ -70,6 +70,20 @@ logger = get_logger(__name__)
 #: 官方域名。``bitsearch.to`` 实测持续 500（该域名已废），
 #: ``bitsearch.eu`` 才是可用的；页面里的 canonical 仍指向 .to，属站点自身未更新。
 DEFAULT_BASE = "https://bitsearch.eu"
+
+#: 备用域名，主域名故障时依次尝试。
+#:
+#: **为什么必须有**：v1.27.0 实测 BT4G 全部 5 个镜像都上了 Cloudflare 人机验证，
+#: Bitsearch 成了本项目**唯一**还能覆盖华语综艺/剧集的通用磁力源。
+#: 单点故障就是「BT 搜索整体归零」，而该站实测在并发下会返回 500/读超时。
+#:
+#: 实测（2026-09-04，关键词「喜剧之王单口季」「流浪地球」）：
+#: 三个域名返回的卡片**逐条一致**（同 infohash、同做种数），
+#: 说明是同一后端的镜像，可以安全互换。
+FALLBACK_BASES: tuple[str, ...] = (
+    "https://solidtorrents.to",
+    "https://bitsearch.to",
+)
 
 BROWSER_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -88,6 +102,13 @@ _TITLE_RE = re.compile(r'<a href="/torrent/([0-9a-f]+)"[^>]*>\s*(.*?)\s*</a>', r
 _MAGNET_RE = re.compile(r'href="(magnet:\?xt[^"]+)"')
 _INFOHASH_RE = re.compile(r"/download/torrent/([0-9a-fA-F]{40})")
 _TAG_RE = re.compile(r"<[^>]+>")
+
+#: 默认翻几页。
+#:
+#: 实测（2026-09-04）：「喜剧之王单口季」第 1 页 20 条、第 2 页 15 条，
+#: 第 3 页读超时 —— 即 2 页能拿到 35 条（单页的 1.75 倍），
+#: 再往后该站自己就撑不住了。设 2 是「多拿一页」与「别把站点打挂」的折中。
+_DEFAULT_MAX_PAGES = 2
 
 #: Swarm 统计块：图标 class 决定含义，紧跟的 ``<span class="font-medium">`` 是数值。
 #: 不靠出现顺序取值 —— 站点把做种/下载数的顺序换一下就会静默取错。
@@ -147,14 +168,28 @@ class BitsearchIndexer(SearchProvider):
     def _base(self) -> str:
         return str(self.config.get("url") or DEFAULT_BASE).rstrip("/")
 
-    def _search_url(self, keyword: str, page: int = 0) -> str:
+    def _bases(self) -> list[str]:
+        """要依次尝试的域名：用户配的（或默认）在前，备用镜像在后。
+
+        用户显式配了 ``url`` 时**仍然**追加备用域名 —— 该站单点故障
+        等于整个 BT 搜索归零（见 FALLBACK_BASES 文档），
+        为一个不可达的地址守节没有任何用户价值。
+        """
+        primary = self._base()
+        bases = [primary]
+        for candidate in FALLBACK_BASES:
+            if candidate.rstrip("/") != primary:
+                bases.append(candidate)
+        return bases
+
+    def _search_url(self, keyword: str, page: int = 0, base: str | None = None) -> str:
         """搜索地址。
 
         关键词走 ``quote_plus``：它是 **query 参数**（``?q=``），
         这里 ``+`` 正是空格的正确编码 —— 与 BT4G 的路径段情形相反，
         两者不能互换（BT4G 用 quote，见该模块注释）。
         """
-        url = f"{self._base()}/search?q={quote_plus(keyword)}"
+        url = f"{(base or self._base()).rstrip('/')}/search?q={quote_plus(keyword)}"
         order = str(self.option("sort", "") or "").strip()
         if order:
             url = f"{url}&sort={quote_plus(order)}"
@@ -169,6 +204,13 @@ class BitsearchIndexer(SearchProvider):
         零结果与解析失效必须分开：前者页面带 ``No results found``，
         后者是站点改版导致卡片标记失配 —— 都表现为 0 条，处置却相反（ADR-82）。
         """
+        # 人机验证页也没有卡片标记，会落进下面「站点可能已改版」的分支。
+        # 两者的下一步完全不同（改版=改代码，验证=换镜像/等它撤），必须分开报。
+        if is_cf_challenge(text):
+            raise FetchError(
+                "Bitsearch 返回 Cloudflare 人机验证页（无法绕过，按 ADR-34 不做逆向）。"
+                "请稍后重试或在站点配置里换一个镜像域名"
+            )
         cards = text.split(_CARD_MARKER)[1:]
         if not cards:
             if _NO_RESULT_MARKER in text:
@@ -238,19 +280,79 @@ class BitsearchIndexer(SearchProvider):
         query = str(keyword or "").strip()
         if not query:
             return []
-        # 用 fetch_text_result 而非 fetch_text：非 200 必须抛错。
-        # 实测该站在并发压力下会返回 500，那是**限流**不是「查无此项」，
-        # 当成空结果会让用户以为站点没收录（ADR-82）。
-        text = await fetch_text_result(
-            self._search_url(query, page),
-            headers={"User-Agent": BROWSER_UA, "Accept-Language": "zh-CN,zh;q=0.9"},
-            timeout=self.config.get("timeout"),
+        collected: list[Resource] = []
+        seen: set[str] = set()
+        #: 只有**第一页**失败才算站点故障。翻页失败（实测 500/读超时很常见）
+        #: 不能让已经拿到的第一页结果一起丢掉 —— 那是把「部分成功」降级成
+        #: 「彻底失败」，比不翻页更糟。
+        first_error: FetchError | None = None
+        pages = max(int(self.option("max_pages", _DEFAULT_MAX_PAGES) or 1), 1)
+        for offset in range(pages):
+            current = page + offset
+            try:
+                text = await self._fetch_page(query, current)
+            except FetchError as exc:
+                if offset == 0:
+                    first_error = exc
+                else:
+                    logger.info(
+                        "Bitsearch 第 %d 页失败（保留前 %d 条）：%s",
+                        current + 1,
+                        len(collected),
+                        exc,
+                    )
+                break
+            batch = self._parse(text)
+            fresh = [r for r in batch if self._dedupe_key(r) not in seen]
+            for item in batch:
+                seen.add(self._dedupe_key(item))
+            collected.extend(fresh)
+            # 空页或整页都是重复 → 已经翻到底，再翻只是白等
+            if not batch or not fresh:
+                break
+        if first_error is not None:
+            raise first_error
+        logger.info(
+            "Bitsearch 搜索「%s」：%d 条（翻 %d 页）", query, len(collected), pages
         )
-        if not text:
-            raise FetchError("Bitsearch 返回空响应（检查网络/代理）")
-        resources = self._parse(text)
-        logger.info("Bitsearch 搜索「%s」：%d 条", query, len(resources))
-        return resources
+        return collected
+
+    def _dedupe_key(self, resource: Resource) -> str:
+        """跨页去重用的键。
+
+        用 infohash 而不是标题：同一个种在不同页可能带不同的站点前缀
+        （实测标题里含 ``【高清剧集网发布 www.XXX.com】``，域名部分会变）。
+        infohash 缺失时退回链接，绝不退回标题。
+        """
+        return str((resource.extra or {}).get("infohash") or resource.link or "")
+
+    async def _fetch_page(self, query: str, page: int) -> str:
+        """取一页，逐个域名尝试。
+
+        用 fetch_text_result 而非 fetch_text：非 200 必须抛错。
+        实测该站在并发压力下会返回 500，那是**限流**不是「查无此项」，
+        当成空结果会让用户以为站点没收录（ADR-82）。
+        """
+        last: FetchError | None = None
+        for base in self._bases():
+            try:
+                text = await fetch_text_result(
+                    self._search_url(query, page, base=base),
+                    headers={
+                        "User-Agent": BROWSER_UA,
+                        "Accept-Language": "zh-CN,zh;q=0.9",
+                    },
+                    timeout=self.config.get("timeout"),
+                )
+            except FetchError as exc:
+                last = exc
+                logger.info("Bitsearch 域名 %s 失败，尝试下一个：%s", base, exc)
+                continue
+            if not text:
+                last = FetchError("Bitsearch 返回空响应（检查网络/代理）")
+                continue
+            return text
+        raise last or FetchError("Bitsearch 返回空响应（检查网络/代理）")
 
     async def fetch_latest(self, limit: int = 100) -> list[Resource]:
         """Bitsearch 没有「全站最新」端点，如实返回空而不是伪造一批。"""
@@ -265,7 +367,12 @@ class BitsearchIndexer(SearchProvider):
             return False, f"无法连接 Bitsearch：{exc}"
         if not text:
             return False, "无法连接 Bitsearch（检查网络/代理）"
-        resources = self._parse(text)
+        # 契约是返回 (bool, str) 而不是抛异常：调用方直接解包，
+        # 抛出去会让 /sites/{id}/test 变成 HTTP 500（掩盖真实原因）。
+        try:
+            resources = self._parse(text)
+        except FetchError as exc:
+            return False, str(exc)[:255]
         if not resources:
             return False, "接口连通但未解析到磁力（站点可能已改版）"
         return True, f"连通正常，搜索「1080p」返回 {len(resources)} 条"

@@ -41,13 +41,21 @@ BT_SITE_PRESETS: list[dict[str, Any]] = [
         "provider": "bt4g",
         "url": "https://bt4gprx.com",
         "priority": 15,
-        "description": "公开 BT 聚合搜索，**免部署、免鉴权、中文关键词直接可用**。"
-                       "RSS 端点直出磁力链与体积，覆盖华语综艺/剧集/动漫，"
-                       "弥补 AnimeTosho/dmhy 偏动漫、torrents-csv 偏英文的缺口。",
-        "measured": "喜剧之王单口季 15 条（含真实磁力 + 体积），连续 4 次请求均 200 无限速",
-        "caveat": "不提供做种数（seeders=0），按体积排序优先；"
-                  "RSS 端点可用，HTML 端点被 Cloudflare 拦截（403）",
-        "verified": True,
+        "description": "公开 BT 聚合搜索。**2026-09-04 复测已失效**："
+                       "全部 5 个镜像域名（bt4gprx.com / bt4g.org / bt4g.com / "
+                       "www.bt4gprx.com / bt4gprx.org）的 RSS 端点都改成了 "
+                       "Cloudflare 人机验证页，返回 HTTP 200 + 一段 JS。"
+                       "按 ADR-34 不做逆向，因此保留 Provider 但**默认不启用**。",
+        "measured": "2026-09-04 实测：5/5 镜像返回 Cloudflare 人机验证页"
+                    "（2441~2444 字节，含 cf_chl_out），可用条目 0 条。"
+                    "此前 v1.26.0 实测「喜剧之王单口季」15 条 —— 站点侧变更，非本项目回归",
+        "caveat": "⚠️ 当前不可用：RSS 端点已被 Cloudflare 人机验证拦截。"
+                  "保留它是为了在站点撤下验证后能一键恢复；启用后搜索会如实报"
+                  "「返回人机验证页」而不是「没有结果」",
+        # 如实写 False：把已失效的源标成 verified 会让用户以为是自己配错了，
+        # 反复折腾代理/域名 —— 而实际做什么都没用（ADR-82 的口径要求）。
+        "verified": False,
+        "enabled": False,
         "options": {
             "orderby": "size",
             "note": "搜索词走 quote 而不是 quote_plus，+ 号不会被解成空格",
@@ -60,13 +68,16 @@ BT_SITE_PRESETS: list[dict[str, Any]] = [
         "provider": "bitsearch",
         "url": "https://bitsearch.eu",
         "priority": 16,
-        "description": "公开 BT 聚合搜索，**唯一同时提供做种数与中文覆盖**的免鉴权源。"
-                       "与 BT4G 结果互补：BT4G 不给 seeders，本站给真实做种/下载数，"
-                       "用户才能判断「这个种还下不下得动」。",
-        "measured": "喜剧之王单口季 20 条（做种数 0~11，体积 237KB~9.12GB），"
-                    "同一 URL 连打 10 次均 200/20 条无限速",
+        "description": "公开 BT 聚合搜索。BT4G 失效后，这是本项目**唯一**"
+                       "能覆盖华语综艺/剧集且提供真实做种数的免鉴权源 —— "
+                       "dmhy/nyaa/animetosho 只收动漫，torrents-csv 偏英文。"
+                       "内置 2 页翻页与镜像回退，因为它一旦挂掉 BT 搜索就整体归零。",
+        "measured": "2026-09-04 实测（翻 2 页）：「喜剧之王单口季」35 条、"
+                    "「流浪地球」40 条，相关性 100%，最高做种 99；"
+                    "主域名换成不可达地址时经 solidtorrents.to 回退仍拿到 40 条",
         "caveat": "收录含大量网盘引流假种（体积 <5MB 却标 4K），依赖体积过滤拦掉；"
-                  "并发压力下会返回 500（限流，非无结果），已按限流处理",
+                  "第 3 页起会读超时、并发下会返回 500（限流，非无结果），"
+                  "故默认只翻 2 页且翻页失败不影响已取回的结果",
         "verified": True,
         "options": {
             "sort": "seeders",
@@ -329,6 +340,12 @@ def site_payload(preset: dict[str, Any], *, enabled: bool = True) -> dict[str, A
     if note:
         options["note"] = note
     options["preset_id"] = preset["id"]
+    # 预设自己声明 ``enabled: False`` 的（已实测失效但保留待恢复的源）
+    # 即使批量导入时要求全部启用，也不能启用 —— 否则每次搜索都会多等一个
+    # 必然失败的站点，并在诊断里刷一条错误。调用方的 ``enabled`` 是
+    # 「默认怎么办」，预设里的显式 False 是「这个站现在真的不行」，后者更具体。
+    if preset.get("enabled") is False:
+        enabled = False
     return {
         "name": preset["name"],
         "kind": preset.get("kind") or ProviderKind.INDEXER.value,

@@ -1,9 +1,11 @@
 """用真实浏览器逐页点检 CineFlow 前端，捕获任何 JS 报错。"""
+import contextlib
 import os
 import re
 import sys
 from pathlib import Path
 
+from playwright.sync_api import TimeoutError as PlaywrightTimeout
 from playwright.sync_api import sync_playwright
 
 sys.stdout.reconfigure(encoding="utf-8")
@@ -594,7 +596,13 @@ def main():
         print("6g) 交互测试：网盘管理页（容量卡 / 转存弹窗）")
         print("=" * 68)
         page.goto(f"{BASE}/#storage", wait_until="networkidle")
-        page.wait_for_timeout(1600)
+        # 等按钮**真的出现**，而不是赌一个固定毫秒数。
+        # 这一页要等网盘容量接口回来才渲染工具栏，实测 1600ms 有时不够：
+        # 同一份代码连跑两次，一次报「未找到转存分享链接按钮」一次通过 ——
+        # 固定 sleep 让门禁自己变成了随机数发生器（superpowers:condition-based-waiting）。
+        # 超时不在这里报错：下面的 count() 会如实报缺失，不能吞掉结论
+        with contextlib.suppress(PlaywrightTimeout):
+            page.wait_for_selector("text=转存分享链接", timeout=15000)
         body = page.inner_text("body")
         print(f"   网盘页含「网盘管理」：{'网盘管理' in body}")
         print(f"   含待转存队列：{'待转存队列' in body}")
