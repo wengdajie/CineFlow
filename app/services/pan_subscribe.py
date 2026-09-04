@@ -36,6 +36,35 @@ from app.utils.strings import truncate
 logger = get_logger(__name__)
 
 
+# 单个订阅最多记忆多少条已转存文件。超限时截断末尾（保留最近转存的）。
+# 防止 JSON 字段无限膨胀导致页面加载慢 + 备份文件大。
+_MAX_SAVED_FILES = 1000
+
+
+def _as_naive_utc(value: Any) -> datetime | None:
+    """把用户提交的到期时间归一成**naive UTC**再落库。
+
+    ``PanSubscribe.expire_at`` 是不带时区的列，而 API 收到的可能是
+    ``2026-10-01T12:00:00+08:00``。直接存 aware 值的话，
+    :func:`_should_run` 里 ``expire.replace(tzinfo=utc)`` 会把 +08:00
+    当成 UTC 读，**期限凭空多出 8 小时**；混存 naive/aware 还会让
+    SQLAlchemy 的比较在某些后端上直接抛 TypeError。
+    """
+    if value in (None, ""):
+        return None
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            logger.warning("到期时间格式无法解析，已忽略：%s", value)
+            return None
+    if not isinstance(value, datetime):
+        return None
+    if value.tzinfo is not None:
+        value = value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value
+
+
 def _compile(pattern: str | None) -> re.Pattern[str] | None:
     """编译用户填的正则；写错了就当没填，**不能让界面上一个错正则搞崩巡检**。"""
     if not pattern:
@@ -47,6 +76,18 @@ def _compile(pattern: str | None) -> re.Pattern[str] | None:
         return None
 
 
+def saved_key(item: PanFile) -> str:
+    """这个文件在「已转存清单」里的身份。
+
+    用**分享内的完整路径**而不是文件名：递归列举后同名文件会来自不同
+    子目录（``/第一季/EP01.mp4`` 与 ``/第二季/EP01.mp4`` 都叫 ``EP01.mp4``），
+    只按名字去重会让第二季永远被当成「已转存过」而整季漏掉。
+
+    ``path`` 缺失时退回文件名，保证老数据与不填 path 的 Provider 仍能工作。
+    """
+    return str(item.path or "").strip() or item.name
+
+
 def match_files(
     files: list[PanFile],
     *,
@@ -54,7 +95,15 @@ def match_files(
     exclude: str | None = None,
     saved: list[str] | None = None,
 ) -> list[PanFile]:
-    """挑出「需要转存」的文件：符合过滤规则且尚未转存过。"""
+    """挑出「需要转存」的文件：符合过滤规则且尚未转存过。
+
+    去重同时认**路径**和**文件名**两种历史记录：v1.28.0 之前存的是纯文件名，
+    升级后如果只比路径，所有老订阅会把已转存过的文件重新转一遍
+    （网盘侧变成一堆 ``xxx(1).mp4``）。两种都查一遍才是无痛升级。
+
+    正则一律匹配**文件名**而不是路径：用户填 ``EP\\d+`` 是在描述文件，
+    拿整条路径去匹配会让父目录名意外参与判断。
+    """
     include_re = _compile(include)
     exclude_re = _compile(exclude)
     already = set(saved or [])
@@ -62,7 +111,7 @@ def match_files(
     for item in files:
         if item.is_dir:
             continue
-        if item.name in already:
+        if saved_key(item) in already or item.name in already:
             continue
         if include_re and not include_re.search(item.name):
             continue
@@ -191,18 +240,35 @@ async def check_one(subscribe_id: int, *, notify: bool = True) -> dict[str, Any]
         result["saved"] = len(pending) if outcome.success else 0
         result["message"] = outcome.message
         if outcome.success:
-            snapshot["saved_files"].extend(item.name for item in pending)
+            snapshot["saved_files"].extend(saved_key(item) for item in pending)
             # 转存成功后按规则重命名（网盘侧改名，失败不影响转存结果）
             if snapshot["rename_search"]:
                 await _rename_saved(storage, snapshot, pending)
 
-    _finish(
+    receipt = _finish(
         subscribe_id,
         snapshot,
         success=result["success"],
         message=result["message"],
         saved=result["saved"],
     )
+
+    if notify and receipt.get("invalidated"):
+        # 追更自己停了必须告诉用户。否则他要等到「怎么好久没更新」才察觉，
+        # 而那时的排查方向通常是错的（会去怀疑分享链接，而不是登录态）。
+        from app.services import notify as notify_service
+
+        await notify_service.send(
+            f"分享追更已失效：{receipt.get('name') or snapshot['name']}",
+            f"连续失败 {receipt.get('failure_count')} 次，已自动停止巡检。\n"
+            f"最后一次失败原因：{truncate(result['message'], 160)}\n"
+            "请检查分享链接是否仍有效、网盘 Cookie 是否过期；"
+            "修好后在任务上勾选「清除失效标记」即可重新开始。",
+            level=NotifyLevel.WARNING.value,
+            event=EventType.SITE_UNHEALTHY.value,
+            suppress_key=f"pan_subscribe.invalid:{subscribe_id}",
+            suppress_seconds=86400,
+        )
 
     if notify and result["saved"]:
         from app.services import notify as notify_service
@@ -218,7 +284,7 @@ async def check_one(subscribe_id: int, *, notify: bool = True) -> dict[str, Any]
 
 async def _rename_saved(storage, snapshot: dict[str, Any], files: list[PanFile]) -> int:
     """转存落地后按正则重命名（网盘需支持 rename，否则跳过）。"""
-    if not hasattr(storage, "rename"):
+    if not getattr(storage, "supports_rename", False):
         return 0
     target_dir = snapshot["target_dir"] or storage.root_path
     count = 0
@@ -228,9 +294,16 @@ async def _rename_saved(storage, snapshot: dict[str, Any], files: list[PanFile])
         )
         if new_name == item.name:
             continue
+        # 转存会**保留分享内的目录结构**，所以落地路径 = 落地目录 + 分享内的父目录。
+        # 只拼 target_dir + 文件名的话，凡是嵌在子目录里的文件都会因为
+        # 「路径不存在」而静默改名失败（rename 返回 False，没人看得见）。
+        share_dir = str((item.extra or {}).get("share_dir") or "").strip()
+        landed = storage.join_path(target_dir, share_dir, item.name)
         try:
-            if await storage.rename(storage.join_path(target_dir, item.name), new_name):
+            if await storage.rename(landed, new_name):
                 count += 1
+            else:
+                logger.debug("重命名未生效（网盘拒绝或路径不存在）：%s", landed)
         except Exception as exc:
             logger.debug("重命名失败 %s: %s", item.name, exc)
     return count
@@ -243,29 +316,52 @@ def _finish(
     success: bool,
     message: str,
     saved: int,
-) -> None:
-    """回写巡检结果：已转存清单、失败计数、失效标记。"""
+) -> dict[str, Any]:
+    """回写巡检结果：已转存清单、失败计数、失效标记。
+
+    返回 ``{"invalidated", "name", "failure_count"}`` 回执。
+    「本轮是否刚好被判定失效」只有这里算得出（依赖读改写后的计数），
+    但**通知不能在这里发**：本函数是同步的，而且还持着数据库事务 ——
+    一次慢速 webhook 会把事务和它的行锁一起拖住。所以把结论交给
+    异步调用方 :func:`check_one` 去推送。
+    """
+    just_invalidated = False
+    name = ""
+    failures = 0
     with session_scope() as session:
         record = session.get(PanSubscribe, subscribe_id)
         if not record:
-            return
+            return {"invalidated": False, "name": "", "failure_count": 0}
         record.last_checked_at = utcnow()
         record.last_message = (message or "")[:500]
         record.saved_files = snapshot["saved_files"]
         if success:
             record.failure_count = 0
             record.total_saved = (record.total_saved or 0) + saved
+            # 防 saved_files 无限膨胀：JSON 字段没有长度约束，追更跑几年后
+            # 这个数组会拖慢每一次列表查询（它随行一起被读出来）。
+            # 只保留最近的 N 条：更早的文件早就不在分享里了，留着也没用。
+            if len(record.saved_files or []) > _MAX_SAVED_FILES:
+                record.saved_files = record.saved_files[-_MAX_SAVED_FILES:]
         else:
             record.failure_count = (record.failure_count or 0) + 1
             # 连续失败到阈值就认定分享失效，停止无意义的重试
             if record.failure_count >= max(settings.PAN_SUBSCRIBE_MAX_FAILURES, 1):
                 record.invalid = True
                 record.status = SubscribeStatus.FAILED.value
+                just_invalidated = True
                 logger.warning(
                     "分享追更「%s」连续失败 %d 次，已标记失效",
                     record.name,
                     record.failure_count,
                 )
+        name = record.name
+        failures = record.failure_count or 0
+    return {
+        "invalidated": just_invalidated,
+        "name": name,
+        "failure_count": failures,
+    }
 
 
 async def check_all(*, limit: int = 50, notify: bool = True) -> dict[str, Any]:
@@ -324,12 +420,28 @@ def create(payload: dict[str, Any]) -> dict[str, Any]:
             exclude_regex=payload.get("exclude_regex") or None,
             rename_search=payload.get("rename_search") or None,
             rename_replace=payload.get("rename_replace") or None,
-            weekdays=[int(day) for day in (payload.get("weekdays") or [])],
+            weekdays=_validated_weekdays(payload.get("weekdays")),
+            expire_at=_as_naive_utc(payload.get("expire_at")),
             saved_files=[],
         )
         session.add(record)
         session.flush()
         return _to_dict(record)
+
+
+def _validated_weekdays(raw: Any) -> list[int]:
+    """校验并归一星期几范围（0-6），超范围值会被静默丢弃。
+
+    用户手写 ``[99]`` 或拖动时误触会存进数据库。``_should_run()``
+    看到 ``moment.weekday() not in [99]`` 永远为 True，订阅就**永远不执行**。
+    更糟的是这个错误不报、不提示 —— 用户创建完就以为设置好了，第二天发现
+    没更新，排查方向却是「分享链接是不是失效了」。
+    """
+    raw_list = [int(day) for day in (raw or [])]
+    valid = [d for d in raw_list if 0 <= d <= 6]
+    if len(valid) != len(raw_list):
+        logger.warning("星期几包含无效值（有效范围 0-6），已自动过滤：%s", raw_list)
+    return valid
 
 
 def update(subscribe_id: int, payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -354,7 +466,11 @@ def update(subscribe_id: int, payload: dict[str, Any]) -> dict[str, Any] | None:
             if field in payload:
                 setattr(record, field, payload[field] or None)
         if "weekdays" in payload:
-            record.weekdays = [int(day) for day in (payload.get("weekdays") or [])]
+            record.weekdays = _validated_weekdays(payload.get("weekdays"))
+        if "expire_at" in payload:
+            # 显式传 null 表示「取消期限」，所以不能用 `or None` 的写法混淆
+            # 「没提交这个字段」和「提交了空值」（前者不该改动已有期限）。
+            record.expire_at = _as_naive_utc(payload.get("expire_at"))
         if payload.get("reset_invalid"):
             # 用户换了新链接/重填了 Cookie，给它一次重新开始的机会
             record.invalid = False

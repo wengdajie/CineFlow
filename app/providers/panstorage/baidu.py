@@ -76,6 +76,13 @@ UA = (
 #: 取 dlink 真实地址时必须用这个 UA，否则 403
 NETDISK_UA = "netdisk;P2SP;3.0.20.11"
 
+#: 列分享内容的单页条数 / 最多翻几页 / 递归深度 / 最多收集多少文件。
+#: 与夸克实现同一套闸门理由：分享结构是别人给的，不能假设它有多浅多小。
+_SHARE_PAGE_SIZE = 100
+_SHARE_MAX_PAGES = 50
+_SHARE_MAX_DEPTH = 4
+_SHARE_MAX_FILES = 3000
+
 
 def _as_int(value: Any, default: int = -1) -> int:
     """安全转 int。
@@ -464,6 +471,291 @@ class BaiduPanStorage(BasePanStorage):
         match = SURL_RE.search(raw)
         return match.group(1) if match else ""
 
+    @staticmethod
+    def parse_share_code(share_url: str) -> str:
+        """取分享短码的**原始形态**（含 ``/s/`` 后面的第一个字符）。
+
+        与 :meth:`parse_share_id` 的区别，是这个项目踩过的一个真实坑：
+
+        | 用户粘的链接 | ``parse_share_id``（给 ``surl=`` 用） | 分享页真实地址 |
+        |---|---|---|
+        | ``/s/1AbCdEf``  | ``AbCdEf``   | ``/s/1AbCdEf`` |
+        | ``/s/xKq9v2Lm`` | ``xKq9v2Lm`` | ``/s/xKq9v2Lm`` |
+
+        旧代码只有 ``parse_share_id``，然后把分享页地址写成
+        ``f"/s/1{short}"`` —— 对第一行是对的，对第二行拼出了
+        ``/s/1xKq9v2Lm`` 这个**不存在的页面**。百度对不存在的分享页返回
+        一个正常的 HTML（不是 404），于是正则取不到 ``shareid``/``uk``，
+        用户看到的是「分享页未返回转存所需参数（链接可能已失效…）」——
+        一条把**代码拼错了 URL** 说成**链接失效**的错误消息，
+        照着提示换链接永远修不好。
+        """
+        raw = str(share_url or "")
+        match = SHARE_RE.search(raw)
+        if match:
+            return match.group(1)
+        match = SURL_RE.search(raw)
+        # surl= 形态本身就是不含前导 1 的，回填时要补上（百度页面地址的固定前缀）
+        return f"1{match.group(1)}" if match else ""
+
+    def share_page_url(self, share_url: str) -> str:
+        """分享页地址。取不到短码时返回空串。"""
+        code = self.parse_share_code(share_url)
+        return f"{API_BASE}/s/{code}" if code else ""
+
+    async def _verify_password(self, short: str, token: str, password: str) -> tuple[str, str]:
+        """校验提取码，换 ``BDCLND`` 票据。返回 ``(sekey, 错误消息)``。"""
+        verified = await fetch_json(
+            f"{API_BASE}/share/verify",
+            method="POST",
+            params={
+                "surl": short,
+                "bdstoken": token,
+                "t": "0",
+                "channel": "chunlei",
+                "web": 1,
+                "clienttype": 0,
+            },
+            data={"pwd": password, "vcode": "", "vcode_str": ""},
+            headers=self._headers(),
+            timeout=self.config.get("timeout"),
+        )
+        if not isinstance(verified, dict) or _as_int(verified.get("errno"), 0) != 0:
+            return "", "提取码校验失败（错误的提取码，或百度要求验证码）"
+        return str(verified.get("randsk") or ""), ""
+
+    async def _share_context(
+        self, share_url: str, password: str | None
+    ) -> tuple[dict[str, Any], str]:
+        """取转存/列举分享都要用的上下文。
+
+        返回 ``({shareid, uk, sekey, fs_ids, headers}, 错误消息)``；
+        错误消息非空时第一个值不可用。把这段从 :meth:`save_share` 里
+        抽出来，是因为 :meth:`list_share` 需要**完全一样**的前置步骤，
+        复制一遍必然会漏掉其中一步（比如忘了带 BDCLND）。
+        """
+        short = self.parse_share_id(share_url)
+        page_url = self.share_page_url(share_url)
+        if not short or not page_url:
+            return {}, "不是有效的百度网盘分享链接"
+        if not self.cookie:
+            return {}, "未配置百度网盘 Cookie，请先扫码登录"
+        token = await self._token()
+        if not token:
+            return {}, self._auth_hint("转存")
+
+        sekey = ""
+        if password:
+            sekey, error = await self._verify_password(short, token, password)
+            if error:
+                return {}, error
+
+        headers = self._headers()
+        if sekey:
+            headers["Cookie"] = f"{self.cookie}; BDCLND={sekey}"
+        try:
+            async with async_client(
+                timeout=self.config.get("timeout") or 20, headers=headers
+            ) as client:
+                page = await client.get(page_url)
+                text = page.text
+        except httpx.HTTPError as exc:
+            return {}, f"打开分享页失败：{exc}"
+
+        shareid = self._pick(text, r'"shareid"\s*:\s*"?(\d+)')
+        uk = self._pick(text, r'"uk"\s*:\s*"?(\d+)')
+        fs_ids = list(dict.fromkeys(re.findall(r'"fs_id"\s*:\s*"?(\d+)', text)))
+        if not shareid or not uk or not fs_ids:
+            need_pwd = "请输入提取码" in text or "init?surl" in text
+            if need_pwd and not password:
+                return {}, "该分享需要提取码，请填写后重试"
+            return {}, (
+                "分享页未返回转存所需参数（链接可能已失效、需要提取码，"
+                "或触发了百度风控）"
+            )
+        return {
+            "shareid": shareid,
+            "uk": uk,
+            "sekey": sekey,
+            "fs_ids": fs_ids,
+            "headers": headers,
+            "bdstoken": token,
+        }, ""
+
+    async def list_share(
+        self, share_url: str, *, password: str | None = None
+    ) -> list[PanFile]:
+        """列出百度分享**内部**的文件清单（供「分享追更」做增量判断）。
+
+        **为什么必须有它**：基类的默认实现返回空列表，而
+        ``pan_subscribe.check_one()`` 看到空列表就走「退化路径」——
+        整体转存一次、往 ``saved_files`` 里塞一个 ``__whole_share__``
+        哨兵，从此**永不再转**。也就是说百度分享的「追更」实测只能更新
+        一次，之后每轮巡检都回「该网盘不支持增量，整体转存已完成过」。
+        连载剧第 13 集起全部拿不到，而且**不报错**。
+
+        用的是分享列举接口（与浏览器打开分享页时的请求同源）::
+
+            GET /share/list?shareid=&uk=&dir=<路径>&page=&num=&sekey=
+
+        递归进子目录，深度/总数设闸门，理由同夸克实现。
+        """
+        context, error = await self._share_context(share_url, password)
+        if error:
+            logger.info("列举百度分享失败：%s", error)
+            return []
+
+        files: list[PanFile] = []
+        queue: list[tuple[str, int]] = [("/", 0)]
+        seen: set[str] = {"/"}
+        truncated = False
+
+        while queue and not truncated:
+            directory, depth = queue.pop(0)
+            for item in await self._share_list_dir(context, directory):
+                name = str(item.get("server_filename") or item.get("filename") or "")
+                if not name:
+                    continue
+                is_dir = _as_int(item.get("isdir"), 0) == 1
+                path = self.join_path(directory, name)
+                fs_id = str(item.get("fs_id") or "")
+                if is_dir:
+                    files.append(
+                        PanFile(name=name, path=path, is_dir=True, file_id=fs_id or None)
+                    )
+                    if depth + 1 <= _SHARE_MAX_DEPTH and path not in seen:
+                        seen.add(path)
+                        queue.append((path, depth + 1))
+                    continue
+                files.append(
+                    PanFile(
+                        name=name,
+                        path=path,
+                        is_dir=False,
+                        size=_as_int(item.get("size"), 0) or 0,
+                        file_id=fs_id or None,
+                        # 转存要按 fs_id 提交；父目录用来算落地后的真实路径
+                        extra={"share_dir": directory},
+                    )
+                )
+                if len(files) >= _SHARE_MAX_FILES:
+                    truncated = True
+                    break
+
+        if truncated:
+            logger.warning(
+                "百度分享文件数超过 %d，只列出了前一部分（增量判断可能不完整）",
+                _SHARE_MAX_FILES,
+            )
+        return files
+
+    async def _share_list_dir(
+        self, context: dict[str, Any], directory: str
+    ) -> list[dict[str, Any]]:
+        """列分享内某一层目录，翻页到底。"""
+        collected: list[dict[str, Any]] = []
+        page = 1
+        while page <= _SHARE_MAX_PAGES:
+            params = {
+                "shareid": context["shareid"],
+                "uk": context["uk"],
+                "order": "other",
+                "desc": 1,
+                "showempty": 0,
+                "web": 1,
+                "clienttype": 0,
+                "channel": "chunlei",
+                "page": page,
+                "num": _SHARE_PAGE_SIZE,
+                "dir": directory,
+            }
+            if directory == "/":
+                # 根目录要显式声明，否则百度回 errno=-9（参数错误）
+                params["root"] = 1
+            if context.get("sekey"):
+                params["sekey"] = context["sekey"]
+            payload = await fetch_json(
+                f"{API_BASE}/share/list",
+                params=params,
+                headers=context["headers"],
+                timeout=self.config.get("timeout"),
+            )
+            if not isinstance(payload, dict):
+                break
+            if _as_int(payload.get("errno"), 0) != 0:
+                logger.info(
+                    "百度分享列举 %s 返回 errno=%s", directory, payload.get("errno")
+                )
+                break
+            batch = payload.get("list") or []
+            if not isinstance(batch, list) or not batch:
+                break
+            collected.extend(item for item in batch if isinstance(item, dict))
+            if len(batch) < _SHARE_PAGE_SIZE:
+                break
+            page += 1
+        return collected
+
+    async def save_share_files(
+        self,
+        share_url: str,
+        files: list[PanFile],
+        *,
+        password: str | None = None,
+        target_dir: str | None = None,
+    ) -> SaveResult:
+        """只转存分享内指定的若干文件（增量转存）。
+
+        基类默认实现会退回**整体转存**，对百度是错的：整体转存会把
+        已经存过的集数再存一遍，网盘里堆出一串 ``xxx(1).mp4``。
+        这里按 ``fs_id`` 精确提交。
+        """
+        if not files:
+            return SaveResult(False, "没有需要转存的文件")
+        fs_ids = [str(item.file_id) for item in files if item.file_id]
+        if not fs_ids:
+            return SaveResult(False, "选中的文件缺少 fs_id，无法转存")
+        context, error = await self._share_context(share_url, password)
+        if error:
+            return SaveResult(False, error)
+        return await self._submit_transfer(context, fs_ids, target_dir)
+
+    async def _submit_transfer(
+        self, context: dict[str, Any], fs_ids: list[str], target_dir: str | None
+    ) -> SaveResult:
+        """提交 ``/share/transfer``。整体转存与增量转存共用这一段。"""
+        dest = self.normalize_path(target_dir or self.root_path)
+        unique = list(dict.fromkeys(fs_ids))
+        result = await fetch_json(
+            f"{API_BASE}/share/transfer",
+            method="POST",
+            params={
+                "shareid": context["shareid"],
+                "from": context["uk"],
+                "bdstoken": context["bdstoken"],
+                "channel": "chunlei",
+                "web": 1,
+                "clienttype": 0,
+            },
+            data={
+                "fsidlist": json.dumps([int(i) for i in unique]),
+                "path": dest,
+            },
+            headers=context["headers"],
+            timeout=self.config.get("timeout"),
+        )
+        if not isinstance(result, dict):
+            return SaveResult(success=False, message="转存请求无响应")
+        errno = _as_int(result.get("errno"), 0)
+        if errno == 0:
+            return SaveResult(
+                success=True,
+                message=f"已转存 {len(unique)} 个文件",
+                saved_path=dest,
+                file_count=len(unique),
+            )
+        return SaveResult(success=False, message=self._transfer_error(errno, result))
+
     async def save_share(
         self,
         share_url: str,
@@ -479,95 +771,10 @@ class BaiduPanStorage(BasePanStorage):
         失败时给出明确原因，方便用户改用 AList 或手动转存 —— 而不是
         假装成功让追更任务半夜静默失败。
         """
-        short = self.parse_share_id(share_url)
-        if not short:
-            return SaveResult(success=False, message="不是有效的百度网盘分享链接")
-        if not self.cookie:
-            return SaveResult(
-                success=False, message="未配置百度网盘 Cookie，请先扫码登录"
-            )
-
-        token = await self._token()
-        if not token:
-            return SaveResult(success=False, message=self._auth_hint("转存"))
-
-        # 1) 有密码先校验，换 BDCLND 票据
-        sekey = ""
-        if password:
-            verified = await fetch_json(
-                f"{API_BASE}/share/verify",
-                method="POST",
-                params={"surl": short, "bdstoken": token, "t": "0", "channel": "chunlei", "web": 1, "clienttype": 0},
-                data={"pwd": password, "vcode": "", "vcode_str": ""},
-                headers=self._headers(),
-                timeout=self.config.get("timeout"),
-            )
-            if not isinstance(verified, dict) or _as_int(verified.get("errno"), 0) != 0:
-                return SaveResult(
-                    success=False,
-                    message="提取码校验失败（错误的提取码，或百度要求验证码）",
-                )
-            sekey = str(verified.get("randsk") or "")
-
-        # 2) 取分享页拿 shareid / uk / fs_id
-        headers = self._headers()
-        if sekey:
-            headers["Cookie"] = f"{self.cookie}; BDCLND={sekey}"
-        try:
-            async with async_client(
-                timeout=self.config.get("timeout") or 20, headers=headers
-            ) as client:
-                page = await client.get(f"{API_BASE}/s/1{short}")
-                text = page.text
-        except httpx.HTTPError as exc:
-            return SaveResult(success=False, message=f"打开分享页失败：{exc}")
-
-        shareid = self._pick(text, r'"shareid"\s*:\s*"?(\d+)')
-        uk = self._pick(text, r'"uk"\s*:\s*"?(\d+)')
-        fs_ids = re.findall(r'"fs_id"\s*:\s*"?(\d+)', text)
-        if not shareid or not uk or not fs_ids:
-            return SaveResult(
-                success=False,
-                message=(
-                    "分享页未返回转存所需参数（链接可能已失效、需要提取码，"
-                    "或触发了百度风控）"
-                ),
-            )
-
-        # 3) 提交转存
-        dest = self.normalize_path(target_dir or self.root_path)
-        result = await fetch_json(
-            f"{API_BASE}/share/transfer",
-            method="POST",
-            params={
-                "shareid": shareid,
-                "from": uk,
-                "bdstoken": token,
-                "channel": "chunlei",
-                "web": 1,
-                "clienttype": 0,
-            },
-            data={
-                "fsidlist": json.dumps([int(i) for i in dict.fromkeys(fs_ids)]),
-                "path": dest,
-            },
-            headers=headers,
-            timeout=self.config.get("timeout"),
-        )
-        if not isinstance(result, dict):
-            return SaveResult(success=False, message="转存请求无响应")
-        errno = _as_int(result.get("errno"), 0)
-        if errno == 0:
-            return SaveResult(
-                success=True,
-                message="已转存",
-                saved_path=dest,
-                file_count=len(dict.fromkeys(fs_ids)),
-            )
-        return SaveResult(
-            success=False,
-            message=self._transfer_error(errno, result),
-        )
+        context, error = await self._share_context(share_url, password)
+        if error:
+            return SaveResult(success=False, message=error)
+        return await self._submit_transfer(context, context["fs_ids"], target_dir)
 
     @staticmethod
     def _pick(text: str, pattern: str) -> str:

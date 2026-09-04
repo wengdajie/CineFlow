@@ -32,6 +32,14 @@ API_BASE = "https://drive-pc.quark.cn/1/clouddrive"
 SHARE_ID_RE = re.compile(r"pan\.quark\.cn/s/([0-9a-zA-Z]+)")
 _COMMON_PARAMS = {"pr": "ucpro", "fr": "pc"}
 
+#: 列分享内容时单页条数与最多翻几页。夸克单页上限约 200，
+#: 50 页 × 200 = 1 万个文件，足够覆盖任何正常剧集分享。
+_SHARE_PAGE_SIZE = 200
+_SHARE_MAX_PAGES = 50
+#: 递归进子目录的最大深度与最多收集多少个文件（防嵌套过深/成环把巡检卡死）
+_SHARE_MAX_DEPTH = 4
+_SHARE_MAX_FILES = 3000
+
 
 @register
 class QuarkStorage(BasePanStorage):
@@ -161,45 +169,130 @@ class QuarkStorage(BasePanStorage):
         )
         return ((payload or {}).get("data") or {}).get("stoken")
 
-    async def _share_items(self, share_id: str, stoken: str) -> list[dict[str, Any]]:
-        """第 2 步：列出分享内的文件（含 fid 与 share_fid_token）。"""
-        detail = await self._call(
-            "/share/sharepage/detail",
-            params={
-                "pwd_id": share_id,
-                "stoken": stoken,
-                "pdir_fid": "0",
-                "_page": 1,
-                "_size": 200,
-            },
-        )
-        return ((detail or {}).get("data") or {}).get("list") or []
+    async def _share_items(
+        self, share_id: str, stoken: str, pdir_fid: str = "0"
+    ) -> list[dict[str, Any]]:
+        """第 2 步：列出分享内**某一层**的文件（含 fid 与 share_fid_token）。
+
+        ``pdir_fid`` 默认 ``"0"``（分享根）。想看子目录就把目录自己的 fid 传进来
+        —— 这是 :meth:`list_share` 能递归的前提。
+
+        **分页必须翻到底**：``_size`` 再大也是一页。整季连载分享常有
+        30+ 个文件，写死单页只能看到前一页，后面的集数**永远**不会被
+        追更发现（增量判断看不到就等于不存在）。这里循环翻页到取空为止。
+        """
+        collected: list[dict[str, Any]] = []
+        page = 1
+        while page <= _SHARE_MAX_PAGES:
+            detail = await self._call(
+                "/share/sharepage/detail",
+                params={
+                    "pwd_id": share_id,
+                    "stoken": stoken,
+                    "pdir_fid": pdir_fid,
+                    "_page": page,
+                    "_size": _SHARE_PAGE_SIZE,
+                },
+            )
+            batch = ((detail or {}).get("data") or {}).get("list") or []
+            if not isinstance(batch, list) or not batch:
+                break
+            collected.extend(item for item in batch if isinstance(item, dict))
+            if len(batch) < _SHARE_PAGE_SIZE:
+                break  # 不满一页说明已经是最后一页
+            page += 1
+        return collected
 
     async def list_share(
         self, share_url: str, *, password: str | None = None
     ) -> list[PanFile]:
-        """列出分享内部的文件清单（供「分享追更」做增量判断）。"""
+        """列出分享内部的文件清单（供「分享追更」做增量判断）。
+
+        **必须递归进子目录**：实测国内剧集分享极少把文件摊在根上，
+        典型结构是 ``/喜剧之王单口季 第三季/EP01.mp4``。只列根目录时
+        追更看到的是**一个目录、零个文件**，``match_files()`` 又会跳过
+        目录（``item.is_dir`` 直接 continue），于是每轮巡检都得出
+        「没有新增文件」—— 一个永远不会更新、也永远不报错的订阅。
+        这是「网盘追更不生效」最常见的成因，比 Cookie 失效更隐蔽，
+        因为它**不产生任何失败**。
+
+        深度与总数都设了闸门（:data:`_SHARE_MAX_DEPTH` /
+        :data:`_SHARE_MAX_FILES`）：分享可以嵌套很深甚至成环，
+        没有上限时一次巡检能把自己卡死在别人的网盘结构里。
+        截断时如实记日志，而不是假装列全了（ADR-82）。
+        """
         share_id = self.parse_share_id(share_url)
         if not share_id or not self.cookie:
             return []
         stoken = await self._share_token(share_id, password)
         if not stoken:
             return []
+
         files: list[PanFile] = []
-        for item in await self._share_items(share_id, stoken):
-            if not item.get("fid"):
-                continue
-            name = str(item.get("file_name") or "")
-            files.append(
-                PanFile(
-                    name=name,
-                    path=f"/{name}",
-                    is_dir=bool(item.get("dir")),
-                    size=int(item.get("size") or 0),
-                    file_id=str(item["fid"]),
-                    # share_fid_token 是转存时必须回传的凭据，随文件一起带出来
-                    extra={"share_fid_token": str(item.get("share_fid_token") or "")},
+        # (fid, 该层在分享内的路径前缀, 深度)
+        queue: list[tuple[str, str, int]] = [("0", "", 0)]
+        seen_dirs: set[str] = {"0"}
+        truncated = False
+
+        while queue:
+            fid, prefix, depth = queue.pop(0)
+            for item in await self._share_items(share_id, stoken, fid):
+                if not item.get("fid"):
+                    continue
+                name = str(item.get("file_name") or "")
+                if not name:
+                    continue
+                is_dir = bool(item.get("dir") or item.get("file_type") == 0)
+                child_fid = str(item["fid"])
+                path = f"{prefix}/{name}"
+                if is_dir:
+                    # 目录本身也放进结果：调用方（整体转存/界面展示）可能要用；
+                    # match_files() 会自己跳过目录，不会误转。
+                    files.append(
+                        PanFile(
+                            name=name,
+                            path=path,
+                            is_dir=True,
+                            size=0,
+                            file_id=child_fid,
+                            extra={
+                                "share_fid_token": str(
+                                    item.get("share_fid_token") or ""
+                                )
+                            },
+                        )
+                    )
+                    if depth + 1 <= _SHARE_MAX_DEPTH and child_fid not in seen_dirs:
+                        seen_dirs.add(child_fid)
+                        queue.append((child_fid, path, depth + 1))
+                    continue
+                files.append(
+                    PanFile(
+                        name=name,
+                        path=path,
+                        is_dir=False,
+                        size=int(item.get("size") or 0),
+                        file_id=child_fid,
+                        # share_fid_token 是转存时必须回传的凭据，随文件一起带出来
+                        extra={
+                            "share_fid_token": str(item.get("share_fid_token") or ""),
+                            # 追更重命名要按「落地后的路径」找文件，而落地路径
+                            # 取决于它在分享内的父目录，所以一起带出来。
+                            "share_dir": prefix or "/",
+                        },
+                    )
                 )
+                if len(files) >= _SHARE_MAX_FILES:
+                    truncated = True
+                    break
+            if truncated:
+                break
+
+        if truncated:
+            logger.warning(
+                "夸克分享 %s 文件数超过 %d，只列出了前一部分（增量判断可能不完整）",
+                share_id,
+                _SHARE_MAX_FILES,
             )
         return files
 

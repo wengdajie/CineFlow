@@ -193,11 +193,96 @@ async def aliases_for(
     return collected[:limit]
 
 
+#: 标题里内嵌的季号，如「第三季」「第 3 季」「第三部」。
+#: 与 ``search._EMBEDDED_SEASON_RE`` 同一套写法，但这里服务于**过滤**：
+#: 搜的时候换了写法，过滤白名单也必须认同一批写法，否则自相矛盾。
+_SEASON_IN_TITLE_RE = re.compile(r"第\s*([0-9]{1,2}|[零一二三四五六七八九十]{1,3})\s*(季|部)")
+
+_CN_DIGITS_ALIAS = "零一二三四五六七八九十"
+
+
+def _cn_num(value: int) -> str:
+    """阿拉伯数字转中文（1→一 … 20→二十）。仅覆盖季号的实际取值范围。"""
+    if value <= 10:
+        return _CN_DIGITS_ALIAS[value]
+    if value < 20:
+        return "十" + _CN_DIGITS_ALIAS[value - 10]
+    if value % 10 == 0 and value < 100:
+        return _CN_DIGITS_ALIAS[value // 10] + "十"
+    return str(value)
+
+
+def _cn_to_int_alias(text: str) -> int | None:
+    """中文或阿拉伯数字转 int，认不出来返回 None。"""
+    raw = str(text or "").strip()
+    if raw.isdigit():
+        return int(raw)
+    if not raw or any(ch not in _CN_DIGITS_ALIAS for ch in raw):
+        return None
+    if raw == "十":
+        return 10
+    if raw.startswith("十"):
+        return 10 + _CN_DIGITS_ALIAS.index(raw[1])
+    if raw.endswith("十"):
+        return _CN_DIGITS_ALIAS.index(raw[0]) * 10
+    if "十" in raw:
+        tens, _, ones = raw.partition("十")
+        return _CN_DIGITS_ALIAS.index(tens) * 10 + _CN_DIGITS_ALIAS.index(ones)
+    if len(raw) == 1:
+        return _CN_DIGITS_ALIAS.index(raw)
+    return None
+
+
+def _season_rewrites(base: str) -> set[str]:
+    """标题内嵌季号时，产出季号的**其它等价写法**。
+
+    **为什么过滤侧也需要它**（v1.28.0 实测查出的跨层缺陷）：
+    ``search.build_keywords()`` 会刻意用「第三季」「第3季」两种写法去搜
+    （资源站两种都存在），但白名单以前只按用户原始写法生成。结果是
+    **用一种写法搜到、用另一种写法判不匹配**，自己把自己的结果扔掉。
+
+    实测「喜剧之王单口季 第三季」：
+
+    | 关键词 | PanSou raw | kept |
+    |---|---|---|
+    | 喜剧之王单口季第三季 | 58 | 58 |
+    | 喜剧之王单口季 第三季（带空格，用户实际输入）| 1 | **0** |
+    | 喜剧之王单口季（裸片名）| 120 | 120 |
+
+    中间那一行就是这个缺陷：站点按「第3季」写法返回，白名单里只有
+    「第三季」，于是 kept=0 —— 界面上显示「返回 1 条但都不匹配」，
+    用户以为没有资源，其实是过滤层把它拒了。
+    """
+    found = _SEASON_IN_TITLE_RE.search(base)
+    if not found:
+        return set()
+    number = _cn_to_int_alias(found.group(1))
+    if number is None:
+        return set()
+    marker = found.group(2)
+    prefix = base[: found.start()].rstrip()
+    suffix = base[found.end() :].lstrip()
+    out: set[str] = set()
+    for spelled in {_cn_num(number), str(number)}:
+        for joiner in ("", " "):
+            candidate = f"{prefix}{joiner}第{spelled}{marker}"
+            if suffix:
+                candidate = f"{candidate} {suffix}"
+            out.add(candidate.strip())
+        # 「…单口季3」这种把季号缩成纯数字的写法在网盘标题里很常见
+        if not suffix:
+            out.add(f"{prefix}{number}")
+    return out
+
+
 def title_match_variants(title: str, aliases: list[str] | None = None) -> list[str]:
     """生成**标题相关性过滤**用的正则白名单（原标题变体 + 别名变体）。
 
     这是原 ``search._title_variants`` 的超集：额外把别名也算进去，
     否则国际站命中的英文标题会被判「与订阅名称不匹配」而全部丢掉。
+
+    白名单必须覆盖 :func:`_season_rewrites` 给出的季号写法变体 ——
+    搜索侧换写法而过滤侧不换，等于自己否决自己搜到的结果（见该函数文档）。
     """
     from app.utils.strings import normalize
 
@@ -207,15 +292,19 @@ def title_match_variants(title: str, aliases: list[str] | None = None) -> list[s
         base = normalize(text).strip()
         if not base:
             return
-        variants.add(base)
-        chinese = "".join(re.findall(r"[\u4e00-\u9fff0-9]+", base))
-        if len(chinese) >= 2:
-            variants.add(chinese)
-        english = " ".join(re.findall(r"[A-Za-z]+", base))
-        if len(english) >= 3:
-            variants.add(english)
-            variants.add(english.replace(" ", "."))
-            variants.add(english.replace(" ", ""))
+        forms = {base, *_season_rewrites(base)}
+        for form in forms:
+            if not form:
+                continue
+            variants.add(form)
+            chinese = "".join(re.findall(r"[\u4e00-\u9fff0-9]+", form))
+            if len(chinese) >= 2:
+                variants.add(chinese)
+            english = " ".join(re.findall(r"[A-Za-z]+", form))
+            if len(english) >= 3:
+                variants.add(english)
+                variants.add(english.replace(" ", "."))
+                variants.add(english.replace(" ", ""))
 
     _add_variants(title)
     for alias in aliases or []:

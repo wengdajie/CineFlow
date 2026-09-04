@@ -660,21 +660,32 @@ def test_quark_list_share_carries_share_fid_token(monkeypatch):
     async def fake_token(share_id, password):
         return "stoken-1"
 
-    async def fake_items(share_id, stoken):
-        return [
-            {"fid": "f1", "file_name": "第01集.mkv", "size": 100, "share_fid_token": "t1"},
-            {"fid": "f2", "file_name": "子目录", "dir": True, "share_fid_token": "t2"},
-            {"file_name": "缺 fid 的条目"},
-        ]
+    async def fake_items(share_id, stoken, pdir_fid="0"):
+        if pdir_fid == "0":
+            return [
+                {"fid": "f1", "file_name": "第01集.mkv", "size": 100, "share_fid_token": "t1"},
+                {"fid": "f2", "file_name": "子目录", "dir": True, "share_fid_token": "t2"},
+                {"file_name": "缺 fid 的条目"},
+            ]
+        # 子目录里还有一集：递归必须把它带出来，否则整季追更看不到
+        if pdir_fid == "f2":
+            return [
+                {"fid": "f3", "file_name": "第02集.mkv", "size": 200, "share_fid_token": "t3"},
+            ]
+        return []
 
     monkeypatch.setattr(storage, "_share_token", fake_token)
     monkeypatch.setattr(storage, "_share_items", fake_items)
 
     files = run(storage.list_share("https://pan.quark.cn/s/abcdef"))
-    assert [item.name for item in files] == ["第01集.mkv", "子目录"]
+    assert [item.name for item in files] == ["第01集.mkv", "子目录", "第02集.mkv"]
     assert files[0].extra["share_fid_token"] == "t1"
     assert files[0].file_id == "f1"
     assert files[1].is_dir is True
+    # 递归取到的文件：路径要带上父目录，share_dir 供落地后重命名定位
+    assert files[2].path == "/子目录/第02集.mkv"
+    assert files[2].extra["share_dir"] == "/子目录"
+    assert files[2].extra["share_fid_token"] == "t3"
 
 
 def test_quark_list_share_without_cookie_returns_empty():

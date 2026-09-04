@@ -29,6 +29,34 @@ from app.utils.strings import format_size, truncate
 logger = get_logger(__name__)
 
 
+def _existing_task(link: str, subscribe_id: int | None) -> int | None:
+    """同一订阅下同一链接已有「在办」任务就返回其 ID，否则 None。
+
+    **只服务于自动链路**（见调用点）：订阅巡检每 30 分钟跑一轮，
+    命中的往往还是上一轮那个资源。没有这个检查，任务表会按巡检频率
+    无限膨胀，网盘分享还会被反复提交转存（百度那边表现为
+    落地目录里堆出一串 ``xxx(1).mp4``）。
+
+    「在办」= 非 failed / canceled。失败与取消的要放行，
+    因为失败常常只是临时的（站点抽风、下载器没起来），
+    连重试都不给才是真的卡死。
+    """
+    if not link:
+        return None
+    with session_scope() as session:
+        existing = session.execute(
+            select(DownloadTask.id).where(
+                DownloadTask.link == link,
+                DownloadTask.subscribe_id == subscribe_id,
+                DownloadTask.status.notin_([
+                    TaskStatus.FAILED.value,
+                    TaskStatus.CANCELED.value,
+                ]),
+            )
+        ).scalar_one_or_none()
+        return existing
+
+
 def _resolve_save_path(
     media_type: str, title: str, season: int | None, custom: str | None
 ) -> str:
@@ -73,6 +101,20 @@ async def add_download(
     target_path = _resolve_save_path(
         media_type, meta.get("title") or title, meta.get("season"), save_path
     )
+
+    # 幂等：**订阅自动投递**时，同一订阅+同一链接已有在办任务就跳过。
+    # 只挡自动链路（subscribe_id 非空）：手动点下载是用户的明确意图，
+    # 他可能就是想重下一遍（换目录、上次删了、想覆盖），挡掉会很费解。
+    if subscribe_id is not None:
+        already = _existing_task(link, subscribe_id)
+        if already:
+            logger.info(
+                "订阅 #%s 跳过重复投递（已有任务 #%s）：%s",
+                subscribe_id,
+                already,
+                truncate(title, 80),
+            )
+            return None
 
     external_id: str | None = None
     downloader = None

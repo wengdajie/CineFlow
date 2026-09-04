@@ -478,6 +478,74 @@ def test_add_download_pan_landing_failure_keeps_transferred_but_reports(monkeypa
     assert task.error and "假 aria2" in task.error, f"落地失败的原因没落到界面上：{task.error}"
 
 
+def test_subscribe_does_not_requeue_same_link(monkeypatch, client):
+    """订阅巡检每轮都会命中同一个资源，第二次必须跳过。
+
+    没有这个幂等，任务表会按巡检频率（默认 30 分钟）无限膨胀，
+    网盘分享还会被反复提交转存。
+    """
+
+    async def fake_save(link, resource):
+        return {"success": True, "storage": "假百度", "site_id": 7, "saved_path": "/x.mkv"}
+
+    async def fake_land(pan_result, save_path, downloader_name):
+        return {"skipped": True}
+
+    monkeypatch.setattr(download_service, "_try_auto_save_pan", fake_save)
+    monkeypatch.setattr(download_service, "_land_pan_to_local", fake_land)
+
+    # download_tasks.subscribe_id 有外键，必须先有一条真实订阅
+    from app.db.models import Subscribe
+    from app.db.session import session_scope
+
+    with session_scope() as session:
+        sub = Subscribe(title="喜剧之王单口季", season=3, media_type="tv")
+        session.add(sub)
+        session.flush()
+        subscribe_id = sub.id
+
+    resource = {
+        "title": "喜剧之王单口季 第三季 EP01",
+        "link": "https://pan.baidu.com/s/1dedupe-check",
+        "kind": ResourceKind.PAN.value,
+    }
+    first = asyncio.run(
+        download_service.add_download(resource, subscribe_id=subscribe_id, notify=False)
+    )
+    assert first is not None, "第一次投递应当成功"
+
+    second = asyncio.run(
+        download_service.add_download(resource, subscribe_id=subscribe_id, notify=False)
+    )
+    assert second is None, "同一订阅下的同一链接不该被重复登记"
+
+
+def test_manual_add_is_not_blocked_by_dedupe(monkeypatch, client):
+    """手动下载是用户的明确意图，即使链接重复也要放行。
+
+    幂等只针对自动巡检；把手动入口也挡掉会让「上次删了想重下」
+    这类正常操作静默失败，用户完全不知道为什么点了没反应。
+    """
+
+    async def fake_save(link, resource):
+        return {"success": True, "storage": "假百度", "site_id": 7, "saved_path": "/y.mkv"}
+
+    async def fake_land(pan_result, save_path, downloader_name):
+        return {"skipped": True}
+
+    monkeypatch.setattr(download_service, "_try_auto_save_pan", fake_save)
+    monkeypatch.setattr(download_service, "_land_pan_to_local", fake_land)
+
+    resource = {
+        "title": "手动重下的片子",
+        "link": "https://pan.baidu.com/s/1manual-retry",
+        "kind": ResourceKind.PAN.value,
+    }
+    first = asyncio.run(download_service.add_download(resource, notify=False))
+    second = asyncio.run(download_service.add_download(resource, notify=False))
+    assert first is not None and second is not None, "手动入口不该被幂等挡住"
+
+
 def test_save_share_payload_carries_site_id(monkeypatch, client):
     """`save_share` 的返回值必须带 site_id。
 

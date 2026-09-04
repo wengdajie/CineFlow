@@ -412,6 +412,7 @@ class PanSubscribeCreate(BaseModel):
     rename_search: str | None = Field(default=None, description="转存后重命名的匹配正则")
     rename_replace: str | None = Field(default=None, description="重命名替换模板，支持 \\1 反向引用")
     weekdays: list[int] = Field(default_factory=list, description="仅在这些星期几执行（0=周一…6=周日），空=每天")
+    expire_at: datetime | None = Field(default=None, description="到期时间 UTC，过期后不再执行（对标 quark-auto-save 的「任务结束期限」）")
 
 
 class PanSubscribeUpdate(BaseModel):
@@ -428,6 +429,7 @@ class PanSubscribeUpdate(BaseModel):
     rename_replace: str | None = None
     status: SubscribeStatus | None = None
     weekdays: list[int] | None = None
+    expire_at: datetime | None = None
     reset_invalid: bool = Field(default=False, description="清除失效标记与失败计数，让任务重新开始")
     reset_history: bool = Field(default=False, description="清空已转存记录，下次巡检会重新转存全部文件")
 

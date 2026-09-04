@@ -394,3 +394,61 @@ class Test已失效预设不被启用:
     def test_bt4g缺陷写进note让用户看得到(self) -> None:
         note = site_catalog.site_payload(self._preset("bt4g"))["options"]["note"]
         assert "人机验证" in note
+
+
+# ---------------------------------------------- v1.28.0：搜索侧与过滤侧的季号写法必须一致
+def test_filter_whitelist_covers_season_spelling_variants():
+    """搜索用「第3季」写法搜到的结果，不能被只认「第三季」的白名单拒掉。
+
+    这是一个**跨层自相矛盾**的缺陷：``search.build_keywords()`` 刻意生成
+    「第三季」「第3季」两种关键词（资源站两种写法都存在），但
+    ``title_match_variants()`` 以前只按用户的原始写法建白名单。
+    于是「用一种写法搜到、用另一种写法判不匹配」，搜索层辛苦捞回来的结果
+    在过滤层被自己扔掉。
+
+    实测（关键词「喜剧之王单口季 第三季」）：PanSou 返回 1 条 → kept 0 条，
+    界面显示「返回 1 条但都不匹配」，用户以为没资源。修复后 total 1 → 23。
+    """
+    from app.core.filters import match_keywords
+    from app.services.title_alias import title_match_variants
+
+    whitelist = title_match_variants("喜剧之王单口季 第三季")
+    # 这三种都是资源站上真实存在的写法，必须全部认得
+    for real_title in (
+        "喜剧之王单口季 第三季 (2026) [4K/1080P] [国语中字]",
+        "喜剧之王单口季第3季 4K SDR",
+        "喜剧之王单口季3 喜单3(2026)【4K.SDR】",
+    ):
+        assert match_keywords(real_title, whitelist, mode="any"), (
+            f"白名单漏了这种写法，搜到也会被过滤掉：{real_title}"
+        )
+
+
+def test_filter_whitelist_still_rejects_other_seasons():
+    """放宽写法不等于放宽季号：第二季的资源仍然必须被拒。
+
+    这是上一个测试的**反向约束**。如果为了让「第3季」能匹配就把季号整个
+    去掉，第二季、第一季的资源会一起混进来 —— 那是另一个更难发现的 bug
+    （用户订阅第三季，下回来一堆第二季）。
+    """
+    from app.core.filters import match_keywords
+    from app.services.title_alias import title_match_variants
+
+    whitelist = title_match_variants("喜剧之王单口季 第三季")
+    for wrong_season in (
+        "喜剧之王单口季.第二季[全10集].King.of.Comedy.S02.2024.2160p",
+        "喜剧之王单口季第1季",
+    ):
+        assert not match_keywords(wrong_season, whitelist, mode="any"), (
+            f"季号被放宽了，别的季会混进结果：{wrong_season}"
+        )
+
+
+def test_season_rewrites_handles_teens_and_parts():
+    """两位数季号与「第N部」写法也要覆盖（十进制换算不能只对个位数生效）。"""
+    from app.services.title_alias import _season_rewrites
+
+    got = _season_rewrites("某剧 第12季")
+    assert any("第十二季" in item for item in got), got
+    parts = _season_rewrites("某片 第二部")
+    assert any("第2部" in item for item in parts), parts

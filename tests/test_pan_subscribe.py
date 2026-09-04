@@ -30,6 +30,10 @@ class FakeShare(BasePanStorage):
 
     name = "fake_share_pan"
     display_name = "假分享盘"
+    #: 真实 Provider 实现了 rename 就会声明这个能力位，假盘也必须如实声明。
+    #: 服务层按**能力位**决定要不要改名（基类恒有 rename 方法，
+    #: 所以 hasattr 判断永远为真、等于没判断）。
+    supports_rename = True
 
     def __init__(self, config=None, items=None, ok=True):
         super().__init__(config or {})
@@ -89,6 +93,44 @@ def test_match_files_filters_and_skips_saved():
         files, include=r"\.mp4$", exclude="预告", saved=["庆余年.第01集.mp4"]
     )
     assert [item.name for item in picked] == ["庆余年.第02集.mp4"]
+
+
+def test_saved_key_uses_full_path_not_bare_name():
+    """去重身份必须是**分享内完整路径**，否则不同目录的同名集数会互相顶掉。
+
+    实测场景：递归列举后 ``/第一季/EP01.mp4`` 与 ``/第二季/EP01.mp4``
+    都叫 ``EP01.mp4``。按名字去重的话，第一季转存过之后，
+    第二季整季都被判定「已转存」——一个不报错、永不更新的订阅。
+    """
+    s1 = PanFile("EP01.mp4", "/第一季/EP01.mp4", size=1)
+    s2 = PanFile("EP01.mp4", "/第二季/EP01.mp4", size=1)
+    assert service.saved_key(s1) != service.saved_key(s2)
+
+    # 第一季存过之后，第二季那一集仍然必须被认成「新增」
+    picked = service.match_files([s1, s2], saved=[service.saved_key(s1)])
+    assert [item.path for item in picked] == ["/第二季/EP01.mp4"]
+
+
+def test_saved_key_falls_back_to_name_when_path_missing():
+    """path 为空时退回文件名，保证不填 path 的 Provider 仍能去重。"""
+    assert service.saved_key(PanFile("a.mp4", "")) == "a.mp4"
+
+
+def test_match_files_honours_legacy_name_only_history():
+    """v1.28.0 前的历史记录存的是纯文件名，升级后不能重转一遍。
+
+    只比路径的话，所有老订阅的 saved_files（纯名字）都对不上，
+    下轮巡检会把整季重新转存，网盘里堆出一串 ``xxx(1).mp4``。
+    """
+    item = PanFile("EP01.mp4", "/第一季/EP01.mp4", size=1)
+    assert service.match_files([item], saved=["EP01.mp4"]) == []
+
+
+def test_match_files_regex_matches_filename_not_path():
+    """正则匹配文件名，父目录名不该意外参与判断。"""
+    item = PanFile("EP01.mp4", "/预告片合集/EP01.mp4", size=1)
+    # 排除「预告」应当只看文件名 —— 这一集不该被父目录名连带排除
+    assert len(service.match_files([item], exclude="预告")) == 1
 
 
 def test_match_files_ignores_directories():
@@ -285,3 +327,94 @@ def test_check_all_aggregates_stats(client, inject):
     result = run(service.check_all(limit=50, notify=False))
     assert result["checked"] >= 2
     assert "巡检" in result["message"]
+
+
+# ------------------------------------------------- v1.28.0 新增回归
+def test_invalid_weekdays_are_filtered_not_stored(client):
+    """超范围的星期几必须被过滤掉，否则订阅**永远不会执行**。
+
+    ``_should_run()`` 的判断是 ``moment.weekday() not in weekdays``；
+    存进 ``[99]`` 之后这个条件恒为真，巡检每次都跳过，
+    而且不报错、不提示 —— 用户只会看到「怎么一直没更新」。
+    """
+    record = service.create(
+        {
+            "name": "非法星期",
+            "share_url": "https://pan.quark.cn/s/weekday",
+            "weekdays": [0, 3, 99, -1],
+        }
+    )
+    assert record["weekdays"] == [0, 3]
+
+
+def test_expire_at_is_normalised_to_utc(client):
+    """带时区的到期时间要换算成 UTC 再落库，不能按字面值存。
+
+    ``expire_at`` 列不带时区，而 ``_should_run()`` 会把读出来的值
+    当 UTC 解释。直接存 ``+08:00`` 的字面时间，期限会凭空多出 8 小时。
+    """
+    record = service.create(
+        {
+            "name": "期限归一",
+            "share_url": "https://pan.quark.cn/s/expire",
+            "expire_at": "2027-01-01T00:00:00+08:00",
+        }
+    )
+    # 2027-01-01 00:00 +08:00 == 2026-12-31 16:00 UTC
+    assert record["expire_at"].startswith("2026-12-31T16:00")
+
+
+def test_expired_subscribe_is_skipped(client, inject):
+    """过了期限就不再执行（而且要说清是因为期限）。"""
+    inject(FakeShare(items=_files("EP01.mp4")))
+    record = service.create(
+        {
+            "name": "已过期",
+            "share_url": "https://pan.quark.cn/s/gone",
+            "expire_at": "2020-01-01T00:00:00+00:00",
+        }
+    )
+    outcome = run(service.check_one(record["id"], notify=False))
+    assert outcome["skipped"] is True
+    assert "期限" in outcome["message"]
+
+
+def test_saved_files_are_capped(client, inject, monkeypatch):
+    """已转存清单不能无限增长（JSON 字段会随每次查询被整份读出）。"""
+    monkeypatch.setattr(service, "_MAX_SAVED_FILES", 5)
+    storage = inject(FakeShare(items=_files(*[f"EP{i:03d}.mp4" for i in range(20)])))
+    record = service.create(
+        {"name": "截断", "share_url": "https://pan.quark.cn/s/cap"}
+    )
+    run(service.check_one(record["id"], notify=False))
+    with session_scope() as session:
+        row = session.get(PanSubscribe, record["id"])
+        assert len(row.saved_files) <= 5, f"没有截断：{len(row.saved_files)}"
+    assert storage.batches, "本轮应当确实转存过文件"
+
+
+def test_invalidation_notifies_user(client, inject, monkeypatch):
+    """连续失败到阈值判失效时必须推一条通知。
+
+    以前只改了状态位、写了日志 —— 用户不看日志就永远不知道追更停了。
+    """
+    monkeypatch.setattr(settings, "PAN_SUBSCRIBE_MAX_FAILURES", 1)
+    inject(FakeShare(items=_files("EP01.mp4"), ok=False))
+
+    sent: list[tuple[str, str]] = []
+
+    async def fake_send(title, body, **kwargs):
+        sent.append((title, body))
+
+    from app.services import notify as notify_service
+
+    monkeypatch.setattr(notify_service, "send", fake_send)
+
+    record = service.create(
+        {"name": "会失效的任务", "share_url": "https://pan.quark.cn/s/dead"}
+    )
+    run(service.check_one(record["id"], notify=True))
+
+    assert sent, "判定失效却没有推送任何通知"
+    assert "失效" in sent[0][0]
+    assert "会失效的任务" in sent[0][0]

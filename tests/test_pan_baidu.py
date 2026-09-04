@@ -14,12 +14,15 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import urllib.parse
 from typing import Any
 
 import httpx
 import pytest
 
 from app.providers.panstorage.baidu import BaiduPanStorage
+from app.providers.panstorage.base import PanFile
 from app.providers.panstorage.local_dir import LocalDirStorage
 from app.providers.panstorage.pan115 import Pan115Storage
 from app.providers.registry import get_provider_class
@@ -333,10 +336,136 @@ def test_baidu_share_id_parsing(url, expected):
     assert BaiduPanStorage.parse_share_id(url) == expected
 
 
+@pytest.mark.parametrize(
+    "url,expected",
+    [
+        ("https://pan.baidu.com/s/1AbCdEf", "https://pan.baidu.com/s/1AbCdEf"),
+        ("https://pan.baidu.com/s/xKq9v2Lm", "https://pan.baidu.com/s/xKq9v2Lm"),
+        ("https://pan.baidu.com/share/init?surl=AbCdEf", "https://pan.baidu.com/s/1AbCdEf"),
+        ("https://pan.quark.cn/s/xxxx", ""),
+        ("", ""),
+    ],
+)
+def test_baidu_share_page_url(url, expected):
+    """老式 /s/1xxxx 与新式 /s/xxxx 都拼出正确的页面地址。
+
+    旧代码只有 ``f"/s/1{short}"`` 一种写法，对无前导 1 的代码
+    拼出了 ``/s/1xKq9v2Lm``（不存在），用户看到的是误导性的
+    「分享页未返回转存所需参数」—— 实际是 URL 拼错了。
+    """
+    s = BaiduPanStorage({"options": {}})
+    assert s.share_page_url(url) == expected
+
+
 def test_baidu_save_share_rejects_foreign_link():
     result = run(BaiduPanStorage({"cookie": "c"}).save_share("https://pan.quark.cn/s/x"))
     assert result.success is False
     assert "百度网盘分享" in result.message
+
+
+def test_baidu_list_share_without_cookie_returns_empty():
+    """没配 Cookie 返回空而不是抛异常（界面会提示去填 Cookie）。"""
+    s = BaiduPanStorage({})
+    assert run(s.list_share("https://pan.baidu.com/s/1abc")) == []
+
+
+def test_baidu_list_share_returns_files(monkeypatch):
+    """分享里有子目录时递归列文件，路径带上前缀，目录本身也出现。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/gettemplatevariable":
+            return httpx.Response(200, json=TOKEN_OK)
+        if request.url.path == "/s/1abc":
+            return httpx.Response(
+                200,
+                text=(
+                    "var x = {"
+                    '"shareid":12345,"uk":67890,'
+                    '"list":[{"fs_id":"111"},{"fs_id":"222"},{"fs_id":"333"}]'
+                    "}"
+                ),
+            )
+        if request.url.path == "/share/list":
+            params = dict(request.url.params)
+            if params.get("dir") == "/" and params.get("root") == "1":
+                return httpx.Response(
+                    200,
+                    json={
+                        "errno": 0,
+                        "list": [
+                            {"server_filename": "EP01.mp4", "fs_id": "111", "size": 100, "isdir": 0},
+                            {"server_filename": "Season 2", "fs_id": "999", "size": 0, "isdir": 1},
+                        ],
+                    },
+                )
+            if params.get("dir") == "/Season 2":
+                return httpx.Response(
+                    200,
+                    json={
+                        "errno": 0,
+                        "list": [
+                            {"server_filename": "EP06.mp4", "fs_id": "666", "size": 200, "isdir": 0},
+                        ],
+                    },
+                )
+            return httpx.Response(200, json={"errno": 0, "list": []})
+        return httpx.Response(404, json={"errno": 404})
+
+    _patch(monkeypatch, handler)
+    s = BaiduPanStorage({"cookie": "c"})
+    files = run(s.list_share("https://pan.baidu.com/s/1abc"))
+    names = [f.name for f in files]
+    assert "EP01.mp4" in names
+    assert "Season 2" in names  # 目录本身也要出现在结果里
+    assert "EP06.mp4" in names  # 递归取到的
+    ep06 = next(f for f in files if f.name == "EP06.mp4")
+    assert ep06.path == "/Season 2/EP06.mp4"
+    assert ep06.extra["share_dir"] == "/Season 2"
+    assert ep06.file_id == "666"
+
+
+def test_baidu_save_share_files_transfers_by_fsid(monkeypatch):
+    """增量转存只传指定的 fs_id，不碰其他文件。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/gettemplatevariable":
+            return httpx.Response(200, json=TOKEN_OK)
+        if request.url.path == "/share/transfer":
+            # transfer 是 form-encoded（data=），不是 JSON
+            form = urllib.parse.parse_qs(request.read().decode())
+            fsids = json.loads(form["fsidlist"][0])
+            assert fsids == [111, 222], f"Expected [111,222] got {fsids}"
+            return httpx.Response(200, json={"errno": 0})
+        if request.url.path == "/s/1abc":
+            return httpx.Response(
+                200,
+                text=(
+                    "var x = {"
+                    '"shareid":12345,"uk":67890,'
+                    '"list":[{"fs_id":"111"},{"fs_id":"222"},{"fs_id":"333"}]'
+                    "}"
+                ),
+            )
+        return httpx.Response(404, json={"errno": 404})
+
+    _patch(monkeypatch, handler)
+    s = BaiduPanStorage({"cookie": "c"})
+    files = [
+        PanFile("EP01.mp4", "/EP01.mp4", file_id="111"),
+        PanFile("EP02.mp4", "/EP02.mp4", file_id="222"),
+    ]
+    result = run(s.save_share_files("https://pan.baidu.com/s/1abc", files))
+    assert result.success is True
+    assert result.file_count == 2
+
+
+def test_baidu_save_share_files_no_fsid_returns_error():
+    """选中的文件缺 fs_id 时不能静默退回整体转存。"""
+    s = BaiduPanStorage({"cookie": "c"})
+    files = [PanFile("no-fsid-file.mp4", "/no-fsid-file.mp4")]
+    result = run(s.save_share_files("https://pan.baidu.com/s/1abc", files))
+    assert result.success is False
+    assert "fs_id" in result.message
 
 
 def test_baidu_save_share_reports_missing_params(monkeypatch):
