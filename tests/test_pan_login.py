@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import pathlib
 from typing import Any
 
 import pytest
@@ -555,3 +556,54 @@ def test_pan115_parse_files_distinguishes_dir():
     assert len(files) == 2
     assert files[0].is_dir is True and files[0].file_id == "100"
     assert files[1].is_dir is False and files[1].size == 1024
+
+# --------------------------------------------------------------------------
+# 开放平台授权：后端有能力 ≠ 用户能用到（v1.25.0）
+# --------------------------------------------------------------------------
+
+
+def test_frontend_sends_app_credentials_for_openapi_login():
+    """前端必须真的把 AppKey/SecretKey 发出去。
+
+    这是实测复现的缺陷：后端 `PanLoginStartRequest` 早就收 `client_id` /
+    `client_secret`，`/pan/login/providers` 也用 `needs_app_credentials`
+    声明过，但 `app.js` 只发 `{provider}` —— 于是这条路**必然** 400
+    「请先填写百度开放平台的 AppKey 与 SecretKey」，功能等于不存在。
+    与 M55 的僵尸站点同一类错：后端有能力，前端没有入口。
+    """
+    import re
+
+    app_js = pathlib.Path("web/assets/app.js").read_text(encoding="utf-8")
+    assert "client_secret" in app_js, "前端根本没有 SecretKey 输入"
+    assert "needs_app_credentials" in app_js, "前端没读后端的能力声明，等于写死分支"
+
+    # 关键：POST /pan/login/qrcode 的**请求体**里必须带上凭据。
+    # 只断言"文件里出现过 client_secret"是不够的（注入验证证明那样是假绿：
+    # 把 body 里的凭据删掉，输入框还在，断言照样通过）。
+    m = re.search(
+        r'api\("/pan/login/qrcode",\s*\{(.*?)\}\s*\);', app_js, re.S
+    )
+    assert m, "找不到申请二维码的请求，前端结构变了请同步更新本断言"
+    # 必须先剥掉 // 注释再判断：注释里也写着 credentials，
+    # 不剥的话删掉真代码照样绿（注入验证实测到的第二个假绿）。
+    call = re.sub(r"//[^\n]*", "", m.group(1))
+    assert "credentials" in call, (
+        f"凭据没有进入 POST /pan/login/qrcode 的请求体，这条路必然 400：{call}"
+    )
+
+
+def test_frontend_does_not_persist_the_secret_key():
+    """SecretKey 不能落 localStorage —— 它是密钥，任何 XSS 都能顺走。
+
+    AppKey 可以存（不是密钥、方便重复授权）。反向担保写在一起：
+    只断言"没存 secret"的话，把 AppKey 记忆一起删掉也照样绿。
+    """
+    app_js = pathlib.Path("web/assets/app.js").read_text(encoding="utf-8")
+    assert "cf_baidu_appkey" in app_js, "AppKey 记忆没了，用户每次都要重填"
+    # localStorage 里出现 secret 相关键名即为泄漏
+    import re
+
+    for m in re.finditer(r"localStorage\.setItem\(([^,]+),", app_js):
+        key = m.group(1)
+        assert "secret" not in key.lower(), f"SecretKey 被持久化了：{key}"
+

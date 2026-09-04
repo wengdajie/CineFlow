@@ -279,6 +279,8 @@ class XunleiDownloader(BaseDownloader):
         category: str | None = None,
         paused: bool = False,
         cookie: str | None = None,
+        # 迅雷云端下载，UA 由它自己的服务器决定，本地传不进去。
+        user_agent: str | None = None,
     ) -> str | None:
         """提交磁力链接。
 

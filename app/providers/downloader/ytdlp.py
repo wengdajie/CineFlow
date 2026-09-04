@@ -406,6 +406,9 @@ class YtDlpDownloader(BaseDownloader):
         paused: bool = False,
         cookie: str | None = None,
         video_format: str | None = None,
+        # yt-dlp 自己按站点挑合适的 UA（见 DEFAULT_HEADERS/build_headers），
+        # 外部再覆盖反而容易触发风控，所以这里只接不用。
+        user_agent: str | None = None,
     ) -> str | None:
         """开始一个下载任务，立即返回任务 ID（后台异步下载）。
 

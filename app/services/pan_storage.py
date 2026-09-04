@@ -238,6 +238,9 @@ async def save_share(
     payload = {
         "success": result.success,
         "storage": storage.site_name,
+        # 带上站点 ID：转存完还要用它换直链落到本地。
+        # 只给 storage 名字的话调用方得反查一次，而名字不是主键（可重名）。
+        "site_id": storage.config.get("id") or site_id,
         **result.to_dict(),
     }
 
@@ -530,14 +533,23 @@ async def keep_alive_all(*, notify: bool = True) -> dict[str, Any]:
 async def resolve_download_url(
     site_id: int, path: str, *, file_id: str | None = None
 ) -> dict[str, Any]:
-    """换取临时直链（可投给 aria2 或生成 STRM）。"""
+    """换取临时直链（可投给 aria2 或生成 STRM）。
+
+    返回值带 ``user_agent``：直链的 UA 要求是网盘的鉴权规则，
+    拿着 URL 却不知道该用什么 UA 请求，等于把 403 推迟到下载器里发生
+    （而那里的失败本项目看不见）。
+    """
     storage = get_storage(site_id)
     if not storage:
         return {"success": False, "message": "网盘不存在或未启用"}
     url = await storage.download_url(path, file_id=file_id)
     if not url:
         return {"success": False, "message": "该网盘不支持或换取直链失败"}
-    return {"success": True, "url": url}
+    return {
+        "success": True,
+        "url": url,
+        "user_agent": storage.direct_link_user_agent or None,
+    }
 
 
 def list_save_records(*, limit: int = 100) -> list[dict[str, Any]]:

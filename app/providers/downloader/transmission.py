@@ -99,6 +99,8 @@ class TransmissionDownloader(BaseDownloader):
         category: str | None = None,
         paused: bool = False,
         cookie: str | None = None,
+        # 同 qB：BT 协议不走 HTTP，UA 用不上，但签名要对齐基类。
+        user_agent: str | None = None,
     ) -> str | None:
         arguments: dict[str, Any] = {"paused": paused}
         target_path = save_path or self.default_save_path()

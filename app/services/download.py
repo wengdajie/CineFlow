@@ -150,7 +150,7 @@ async def add_download(
             error = download_routing.hint_of(kind)
             status = TaskStatus.FAILED.value
     else:
-        # 网盘分享：优先自动转存进自己的网盘，失败/未配置则留待人工或插件处理
+        # 网盘分享：先转存进自己的网盘，再换直链投给 aria2 落到本地。
         status = TaskStatus.PENDING.value
         error = None
         pan_result = await _try_auto_save_pan(link, resource)
@@ -158,6 +158,23 @@ async def add_download(
             if pan_result.get("success"):
                 status = TaskStatus.TRANSFERRED.value
                 pan_saved = pan_result
+                # 「转存成功」只是把文件挪进了自己的云端，用户要的是**本地文件**。
+                # 这一段以前根本不存在：_ROUTES 的注释、pan_pending_hint() 都在讲
+                # 「转存 → 换直链 → 投 aria2」这条链，但代码里只有前一半，
+                # 任务停在 transferred 就再也不动了（实测用户报「网盘资源下载」无效）。
+                landed = await _land_pan_to_local(
+                    pan_result, target_path, downloader_name
+                )
+                if landed.get("skipped"):
+                    pass  # 没有 aria2：保持 transferred，云端已有文件，不算失败
+                elif landed.get("success"):
+                    downloader = landed.get("downloader")
+                    external_id = landed.get("external_id")
+                    status = TaskStatus.DOWNLOADING.value
+                else:
+                    # 转存成功但落地失败：**不能报成整体失败**（云端确实存下了），
+                    # 但也不能装作没事——把原因写进 error 让用户能看到。
+                    error = str(landed.get("message") or "")[:500] or None
             else:
                 error = str(pan_result.get("message") or "")[:500] or None
         elif not download_routing.has_pan_account():
@@ -230,6 +247,79 @@ async def add_download(
             payload={"task_id": task_id, "kind": kind},
         )
     return task
+
+
+async def _land_pan_to_local(
+    pan_result: dict[str, Any],
+    save_path: str,
+    downloader_name: str | None,
+) -> dict[str, Any]:
+    """转存成功后，把云端文件换成直链投给 aria2，真正落到本地。
+
+    这是「网盘资源下载」链路缺失的最后一段。返回的字典有三种形态，
+    调用方必须能区分（ADR-82）：
+
+    * ``{"skipped": True}`` —— 没有能收直链的下载器。**不是失败**：
+      文件已经在自己的云端了，只是没有本地副本。
+    * ``{"success": True, ...}`` —— 已投递，带 ``downloader``/``external_id``。
+    * ``{"success": False, "message": ...}`` —— 试过但没成，原因要能落到界面上。
+
+    直链必须连**请求它要用的 UA** 一起交给下载器：百度 CDN 直链换掉
+    ``netdisk`` 系 UA 后，小文件能过、超过 ~50MB 直接 403（两个主流油猴脚本
+    LinkSwift / 百度网盘直链助手都专门设这个头）。以前没有传 UA 的通道，
+    403 发生在 aria2 内部，本项目日志里完全看不到。
+    """
+    from app.services import pan_storage as pan_service
+
+    saved_path = str(pan_result.get("saved_path") or "").strip()
+    if not saved_path:
+        # 转存报成功却没给路径，就没法换直链。说清楚是哪一步缺东西，
+        # 而不是笼统报"下载失败"。
+        return {"success": False, "message": "转存成功但未返回落地路径，无法换取直链"}
+
+    candidates = download_routing.candidates_for(ResourceKind.PAN.value, downloader_name)
+    if not candidates:
+        logger.info("网盘资源已转存到 %s，但没有能收直链的下载器，跳过本地落地", saved_path)
+        return {"skipped": True}
+
+    site_id = pan_result.get("site_id") or pan_result.get("storage_id")
+    if not site_id:
+        return {"success": False, "message": "转存结果缺少网盘站点 ID，无法换取直链"}
+
+    try:
+        resolved = await pan_service.resolve_download_url(int(site_id), saved_path)
+    except Exception as exc:  # pragma: no cover - 换直链异常不该打断任务登记
+        logger.warning("换取网盘直链异常：%s", exc)
+        return {"success": False, "message": f"换取直链异常：{exc}"}
+
+    if not resolved.get("success"):
+        return {
+            "success": False,
+            "message": str(resolved.get("message") or "换取直链失败"),
+        }
+
+    url = str(resolved.get("url") or "")
+    user_agent = resolved.get("user_agent") or None
+    attempts: list[str] = []
+    for candidate in candidates:
+        try:
+            external_id = await candidate.add(
+                url, save_path=save_path, user_agent=user_agent
+            )
+        except Exception as exc:
+            attempts.append(f"{candidate.site_name}: {exc}"[:120])
+            continue
+        if external_id:
+            return {
+                "success": True,
+                "downloader": candidate,
+                "external_id": external_id,
+            }
+        attempts.append(f"{candidate.site_name}: 拒绝或超时")
+    return {
+        "success": False,
+        "message": "直链投递失败 → " + "；".join(attempts),
+    }
 
 
 async def _try_auto_save_pan(

@@ -66,8 +66,20 @@ class BaseDownloader(BaseProvider):
         category: str | None = None,
         paused: bool = False,
         cookie: str | None = None,
+        user_agent: str | None = None,
     ) -> str | None:
-        """添加下载任务，返回下载器内的任务 ID。"""
+        """添加下载任务，返回下载器内的任务 ID。
+
+        ``user_agent`` 是**下载这条链接时要用的 UA**，不是下载器自己的 UA。
+        网盘直链普遍按 UA 鉴权：百度的 CDN 直链必须用 ``netdisk;`` 系 UA 请求，
+        换成别的 UA 时**小文件能过、超过 ~50MB 直接 403**
+        （两个主流油猴脚本 LinkSwift / 百度网盘直链助手都专门设这个头，
+        LinkSwift 界面上就写着「请修改用户代理(UA)为 pan.baidu.com」）。
+
+        以前这个参数不存在，于是 :meth:`download_url` 那边辛苦带着
+        ``netdisk`` UA 换到的直链，投给 aria2 后又被 aria2 用自己的 UA 请求 ——
+        403 发生在下载器内部，本项目日志里什么都看不到。
+        """
 
     @abstractmethod
     async def get(self, external_id: str) -> TorrentState | None:

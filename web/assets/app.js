@@ -13,6 +13,8 @@
 
   const API = "/api/v1";
   const THEME_KEY = "cf_theme";
+  //: 百度开放平台 AppKey 的本地记忆键。只存 AppKey，**不存 SecretKey**。
+  const BAIDU_APPKEY_STORE = "cf_baidu_appkey";
 
   const store = {
     token: localStorage.getItem("cf_token") || "",
@@ -5148,7 +5150,12 @@
                 ]),
                 el("div", { class: "row tight" }, [
                   p.qrcode
-                    ? iconButton("扫码登录", "qr", () => startQr(p), "sm primary")
+                    ? iconButton(
+                        p.needs_app_credentials ? "授权登录" : "扫码登录",
+                        "qr",
+                        () => (p.needs_app_credentials ? askAppCredentials(p) : startQr(p)),
+                        "sm primary"
+                      )
                     : null,
                   p.cookie
                     ? iconButton("导入 Cookie", "key", () => importCookie(p), "sm ghost")
@@ -5162,13 +5169,19 @@
     };
 
     /** 扫码：拉二维码后轮询状态，成功即落库。 */
-    const startQr = async (provider) => {
+    const startQr = async (provider, credentials) => {
       body.replaceChildren(loading());
       let session;
       try {
         const response = await api("/pan/login/qrcode", {
           method: "POST",
-          body: { provider: provider.provider },
+          body: {
+            provider: provider.provider,
+            // 开放平台授权要自备 AppKey/SecretKey。后端早就收这两个字段并用
+            // needs_app_credentials 声明过，但前端一直没送 —— 于是这条路
+            // 必然 400「请先填写 AppKey 与 SecretKey」，等于功能不存在。
+            ...(credentials || {}),
+          },
         });
         session = response.data;
       } catch (error) {
@@ -5210,7 +5223,12 @@
             statusLine,
             el("div", { class: "row tight" }, [
               iconButton("返回", "back", () => { stop(); renderPicker(); }, "sm ghost"),
-              iconButton("换个二维码", "refresh", () => { stop(); startQr(provider); }, "sm ghost"),
+              iconButton(
+                "换个二维码",
+                "refresh",
+                () => { stop(); startQr(provider, credentials); },
+                "sm ghost"
+              ),
             ]),
           ]),
         ])
@@ -5246,6 +5264,70 @@
         setTimeout(poll, 2000);
       };
       setTimeout(poll, 1500);
+    };
+
+    /** 开放平台授权：先收 AppKey/SecretKey，再走设备码流程。
+     *
+     * AppKey 存 localStorage（不是密钥、放前端无妨），SecretKey **不存** ——
+     * 它是密钥，落 localStorage 等于任何 XSS 都能顺走。每次重新授权重填一次
+     * 是刻意的代价，refresh_token 有效期 10 年，本来就不该经常走这条路。
+     */
+    const askAppCredentials = (provider) => {
+      const savedKey = localStorage.getItem(BAIDU_APPKEY_STORE) || "";
+      body.replaceChildren(loading());
+      const keyInput = el("input", {
+        class: "input",
+        placeholder: "AppKey（开放平台应用的 AppKey）",
+      });
+      keyInput.value = savedKey;
+      const secretInput = el("input", {
+        class: "input",
+        type: "password",
+        placeholder: "SecretKey（不会被保存，每次需重填）",
+      });
+      const err = el("div", { class: "tiny", style: "color:var(--danger);display:none" });
+
+      const submit = () => {
+        const clientId = keyInput.value.trim();
+        const clientSecret = secretInput.value.trim();
+        if (!clientId || !clientSecret) {
+          err.style.display = "";
+          err.textContent = "AppKey 与 SecretKey 都必须填写";
+          return;
+        }
+        localStorage.setItem(BAIDU_APPKEY_STORE, clientId);
+        startQr(provider, { client_id: clientId, client_secret: clientSecret });
+      };
+      secretInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") submit();
+      });
+
+      body.replaceChildren(
+        el("div", { class: "card" }, [
+          el("div", { class: "col", style: "gap:10px" }, [
+            el("strong", { text: "百度网盘 · 开放平台授权" }),
+            el("div", { class: "tiny dim", text: provider.note || "" }),
+            el("div", { class: "tiny dim" }, [
+              el("span", { text: "本项目不内置公共 AppKey（共用会共享配额、被封则全员受影响）。请到 " }),
+              el("a", {
+                href: "https://pan.baidu.com/union/main/app",
+                target: "_blank",
+                rel: "noreferrer",
+                text: "百度网盘开放平台",
+              }),
+              el("span", { text: " 创建应用，权限勾选「基础」与「网盘」后获取。" }),
+            ]),
+            keyInput,
+            secretInput,
+            err,
+            el("div", { class: "row tight" }, [
+              iconButton("下一步：获取授权码", "qr", submit, "sm primary"),
+              iconButton("返回", "back", renderPicker, "sm ghost"),
+            ]),
+          ]),
+        ])
+      );
+      keyInput.focus();
     };
 
     /** 导入 Cookie：保存前先校验，无效不写库。 */

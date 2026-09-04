@@ -98,6 +98,10 @@ class BaiduPanStorage(BasePanStorage):
     name = "baidu"
     display_name = "百度网盘"
 
+    #: 百度 CDN 直链按 UA 鉴权：换成浏览器/aria2 默认 UA 时，
+    #: 小文件能过、**超过 ~50MB 直接 403**。投给下载器时必须一起带上。
+    direct_link_user_agent = NETDISK_UA
+
     # web 接口支持完整文件管理
     supports_rename = True
     supports_move = True

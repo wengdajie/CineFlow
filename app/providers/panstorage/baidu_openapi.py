@@ -101,6 +101,9 @@ class BaiduOpenApiStorage(BasePanStorage):
     name = "baidu_openapi"
     display_name = "百度网盘（开放平台授权）"
 
+    #: dlink 与网页通道同一个坑：非 netdisk 系 UA 请求大文件必然 403
+    direct_link_user_agent = NETDISK_UA
+
     #: 开放平台**没有**转存他人分享的接口，如实声明（见模块文档表格）
     supports_save = False
     supports_delete = True

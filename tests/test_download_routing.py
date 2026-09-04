@@ -254,3 +254,254 @@ class TestRoutingEndpoint:
 
     def test_接口需要登录(self, client):
         assert client.get("/api/v1/downloads/routing").status_code == 401
+
+# --------------------------------------------------------------------------
+# 网盘资源落地到本地：转存 → 换直链 → 投 aria2（v1.25.0 补上缺失的第三段）
+# --------------------------------------------------------------------------
+
+
+class _FakeStorage:
+    """假网盘：转存成功并给出落地路径与直链 UA 要求。"""
+
+    site_name = "假百度"
+    direct_link_user_agent = "netdisk;P2SP;3.0.20.11"
+
+    def __init__(self) -> None:
+        self.asked: list[str] = []
+
+    async def download_url(self, path, *, file_id=None):
+        self.asked.append(path)
+        return "https://d.pcs.baidu.com/file/abc?fid=1"
+
+
+class _RecordingDownloader:
+    """假下载器：记录 add() 收到的全部参数。"""
+
+    site_name = "假 aria2"
+
+    def __init__(self, accept: bool = True) -> None:
+        self.calls: list[dict] = []
+        self.accept = accept
+
+    def accepts(self, kind: str) -> bool:
+        return True
+
+    async def add(self, link, *, save_path=None, category=None, paused=False,
+                  cookie=None, user_agent=None):
+        self.calls.append(
+            {"link": link, "save_path": save_path, "user_agent": user_agent}
+        )
+        return "gid-42" if self.accept else None
+
+
+def test_pan_landing_sends_direct_link_with_required_ua(monkeypatch):
+    """转存成功后必须换直链投给下载器，并带上网盘要求的 UA。
+
+    这一段以前**完全不存在**：`_ROUTES` 的注释与 `pan_pending_hint()` 都在讲
+    「转存 → 换直链 → 投 aria2」，但代码里只有前一半，任务停在 `transferred`
+    就再也不动了（实测用户报「网盘资源下载」无效）。
+    UA 尤其关键：百度 CDN 直链换掉 netdisk 系 UA 后大文件必然 403。
+    """
+    storage = _FakeStorage()
+    downloader = _RecordingDownloader()
+    from app.services import pan_storage as pan_service
+
+    monkeypatch.setattr(pan_service, "get_storage", lambda site_id: storage)
+    monkeypatch.setattr(
+        download_routing, "candidates_for", lambda kind, prefer=None: [downloader]
+    )
+
+    landed = asyncio.run(
+        download_service._land_pan_to_local(
+            {"success": True, "saved_path": "/来自CineFlow/片子.mkv", "site_id": 7},
+            "K:/media/movies",
+            None,
+        )
+    )
+    assert landed.get("success"), f"落地失败：{landed}"
+    assert landed["external_id"] == "gid-42"
+    assert storage.asked == ["/来自CineFlow/片子.mkv"]
+    assert downloader.calls, "根本没调用下载器"
+    call = downloader.calls[0]
+    assert call["link"].startswith("https://d.pcs.baidu.com/")
+    assert call["user_agent"] == "netdisk;P2SP;3.0.20.11", (
+        f"直链的 UA 没带上，大文件会 403：{call}"
+    )
+    assert call["save_path"] == "K:/media/movies"
+
+
+def test_pan_landing_without_downloader_is_skipped_not_failed(monkeypatch):
+    """没有 aria2 时算「跳过」而不是「失败」。
+
+    文件确实已经在用户自己的云端了，报失败会让人以为转存也没成。
+    但也不能报成功——调用方要能区分这三态（ADR-82）。
+    """
+    monkeypatch.setattr(download_routing, "candidates_for", lambda kind, prefer=None: [])
+    landed = asyncio.run(
+        download_service._land_pan_to_local(
+            {"success": True, "saved_path": "/x/y.mkv", "site_id": 7},
+            "K:/media/movies",
+            None,
+        )
+    )
+    assert landed.get("skipped") is True, f"应当是跳过：{landed}"
+    assert not landed.get("success")
+
+
+def test_pan_landing_reports_reason_when_delivery_fails(monkeypatch):
+    """投递失败要带出**哪个下载器为什么**失败，不能只说"失败"。"""
+    storage = _FakeStorage()
+    downloader = _RecordingDownloader(accept=False)
+    from app.services import pan_storage as pan_service
+
+    monkeypatch.setattr(pan_service, "get_storage", lambda site_id: storage)
+    monkeypatch.setattr(
+        download_routing, "candidates_for", lambda kind, prefer=None: [downloader]
+    )
+    landed = asyncio.run(
+        download_service._land_pan_to_local(
+            {"success": True, "saved_path": "/x/y.mkv", "site_id": 7},
+            "K:/media/movies",
+            None,
+        )
+    )
+    assert landed.get("success") is False
+    assert "假 aria2" in landed["message"], f"没说清是哪个下载器：{landed}"
+
+
+def test_pan_landing_without_saved_path_says_which_step_is_missing(monkeypatch):
+    """转存报成功却没给落地路径时，要说清缺的是哪一步。"""
+    landed = asyncio.run(
+        download_service._land_pan_to_local(
+            {"success": True, "saved_path": ""}, "K:/media/movies", None
+        )
+    )
+    assert landed.get("success") is False
+    assert "落地路径" in landed["message"], landed
+
+
+def test_resolve_download_url_carries_required_user_agent(monkeypatch):
+    """resolve_download_url 必须把 UA 要求一起返回。
+
+    只给 URL 不给 UA，等于把 403 推迟到下载器内部发生 —— 而那里的失败
+    本项目日志里看不到。
+    """
+    from app.services import pan_storage as pan_service
+
+    monkeypatch.setattr(pan_service, "get_storage", lambda site_id: _FakeStorage())
+    result = asyncio.run(pan_service.resolve_download_url(7, "/x/y.mkv"))
+    assert result["success"] is True
+    assert result["user_agent"] == "netdisk;P2SP;3.0.20.11", result
+
+
+def test_baidu_storages_declare_direct_link_ua():
+    """两个百度 Provider 都要声明直链 UA；别的网盘不该被凭空加上。"""
+    from app.providers.panstorage.baidu import BaiduPanStorage
+    from app.providers.panstorage.baidu_openapi import BaiduOpenApiStorage
+    from app.providers.panstorage.local_dir import LocalDirStorage
+
+    assert BaiduPanStorage.direct_link_user_agent
+    assert "netdisk" in BaiduPanStorage.direct_link_user_agent
+    assert BaiduOpenApiStorage.direct_link_user_agent
+    assert "netdisk" in BaiduOpenApiStorage.direct_link_user_agent
+    # 反向担保：本地目录没有 UA 要求，不能被顺手塞一个
+    assert LocalDirStorage.direct_link_user_agent is None
+
+def test_add_download_pan_actually_calls_landing(monkeypatch, client):
+    """`add_download` 处理网盘资源时必须真的走落地那一段。
+
+    注入验证抓到的假绿：把 `_land_pan_to_local(...)` 整个短路掉
+    （回到 v1.24.0「只转存不落地」的行为）时，单测全绿 ——
+    因为它们只直接测 `_land_pan_to_local`，**没人测调用点**。
+    这就是「一个函数写好了 ≠ 它被接进链路」。
+    """
+    calls: list[dict] = []
+
+    async def fake_save(link, resource):
+        return {
+            "success": True,
+            "storage": "假百度",
+            "site_id": 7,
+            "saved_path": "/来自CineFlow/片子.mkv",
+        }
+
+    async def fake_land(pan_result, save_path, downloader_name):
+        calls.append({"pan_result": pan_result, "save_path": save_path})
+        return {"skipped": True}
+
+    monkeypatch.setattr(download_service, "_try_auto_save_pan", fake_save)
+    monkeypatch.setattr(download_service, "_land_pan_to_local", fake_land)
+
+    task = asyncio.run(
+        download_service.add_download(
+            {
+                "title": "某电影 (2020)",
+                "link": "https://pan.baidu.com/s/1abcdefg",
+                "kind": ResourceKind.PAN.value,
+            },
+            notify=False,
+        )
+    )
+    assert task is not None
+    assert calls, "转存成功后没有尝试落地到本地——第三段又断了"
+    assert calls[0]["pan_result"]["saved_path"] == "/来自CineFlow/片子.mkv"
+
+
+def test_add_download_pan_landing_failure_keeps_transferred_but_reports(monkeypatch, client):
+    """落地失败时：状态保持 transferred（云端确实存下了），但 error 要写清原因。
+
+    既不能报成整体失败（会让人以为转存也没成），也不能装作没事
+    （用户等不到本地文件却看不到任何提示）。
+    """
+
+    async def fake_save(link, resource):
+        return {"success": True, "storage": "假百度", "site_id": 7, "saved_path": "/x.mkv"}
+
+    async def fake_land(pan_result, save_path, downloader_name):
+        return {"success": False, "message": "直链投递失败 → 假 aria2: 拒绝或超时"}
+
+    monkeypatch.setattr(download_service, "_try_auto_save_pan", fake_save)
+    monkeypatch.setattr(download_service, "_land_pan_to_local", fake_land)
+
+    task = asyncio.run(
+        download_service.add_download(
+            {
+                "title": "某电影 (2020)",
+                "link": "https://pan.baidu.com/s/1abcdefg",
+                "kind": ResourceKind.PAN.value,
+            },
+            notify=False,
+        )
+    )
+    assert task is not None
+    assert task.status == TaskStatus.TRANSFERRED.value, "云端已转存，不该报整体失败"
+    assert task.error and "假 aria2" in task.error, f"落地失败的原因没落到界面上：{task.error}"
+
+
+def test_save_share_payload_carries_site_id(monkeypatch, client):
+    """`save_share` 的返回值必须带 site_id。
+
+    注入验证抓到的假绿：把 `"site_id"` 改成别的键名时全绿 ——
+    因为 `_land_pan_to_local` 的用例都是自己构造 dict 传进去的，
+    **没人验证真正的生产者会不会给这个键**。契约的两端都要有测试。
+    """
+    from app.providers.panstorage.base import SaveResult
+    from app.services import pan_storage as pan_service
+
+    class _Saver:
+        name = "fake"
+        site_name = "假百度"
+        supports_save = True
+        config = {"id": 77}
+
+        async def save_share(self, share_url, *, password=None, target_dir=None):
+            return SaveResult(success=True, saved_path="/来自CineFlow/x.mkv", file_count=1)
+
+    monkeypatch.setattr(pan_service, "_pick_for_share", lambda url: _Saver())
+    monkeypatch.setattr(pan_service, "suggested_target_dir", lambda storage: "/来自CineFlow")
+    monkeypatch.setattr(pan_service, "remember_target_dir", lambda *a, **k: None)
+
+    result = asyncio.run(pan_service.save_share("https://pan.baidu.com/s/1abc"))
+    assert result["success"] is True
+    assert result.get("site_id") == 77, f"转存结果没带 site_id，换直链无从下手：{result}"
+

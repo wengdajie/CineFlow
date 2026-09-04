@@ -190,6 +190,14 @@ class BasePanStorage(BaseProvider):
         """换取临时直链（用于 STRM 或投给 aria2）。"""
         return None
 
+    #: 请求本网盘直链时必须使用的 User-Agent；``None`` 表示无特殊要求。
+    #:
+    #: **为什么这是 Provider 的属性而不是调用方的常量**：直链的 UA 要求是
+    #: 网盘自己的鉴权规则，只有 Provider 知道。百度的 CDN 直链换成别的 UA
+    #: 时小文件能过、超过 ~50MB 直接 403 —— 把这个知识留在 Provider 里，
+    #: 下载链路只管照着传，才不会每加一个网盘就漏一次。
+    direct_link_user_agent: str | None = None
+
     # ---------------- 文件管理（v1.7.0 新增，参考 T3FAP 网盘插件能力矩阵） ----------------
     async def rename(
         self, path: str, new_name: str, *, file_id: str | None = None

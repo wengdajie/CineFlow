@@ -340,9 +340,9 @@ _aria2_src = pathlib.Path("app/providers/downloader/aria2.py").read_text(encodin
 check("aria2 会跟随 followedBy 到数据 GID", "followedBy" in _aria2_src and "_follow" in _aria2_src)
 _dl_tests = pathlib.Path("tests/test_downloaders.py").read_text(encoding="utf-8")
 check("aria2 磁力 GID 跟随有回归用例", "test_aria2_magnet_get_follows_to_data_gid" in _dl_tests)
-check("README 版本号 1.24.0", "1.24.0" in README_ONLY)
+check("README 版本号 1.25.0", "1.25.0" in README_ONLY)
 version_src = pathlib.Path("app/core/version.py").read_text(encoding="utf-8")
-check("代码版本号为 1.24.0", 'APP_VERSION = "1.24.0"' in version_src)
+check("代码版本号为 1.25.0", 'APP_VERSION = "1.25.0"' in version_src)
 check("README 声明 314 项接口用例", "314 项真实 HTTP 接口用例" in README)
 check("scripts/README 声明 321 项", "321 项接口用例" in SCRIPTS_README)
 
@@ -2027,6 +2027,77 @@ check("命名不编造 unknown 有用例",
 check("外部年份有反向担保（不覆盖文件名年份）",
       "test_external_year_does_not_override_filename_year" in _org_t
       and "test_transfer_directory_applies_external_year" in _org_t)
+
+# ---- v1.25.0 / M58：网盘直链的 UA 是鉴权的一部分（ADR-101）----
+check("ADR-101 记录直链 UA 与前端断链（v1.25.0）", "## ADR-101 ·" in _adr)
+check("路线图含里程碑 M58", "里程碑 M58 ·" in roadmap_all)
+check("ADR-101 记录参考脚本的 50MB/403 实证", "50MB" in _adr and "403" in _adr)
+check("ADR-101 明确不做分享链接逆向（与 ADR-34 一致）",
+      "sharedownload" in _adr and "ADR-34" in _adr)
+
+# 直链的 UA 必须能一路传到真正发 HTTP 请求的那一方
+_dlbase = pathlib.Path("app/providers/downloader/base.py").read_text(encoding="utf-8")
+check("下载器抽象接受 user_agent", "user_agent: str | None = None," in _dlbase)
+check("base 说明 UA 是下载这条链接要用的 UA", "不是下载器自己的 UA" in _dlbase)
+_a2 = pathlib.Path("app/providers/downloader/aria2.py").read_text(encoding="utf-8")
+check("aria2 写 user-agent 选项（--user-agent 才真正生效）",
+      'options["user-agent"] = user_agent' in _a2)
+check("aria2 的 header 是列表，Cookie 与 UA 并存",
+      'headers.append(f"Cookie: {cookie}")' in _a2
+      and 'headers.append(f"User-Agent: {user_agent}")' in _a2)
+# 每个下载器签名都要对齐（不用 **kwargs 兜，约定 9）
+for _mod in ("qbittorrent", "transmission", "xunlei", "ytdlp"):
+    _src = pathlib.Path(f"app/providers/downloader/{_mod}.py").read_text(encoding="utf-8")
+    check(f"{_mod} 的 add() 接 user_agent", "user_agent: str | None = None," in _src)
+
+# UA 要求是网盘自己的鉴权规则 → 做成 Provider 属性
+_psbase = pathlib.Path("app/providers/panstorage/base.py").read_text(encoding="utf-8")
+check("网盘基类声明 direct_link_user_agent",
+      "direct_link_user_agent: str | None = None" in _psbase)
+_bd = pathlib.Path("app/providers/panstorage/baidu.py").read_text(encoding="utf-8")
+_bdo = pathlib.Path("app/providers/panstorage/baidu_openapi.py").read_text(encoding="utf-8")
+check("百度（网页）声明直链 UA", "direct_link_user_agent = NETDISK_UA" in _bd)
+check("百度（开放平台）声明直链 UA", "direct_link_user_agent = NETDISK_UA" in _bdo)
+_ps = pathlib.Path("app/services/pan_storage.py").read_text(encoding="utf-8")
+check("换直链一起返回 UA 要求",
+      '"user_agent": storage.direct_link_user_agent or None,' in _ps)
+check("转存结果带 site_id（否则换直链无从下手）",
+      '"site_id": storage.config.get("id") or site_id,' in _ps)
+
+# 缺失的第三段：转存 → 换直链 → 投下载器
+_dls = pathlib.Path("app/services/download.py").read_text(encoding="utf-8")
+check("存在网盘落地本地的实现", "async def _land_pan_to_local(" in _dls)
+check("落地被真正接进 add_download", "landed = await _land_pan_to_local(" in _dls)
+check("落地时把 UA 一起投给下载器",
+      "url, save_path=save_path, user_agent=user_agent" in _dls)
+check("没有下载器时算跳过而不是失败", '{"skipped": True}' in _dls)
+check("落地失败保持 transferred 但写明原因", "云端确实存下了" in _dls)
+
+# 前端：后端有能力 ≠ 用户能用到
+_appjs = pathlib.Path("web/assets/app.js").read_text(encoding="utf-8")
+check("前端读后端的 needs_app_credentials", "needs_app_credentials" in _appjs)
+check("前端有 SecretKey 输入", "client_secret" in _appjs)
+check("前端记住 AppKey", "cf_baidu_appkey" in _appjs)
+check("前端不持久化 SecretKey",
+      'setItem("cf_baidu_secret"' not in _appjs
+      and "setItem(BAIDU_SECRET" not in _appjs)
+
+_pl_t = pathlib.Path("tests/test_pan_login.py").read_text(encoding="utf-8")
+for _t in ("test_frontend_sends_app_credentials_for_openapi_login",
+           "test_frontend_does_not_persist_the_secret_key"):
+    check(f"开放平台授权用例 {_t}", _t in _pl_t)
+_dr_t = pathlib.Path("tests/test_download_routing.py").read_text(encoding="utf-8")
+for _t in ("test_pan_landing_sends_direct_link_with_required_ua",
+           "test_pan_landing_without_downloader_is_skipped_not_failed",
+           "test_add_download_pan_actually_calls_landing",
+           "test_save_share_payload_carries_site_id"):
+    check(f"网盘落地用例 {_t}", _t in _dr_t)
+_dl_t2 = pathlib.Path("tests/test_downloaders.py").read_text(encoding="utf-8")
+for _t in ("test_aria2_add_passes_user_agent_for_pan_direct_link",
+           "test_aria2_add_keeps_cookie_and_user_agent_together",
+           "test_aria2_add_without_user_agent_sets_no_ua_option",
+           "test_all_downloaders_accept_user_agent_param"):
+    check(f"aria2 UA 用例 {_t}", _t in _dl_t2)
 
 # 「门禁数字的来源」这段散文自己必须被门禁覆盖 —— 它曾是全文档漂移最严重处
 # 原文写「榜单来源 4 个」，而榜单订阅已在 v1.24.0 下线；真正还在的可数对象是

@@ -926,6 +926,111 @@ _SINTEL_FILES = [
 ]
 
 
+class _Aria2AddCapture:
+    """抓住 aria2.addUri 的 options，检查 UA 有没有真的传下去。"""
+
+    def __init__(self) -> None:
+        self.options: dict[str, Any] = {}
+
+    def handle(self, request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        params = [p for p in payload["params"] if not str(p).startswith("token:")]
+        if payload["method"] == "aria2.addUri":
+            self.options = params[1] if len(params) > 1 else {}
+        return httpx.Response(
+            200, json={"jsonrpc": "2.0", "id": "x", "result": "gid-1"}
+        )
+
+
+def _aria2_with(
+    monkeypatch: pytest.MonkeyPatch, capture: _Aria2AddCapture
+) -> Aria2Downloader:
+    from app.utils import http as http_mod
+
+    _patch_transport(monkeypatch, http_mod, capture.handle)
+    return Aria2Downloader({"url": "http://127.0.0.1:6800"})
+
+
+def test_aria2_add_passes_user_agent_for_pan_direct_link(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """网盘直链的 UA 必须真的到达 aria2。
+
+    百度 CDN 直链按 UA 鉴权：换成 aria2 默认 UA 后**小文件能过、
+    超过 ~50MB 直接 403**（LinkSwift 与百度网盘直链助手都专门设这个头）。
+    以前 `add()` 根本没有 UA 参数，403 发生在 aria2 内部，本项目看不见。
+    """
+    capture = _Aria2AddCapture()
+    dl = _aria2_with(monkeypatch, capture)
+    gid = asyncio.run(
+        dl.add(
+            "https://d.pcs.baidu.com/file/abc?fid=1",
+            save_path="K:/media/movies",
+            user_agent="netdisk;P2SP;3.0.20.11",
+        )
+    )
+    assert gid == "gid-1"
+    # --user-agent 才是真正作用于 HTTP 请求的开关
+    assert capture.options.get("user-agent") == "netdisk;P2SP;3.0.20.11", (
+        f"UA 没进 aria2 选项：{capture.options}"
+    )
+    headers = capture.options.get("header") or []
+    assert any(h.startswith("User-Agent: netdisk;") for h in headers), (
+        f"UA 没进 header：{headers}"
+    )
+
+
+def test_aria2_add_keeps_cookie_and_user_agent_together(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cookie 与 UA 要并存 —— header 是列表，后写的不能覆盖前面的。"""
+    capture = _Aria2AddCapture()
+    dl = _aria2_with(monkeypatch, capture)
+    asyncio.run(
+        dl.add(
+            "https://d.pcs.baidu.com/file/abc",
+            cookie="BDUSS=xyz",
+            user_agent="netdisk;P2SP;3.0.20.11",
+        )
+    )
+    headers = capture.options.get("header") or []
+    assert any(h.startswith("Cookie: BDUSS=") for h in headers), f"Cookie 丢了：{headers}"
+    assert any(h.startswith("User-Agent: netdisk;") for h in headers), f"UA 丢了：{headers}"
+
+
+def test_aria2_add_without_user_agent_sets_no_ua_option(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """反向担保：没要求 UA 时不能凭空塞一个，否则 BT/普通直链行为被改变。"""
+    capture = _Aria2AddCapture()
+    dl = _aria2_with(monkeypatch, capture)
+    asyncio.run(dl.add("magnet:?xt=urn:btih:" + "0" * 40))
+    assert "user-agent" not in capture.options, f"凭空加了 UA：{capture.options}"
+
+
+def test_all_downloaders_accept_user_agent_param() -> None:
+    """每个下载器的 add() 都要能接 user_agent。
+
+    签名必须与基类一致（不用 **kwargs 兜）：换源循环会对任意候选统一调用，
+    有一个不收这个关键字就是运行期 TypeError。
+    """
+    import inspect
+
+    from app.providers.downloader.base import BaseDownloader
+    from app.providers.downloader.ytdlp import YtDlpDownloader
+
+    for cls in (
+        Aria2Downloader,
+        QbittorrentDownloader,
+        TransmissionDownloader,
+        XunleiDownloader,
+        YtDlpDownloader,
+        BaseDownloader,
+    ):
+        params = inspect.signature(cls.add).parameters
+        assert "user_agent" in params, f"{cls.__name__}.add() 不接 user_agent"
+
+
 def test_aria2_content_path_is_not_the_first_file() -> None:
     """content_path 不能取 files[0]。
 

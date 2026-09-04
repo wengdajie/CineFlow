@@ -222,6 +222,9 @@ class QbittorrentDownloader(BaseDownloader):
         category: str | None = None,
         paused: bool = False,
         cookie: str | None = None,
+        # qB 收的是种子/磁力，走 BT 协议不发 HTTP 请求，UA 无意义。
+        # 仍然接这个参数：签名与基类一致才能在换源循环里被统一调用。
+        user_agent: str | None = None,
     ) -> str | None:
         data: dict[str, Any] = {
             "urls": link,
