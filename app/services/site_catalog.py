@@ -35,6 +35,45 @@ from app.schemas.enums import ProviderKind
 #: ``caveat`` 如实写明缺陷，避免用户以为是自己配错了。
 BT_SITE_PRESETS: list[dict[str, Any]] = [
     {
+        "id": "bt4g",
+        "name": "BT4G 磁力搜索",
+        "kind": ProviderKind.INDEXER.value,
+        "provider": "bt4g",
+        "url": "https://bt4gprx.com",
+        "priority": 15,
+        "description": "公开 BT 聚合搜索，**免部署、免鉴权、中文关键词直接可用**。"
+                       "RSS 端点直出磁力链与体积，覆盖华语综艺/剧集/动漫，"
+                       "弥补 AnimeTosho/dmhy 偏动漫、torrents-csv 偏英文的缺口。",
+        "measured": "喜剧之王单口季 15 条（含真实磁力 + 体积），连续 4 次请求均 200 无限速",
+        "caveat": "不提供做种数（seeders=0），按体积排序优先；"
+                  "RSS 端点可用，HTML 端点被 Cloudflare 拦截（403）",
+        "verified": True,
+        "options": {
+            "orderby": "size",
+            "note": "搜索词走 quote 而不是 quote_plus，+ 号不会被解成空格",
+        },
+    },
+    {
+        "id": "bitsearch",
+        "name": "Bitsearch 磁力搜索",
+        "kind": ProviderKind.INDEXER.value,
+        "provider": "bitsearch",
+        "url": "https://bitsearch.eu",
+        "priority": 16,
+        "description": "公开 BT 聚合搜索，**唯一同时提供做种数与中文覆盖**的免鉴权源。"
+                       "与 BT4G 结果互补：BT4G 不给 seeders，本站给真实做种/下载数，"
+                       "用户才能判断「这个种还下不下得动」。",
+        "measured": "喜剧之王单口季 20 条（做种数 0~11，体积 237KB~9.12GB），"
+                    "同一 URL 连打 10 次均 200/20 条无限速",
+        "caveat": "收录含大量网盘引流假种（体积 <5MB 却标 4K），依赖体积过滤拦掉；"
+                  "并发压力下会返回 500（限流，非无结果），已按限流处理",
+        "verified": True,
+        "options": {
+            "sort": "seeders",
+            "note": "搜索词走 quote_plus（query 参数，+ 即空格），与 BT4G 的路径段相反",
+        },
+    },
+    {
         "id": "dmhy_search",
         "name": "动漫花园 dmhy（搜索）",
         "kind": ProviderKind.INDEXER.value,

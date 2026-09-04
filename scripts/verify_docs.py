@@ -46,7 +46,7 @@ from app.providers.registry import list_providers, load_builtin_providers  # noq
 load_builtin_providers()
 providers = list_providers()
 names = {p["name"] for p in providers}
-check("Provider 总数 35", len(providers) == 35, f"实际 {len(providers)}")
+check("Provider 总数 37", len(providers) == 37, f"实际 {len(providers)}")
 check("README 声明 35 个 Provider", "35 个注册 Provider" in README)
 # v1.16.0：百度网盘的**扫码登录**早就有了，存储 Provider 却一直缺失，
 # 导致登录成功后建出的站点是「僵尸站点」（总览查不到、转存/保活全静默跳过）。
@@ -305,8 +305,8 @@ check("README 说明定时任务可改期", "定时任务" in README and "cron" 
 
 # ---- 测试文件 ----
 test_files = sorted(p.name for p in pathlib.Path("tests").glob("test_*.py"))
-check("测试文件 57 个", len(test_files) == 57, str(test_files))
-check("README 声明 57 个测试文件", "57 个测试文件" in README)
+check("测试文件 58 个", len(test_files) == 58, str(test_files))
+check("README 声明 58 个测试文件", "58 个测试文件" in README)
 for name in ("test_custom_sites.py", "test_radar.py", "test_trending.py",
              # test_nfo / test_scraper / test_ranking 已随功能下线（ADR-96）
              "test_panstorage.py", "test_chatops.py", "test_library_ops.py",
@@ -340,9 +340,9 @@ _aria2_src = pathlib.Path("app/providers/downloader/aria2.py").read_text(encodin
 check("aria2 会跟随 followedBy 到数据 GID", "followedBy" in _aria2_src and "_follow" in _aria2_src)
 _dl_tests = pathlib.Path("tests/test_downloaders.py").read_text(encoding="utf-8")
 check("aria2 磁力 GID 跟随有回归用例", "test_aria2_magnet_get_follows_to_data_gid" in _dl_tests)
-check("README 版本号 1.25.0", "1.25.0" in README_ONLY)
+check("README 版本号 1.26.0", "1.26.0" in README_ONLY)
 version_src = pathlib.Path("app/core/version.py").read_text(encoding="utf-8")
-check("代码版本号为 1.25.0", 'APP_VERSION = "1.25.0"' in version_src)
+check("代码版本号为 1.26.0", 'APP_VERSION = "1.26.0"' in version_src)
 check("README 声明 314 项接口用例", "314 项真实 HTTP 接口用例" in README)
 check("scripts/README 声明 321 项", "321 项接口用例" in SCRIPTS_README)
 
@@ -2098,6 +2098,54 @@ for _t in ("test_aria2_add_passes_user_agent_for_pan_direct_link",
            "test_aria2_add_without_user_agent_sets_no_ua_option",
            "test_all_downloaders_accept_user_agent_param"):
     check(f"aria2 UA 用例 {_t}", _t in _dl_t2)
+
+# ---- v1.26.0 / M59：BT 覆盖面的四个独立缺陷（ADR-102）----
+_registry_src = pathlib.Path("app/providers/registry.py").read_text(encoding="utf-8")
+_catalog_src = pathlib.Path("app/services/site_catalog.py").read_text(encoding="utf-8")
+
+check("ADR-102 记录诊断口径与最终结果同源（v1.26.0）", "## ADR-102 ·" in _adr)
+check("路线图有里程碑 M59", "里程碑 M59 ·" in roadmap_all)
+check("ADR-102 写明 68 条全无关的实测证据", "68" in _adr and "1999" in _adr)
+check("ADR-102 区分 empty/filtered/error 三种零结果",
+      "filtered" in _adr and "empty" in _adr)
+
+# 两个新磁力源：Provider、注册表、实测清单三处都要在（约定 11：少一处就是僵尸站点）
+for _name in ("bt4g", "bitsearch"):
+    _src = pathlib.Path(f"app/providers/indexer/{_name}.py").read_text(encoding="utf-8")
+    check(f"{_name} Provider 存在且自注册", "@register" in _src)
+    check(f"{_name} 已进 load_builtin_providers 清单",
+          f'"app.providers.indexer.{_name}",' in _registry_src)
+    check(f"{_name} 已进 BT 实测站点清单", f'"id": "{_name}"' in _catalog_src)
+    check(f"{_name} 不伪造全站最新", "async def fetch_latest" in _src)
+
+# bitsearch 的两个实测陷阱必须在代码里留下痕迹
+_bs = pathlib.Path("app/providers/indexer/bitsearch.py").read_text(encoding="utf-8")
+check("bitsearch 磁力链反 HTML 转义", "html.unescape(magnet_match.group(1))" in _bs)
+check("bitsearch 非 200 抛错而非当成零结果", "fetch_text_result(" in _bs)
+check("bitsearch 做种/下载数按图标取而非按顺序",
+      'fa-arrow-up"' in _bs and 'fa-arrow-down"' in _bs)
+check("bitsearch 区分「零结果」与「解析失效」", "_NO_RESULT_MARKER" in _bs)
+
+# bt4g 必须校验根节点：HTML 错误页也是合法 XML
+_b4 = pathlib.Path("app/providers/indexer/bt4g.py").read_text(encoding="utf-8")
+check("bt4g 校验 RSS 根节点", 'root.tag.lower() != "rss"' in _b4)
+
+# 假种识别的两道闸门
+_filters_src = pathlib.Path("app/core/filters.py").read_text(encoding="utf-8")
+check("假种第一道闸门：体积 + 高清标签", "_FAKE_TORRENT_MIN_BYTES" in _filters_src)
+check("假种第二道闸门：体积 + 剧集标记", "_FAKE_VIDEO_MIN_BYTES" in _filters_src
+      and "_FAKE_EPISODE_MARKERS" in _filters_src)
+check("假种检测接进过滤链路", "_is_fake_torrent(resource)" in _filters_src)
+
+# 诊断口径：非流式与流式两处都要修正 kept（约定 12）
+check("recount_kept 存在且被调用", _search_src.count("recount_kept(") >= 2)
+check("非流式路径报 filtered", 'outcome.status = "filtered"' in _search_src)
+check("流式路径也修正 kept", "outcome.kept = len(items)" in _search_src)
+check("季号写法变体保留季号", "_season_spelling_variants" in _search_src)
+
+# 前端要真的能显示 filtered，否则后端加了状态用户看不到
+check("前端有 filtered 状态文案", '"全被过滤"' in app_js)
+check("前端 filtered 排序权重靠前", "filtered: 3" in app_js)
 
 # 「门禁数字的来源」这段散文自己必须被门禁覆盖 —— 它曾是全文档漂移最严重处
 # 原文写「榜单来源 4 个」，而榜单订阅已在 v1.24.0 下线；真正还在的可数对象是

@@ -359,9 +359,13 @@
   //: 每站诊断状态 → [展示名, 标签色]。后端从 v1.6.0 就返回 sites 诊断，
   //: 但界面一直没渲染 —— 于是「开了 8 个站却只看到 1 个站的资源」时，
   //: 用户看不到到底是超时、被熔断跳过还是这个站真的没有，只能怀疑功能坏了。
+  //: filtered 与 empty 必须分开显示：empty 是「这个站没这部片」，
+  //: filtered 是「这个站返回了一堆但全对不上」——后者才提示该换关键词/站点。
+  //: 实测 BD电影首发站 搜「喜剧之王单口季 第三季」返回 68 条 1999 年的电影。
   const SITE_STATUS = {
     ok: ["有结果", "ok"],
     empty: ["无匹配", ""],
+    filtered: ["全被过滤", "warn"],
     timeout: ["超时", "warn"],
     skipped: ["已跳过", "warn"],
     error: ["失败", "err"],
@@ -371,7 +375,7 @@
   function siteReportCard(sites, onReset) {
     const rows = (sites || []).slice();
     if (!rows.length) return null;
-    const ORDER = { error: 0, timeout: 1, skipped: 2, empty: 3, ok: 4 };
+    const ORDER = { error: 0, timeout: 1, skipped: 2, filtered: 3, empty: 4, ok: 5 };
     rows.sort(function (a, b) {
       const d = (ORDER[a.status] === undefined ? 9 : ORDER[a.status]) -
                 (ORDER[b.status] === undefined ? 9 : ORDER[b.status]);
@@ -380,11 +384,15 @@
     const hit = rows.filter(function (r) { return r.status === "ok"; }).length;
     const skipped = rows.filter(function (r) { return r.status === "skipped"; }).length;
     const slow = rows.filter(function (r) { return r.status === "timeout"; }).length;
+    const filtered = rows.filter(function (r) { return r.status === "filtered"; }).length;
     return el("div", { class: "card flush" }, [
       el("div", { class: "card-head" }, [
         el("h3", {}, [icon("pulse", "sm"), el("span", { text: "站点情况（" + hit + "/" + rows.length + " 出货）" })]),
         el("div", { class: "row tight center" }, [
           slow ? el("span", { class: "tag warn", text: slow + " 个超时" }) : null,
+          filtered
+            ? el("span", { class: "tag warn", text: filtered + " 个全被过滤" })
+            : null,
           skipped
             ? iconButton("解除跳过", "refresh", async function () {
                 try {

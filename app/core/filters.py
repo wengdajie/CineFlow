@@ -173,6 +173,84 @@ def apply_rules(
     return True, "通过"
 
 
+#: 疑似虚假种子的体积下限（字节）。低于它且标题标着高清 → 判为虚假。
+#:
+#: 实测依据（关键词「喜剧之王单口季 第三季」，2026-09-04）：
+#: bitsearch 上 6 条「第三季」BT 结果全部是 288KB~4.5MB 的引流 stub，
+#: 下载种子文件解包后内容为：
+#:
+#:   751 B  ...-网资源分享.txt
+#:   255 B  网盘链接在这.txt
+#:   293,629 B  资源封面.jpg
+#:
+#: 而标题写的是「(2026)[4K1080P][国语中字][更至0815第7期4]」——
+#: 看起来完全正常。**不看体积就分辨不出来**，用户点下载只会得到一个 txt。
+#:
+#: 阈值取 500MB：480p 单集约 200-400MB，4K 单集 2-8GB；
+#: 500MB 以下同时标着 4K/1080p 的，在物理上不可能是真片源。
+_FAKE_TORRENT_MIN_BYTES = 500 * 1024 * 1024
+
+#: 标题里暗示「高清画质」的词。与极小体积同时出现是虚假种子的铁证。
+_FAKE_QUALITY_KEYWORDS = (
+    "4k", "1080p", "2160p", "720p", "高清", "蓝光", "bluray", "blu-ray",
+    "web-dl", "webdl", "hdr", "uhd", "remux",
+)
+
+#: 「一定是影视正片」的体积下限。低于此值 + 带剧集标记 = 假种。
+#:
+#: 为什么需要第二道更严的闸门：实测 Bitsearch 上「喜剧之王单口季第三季」的
+#: 6 条结果里有 **4 条标题不含任何高清词**（写的是
+#: 「(2026)更至7.20期[综艺脱口秀][黄渤郭麒麟]」），体积 0.2~0.5MB，
+#: 只靠 :data:`_FAKE_QUALITY_KEYWORDS` 会全部漏过。而一集综艺无论压到多低的
+#: 码率都不可能只有 0.5MB —— 这类条目内容实测是「网盘链接在这.txt」+ 封面图。
+_FAKE_VIDEO_MIN_BYTES = 50 * 1024 * 1024
+
+#: 「标题声称自己是影视剧集」的标记。单独出现无意义，
+#: 只与 :data:`_FAKE_VIDEO_MIN_BYTES` 以下的体积组合时才作为假种证据。
+_FAKE_EPISODE_MARKERS = (
+    "更至", "更新至", "更新", "期", "集", "季", "综艺", "脱口秀",
+)
+
+
+def _is_fake_torrent(resource: dict[str, Any]) -> tuple[bool, str]:
+    """检测网盘引流用的虚假种子。
+
+    只在**三个条件同时成立**时判虚假，避免误杀：
+
+    1. 是 BT 资源（磁力/种子）—— 网盘与网页视频没有这个问题；
+    2. 体积**已知且**小于 :data:`_FAKE_TORRENT_MIN_BYTES`；
+       ``size == 0`` 表示「未知」而不是「为零」，必须放过 ——
+       很多 RSS 源不给体积，一刀切会把整个源判死；
+    3. 标题**自相矛盾**，二者之一：
+
+       - 有高清画质标签（:data:`_FAKE_QUALITY_KEYWORDS`）—— 「小体积 + 自称高清」；
+       - 或有剧集标记（:data:`_FAKE_EPISODE_MARKERS`）且体积小于
+         :data:`_FAKE_VIDEO_MIN_BYTES` —— 「自称某季某期，却装不下一集」。
+
+    Returns:
+        ``(是否虚假, 原因)``；原因会写进日志，方便用户理解为什么少了结果。
+    """
+    kind = str(resource.get("kind") or "")
+    if kind not in (ResourceKind.TORRENT.value, ResourceKind.MAGNET.value):
+        return False, ""
+    size = parse_size(resource.get("size"))
+    # size 为 0 是「未知」，不是「零字节」——不能当成虚假的证据
+    if not size or size >= _FAKE_TORRENT_MIN_BYTES:
+        return False, ""
+    title = _resource_text(resource).lower()
+    if any(word in title for word in _FAKE_QUALITY_KEYWORDS):
+        return True, f"体积仅 {size / 1024 / 1024:.1f}MB 却标注高清，疑似网盘引流假种"
+    # 第二道闸门：不吹画质，但自称是某季/某期剧集，而体积连一集都装不下。
+    # 代价是可能误杀纯字幕包（也带「全X集」字样且只有几 MB）——
+    # 本项目的目标是找可播放的正片，这个取舍是明知且接受的。
+    if size < _FAKE_VIDEO_MIN_BYTES and any(
+        word in title for word in _FAKE_EPISODE_MARKERS
+    ):
+        return True, (
+            f"体积仅 {size / 1024 / 1024:.1f}MB 装不下一集正片，疑似网盘引流假种"
+        )
+    return False, ""
+
 def score_resource(resource: dict[str, Any], rule: FilterRule | None = None) -> float:
     """为资源打分，用于最优版本排序。"""
     rule = rule or FilterRule()
@@ -236,6 +314,10 @@ def filter_and_rank(
         ok, reason = apply_rules(resource, rule)
         resource["filter_reason"] = reason
         if not ok:
+            continue
+        fake, reason = _is_fake_torrent(resource)
+        if fake:
+            resource["filter_reason"] = reason
             continue
         score_resource(resource, rule)
         passed.append(resource)

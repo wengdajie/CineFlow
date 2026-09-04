@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from collections.abc import AsyncIterator
 from dataclasses import asdict, dataclass
@@ -44,6 +45,73 @@ _MEDIA_META_KEYS = frozenset({
 })
 
 
+#: 季号的中文写法。资源站标题混用「第三季」与「第3季」，
+#: 两种都要试 —— 只试一种等于放掉一半结果（实测 BT4G 上两种都存在）。
+_CN_DIGITS = "零一二三四五六七八九十"
+
+
+def _cn_number(value: int) -> str:
+    """把季号转成中文数字（只覆盖 1~19，超出直接返回阿拉伯数字）。
+
+    不引第三方库：季号超过 19 的剧集现实中不存在，
+    为此装一个中文数字库属于过度设计。
+    """
+    if value <= 0 or value > 19:
+        return str(value)
+    if value <= 10:
+        return _CN_DIGITS[value]
+    return "十" + (_CN_DIGITS[value - 10] if value > 10 else "")
+
+
+#: 标题里内嵌的季标记：``第三季`` / ``第 3 季`` / ``第3部``。
+_EMBEDDED_SEASON_RE = re.compile(r"第\s*([0-9]+|[零一二三四五六七八九十]+)\s*([季部])")
+
+
+def _cn_to_int(text: str) -> int | None:
+    """中文数字转整数（只覆盖 1~19，认不出返回 None）。"""
+    text = text.strip()
+    if text.isdigit():
+        return int(text)
+    if not text or any(ch not in _CN_DIGITS for ch in text):
+        return None
+    if text == "十":
+        return 10
+    if len(text) == 1:
+        return _CN_DIGITS.index(text)
+    if len(text) == 2 and text[0] == "十":
+        return 10 + _CN_DIGITS.index(text[1])
+    return None
+
+
+def _season_spelling_variants(base: str) -> list[str]:
+    """标题内嵌季号时，生成**同等精确**的其它写法。
+
+    只做三件事：去掉季号前后的空格、中文数字↔阿拉伯数字互换。
+    **不去掉季号** —— 那会把别的季混进结果里，属于放宽而不是换写法。
+
+    实测依据（关键词「喜剧之王单口季 第三季」）：
+    资源站标题一律写成「喜剧之王单口季第三季」或「喜剧之王单口季第3季」，
+    带空格的写法在 BT4G/bitsearch 上都是 **0 命中**。
+    """
+    found = _EMBEDDED_SEASON_RE.search(base)
+    if not found:
+        return []
+    number = _cn_to_int(found.group(1))
+    if number is None:
+        return []
+    marker = found.group(2)
+    prefix = base[: found.start()].rstrip()
+    suffix = base[found.end() :].lstrip()
+    variants: list[str] = []
+    for spelled in (_cn_number(number), str(number)):
+        # 无空格版：资源站的主流写法
+        candidate = f"{prefix}第{spelled}{marker}"
+        if suffix:
+            candidate = f"{candidate} {suffix}"
+        variants.append(candidate)
+    return variants
+
+
 def build_keywords(
     title: str,
     *,
@@ -70,6 +138,26 @@ def build_keywords(
         keywords.append(f"{base} S{season:02d}")
         if season > 1:
             keywords.append(f"{base} 第{season}季")
+    # 季号的**写法变体**要排在裸片名之前：整个列表的约定是
+    # 「从最具体到最宽泛」，而 `_search_one` 命中即止 ——
+    # 把更具体的写法放在裸片名后面，它们永远不会被用到
+    # （裸片名几乎总能命中，直接 return）。
+    #
+    # 为什么需要这些变体：资源站的标题惯例是**季号不带空格**，
+    # 且中文/阿拉伯数字混用。实测（关键词「喜剧之王单口季 第三季」）：
+    # BT4G/bitsearch 上存在「…单口季第三季」「…单口季第3季」，
+    # 但**没有任何一条**写成带空格的「…单口季 第三季」。
+    if is_tv and season is not None and season > 1:
+        keywords.append(f"{base}第{_cn_number(season)}季")
+        keywords.append(f"{base}第{season}季")
+
+    # 用户在搜索框里直接把季写进片名时（交互式搜索没有独立的 season 参数），
+    # 上面那段用不上，这里按内嵌季号生成同等精确的写法变体。
+    # 注意是**换写法**而不是**放宽**：季号始终保留，
+    # 去掉季号会把第二季的结果混进来，那是另一回事。
+    keywords.extend(_season_spelling_variants(base))
+
+    # 裸片名放最后：它是最宽泛的兜底，也是"逐级降级"的终点。
     keywords.append(base)
 
     for item in extra or []:
@@ -98,7 +186,13 @@ class SiteOutcome:
     """
 
     site: str
-    #: ok / empty / timeout / error / skipped（skipped = 被熔断器跳过）
+    #: ok / empty / filtered / timeout / error / skipped
+    #:
+    #: * ``empty``    站点连通但自己就返回 0 条
+    #: * ``filtered`` 站点返回了 N 条，但全部与关键词不匹配被过滤掉
+    #:   —— 这两者对用户的含义完全不同：前者「这个站没这部片」，
+    #:   后者「这个站的搜索不准/标题对不上」，后者才值得换站点或改关键词
+    #: * ``skipped``  被熔断器跳过
     status: str = "ok"
     #: 站点原始返回条数（配额裁剪前）
     raw: int = 0
@@ -326,6 +420,43 @@ def enforce_site_share(ranked: list[dict[str, Any]], limit: int) -> list[dict[st
     return merged
 
 
+def recount_kept(
+    ranked: list[dict[str, Any]],
+    outcomes: list[SiteOutcome],
+    title: str = "",
+) -> None:
+    """按最终结果**回填**每个站点的 ``kept``，并区分出 ``filtered`` 状态。
+
+    **为什么必须在这里再算一次**：``apply_site_quota()`` 里设的 ``kept``
+    只是「配额裁剪后」的条数，而 :func:`filter_and_rank` 的标题相关性过滤
+    发生在那之后。不回填的话前端会显示「命中 68 条」而列表里一条都没有
+    —— 用户只能理解成"程序把结果吃了"。
+
+    实测（关键词「喜剧之王单口季 第三季」）：BD电影首发站 ``raw=68``、
+    最终 ``kept=0``，那 68 条全是 1999 年电影《喜剧之王》——
+    该站磁力只在详情页且共用详情页标题，属于整站误报。
+
+    **归并方向容易搞反**：带「·分组」后缀的是**条目**那一侧
+    （盘搜按网盘类型拆成 ``PanSou 盘搜·baidu`` / ``·quark`` …），
+    而 ``outcome.site`` 是不带后缀的主站名。所以要在条目这边剥后缀 ——
+    反了会让盘搜永远统计成 0（实测踩过的回归）。
+
+    就地修改 ``outcomes``，不返回新对象（调用方还要用同一批对象序列化）。
+    """
+    kept_per_site: dict[str, int] = {}
+    for item in ranked:
+        base = str(item.get("site") or "").split("·")[0]
+        kept_per_site[base] = kept_per_site.get(base, 0) + 1
+    for outcome in outcomes:
+        outcome.kept = kept_per_site.get(outcome.site.split("·")[0], 0)
+        # 「返回了一堆但全对不上」与「这个站确实有货」必须分开报，
+        # 也要与「这个站压根没这部片」（empty）分开 —— 三者的下一步动作不同
+        # （ADR-82：降级不能装作成功）。
+        if outcome.status == "ok" and outcome.raw > 0 and outcome.kept == 0:
+            outcome.status = "filtered"
+            outcome.message = f"返回 {outcome.raw} 条，但与「{title}」都不匹配（已全部过滤）"
+
+
 async def _expand_aliases(
     title: str, media_type: str | None, extra_keywords: list[str] | None
 ) -> list[str]:
@@ -458,6 +589,12 @@ async def search_detailed(
         logger.warning("加载过滤规则组失败，本次仅按评分排序: %s", exc)
     ranked = filter_and_rank(payload, effective_rule, group)
     ranked = enforce_site_share(ranked, settings.SEARCH_MAX_RESULTS)
+
+    # 更新各站点的实际保留数：kept 在 apply_site_quota 里设的是配额裁剪后、
+    # 但标题过滤（filter_and_rank）会进一步剔除不相关结果。
+    # 不改的话前端会显示「命中 68 条」但实际零条，属于 ADR-82 的
+    #「失败与无结果不可区分」—— 两者都是零条，但原因不同。
+    recount_kept(ranked, outcomes, title)
 
     for item in ranked:
         info = item.pop("_meta", None)
@@ -618,6 +755,15 @@ async def search_stream(
                     if info is not None:
                         item["meta"] = info.to_dict()
                 ranked_all.extend(items)
+
+            # 流式路径同样要把 kept 修正成「过滤后」的条数。
+            # 这里不能复用 recount_kept()：那个函数按站点名统计全量结果，
+            # 而流式是一站一站往外推，此刻只有本站这一批（items）。
+            # 但**口径必须一致**，否则同一次搜索流式与非流式给出的诊断会互相矛盾。
+            outcome.kept = len(items)
+            if outcome.status == "ok" and outcome.raw > 0 and not items:
+                outcome.status = "filtered"
+                outcome.message = f"返回 {outcome.raw} 条，但与「{title}」都不匹配（已全部过滤）"
 
             yield {
                 "type": "site",
