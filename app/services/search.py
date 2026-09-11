@@ -887,7 +887,12 @@ def _save_results(
         logger.warning("保存搜索结果失败: %s", exc)
 
 
-async def search_for_subscribe(subscribe: Any, missing: list[int] | None = None) -> list[dict[str, Any]]:
+async def search_for_subscribe(
+    subscribe: Any,
+    missing: list[int] | None = None,
+    *,
+    discovery: bool = False,
+) -> list[dict[str, Any]]:
     """针对订阅生成搜索请求（自动带上缺集、过滤规则、以及别名扩展）。"""
     rule = FilterRule.from_subscribe(subscribe)
     # 别名扩展：从 MediaItem 的 original_title 取（零额外请求），
@@ -911,10 +916,13 @@ async def search_for_subscribe(subscribe: Any, missing: list[int] | None = None)
     except Exception:
         pass  # 别名失败只降级，不影响搜索
     rule.title_keywords = _title_variants(subscribe.title, aliases=subscribe_aliases or None)
-    if missing:
+    # discovery 模式（总集数未知时先探「站点上最新到第几集」）：
+    # 整季搜、不带集数白名单——否则第 2 集以后的结果会在过滤层全被杀掉，
+    # 永远只能看到下一集。能否按集投递由 process_subscribe 的择优循环决定。
+    if missing and not discovery:
         rule.episodes = missing
 
-    episode = missing[0] if missing and len(missing) == 1 else None
+    episode = None if discovery else (missing[0] if missing and len(missing) == 1 else None)
     return await search(
         subscribe.title,
         media_type=subscribe.media_type,

@@ -12,6 +12,16 @@ from app.core.logger import get_logger
 
 logger = get_logger(__name__)
 
+#: 伪装成普通浏览器的 UA。部分站点（BT4G/Bitsearch）对脚本 UA 会 403 或
+#: 上人机验证，对公开 JSON API（apibay/therarbg/knaben）带上也无害。
+#: 与 ``settings.USER_AGENT``（带 CineFlow 标识）分开：标识版用于友好站，
+#: 匿名浏览器版用于会按 UA 卡人的站。
+BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
+
+
 
 def normalize_endpoint(raw: str | None, *, default: str = "", scheme: str = "http") -> str:
     """把用户填的下载器/服务地址整理成 httpx 能用的绝对 URL。

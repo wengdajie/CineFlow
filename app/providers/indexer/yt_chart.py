@@ -24,6 +24,7 @@ import time
 from typing import Any
 
 from app.core.logger import get_logger
+from app.utils.backoff import Backoff
 from app.utils.http import fetch_json
 
 logger = get_logger(__name__)
@@ -42,10 +43,8 @@ DEFAULT_INSTANCES: tuple[str, ...] = (
 #: 榜单缓存 30 分钟，与豆瓣同口径：热门榜按天级变化，30 分钟足够新，
 #: 又能挡住用户反复切页签打爆本就脆弱的公开实例。
 _CACHE_TTL = 1800
-_BACKOFF_SECONDS = 300
 
 _CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
-_BACKOFF: float = 0.0
 #: 上次成功的实例。下次优先用它，省掉重复试错的等待。
 _PREFERRED: str = ""
 
@@ -60,21 +59,23 @@ CATEGORIES: dict[str, dict[str, Any]] = {
 }
 
 
-def is_rate_limited() -> bool:
-    return time.time() < _BACKOFF
+_BACKOFF = Backoff(300)
 
+
+def is_rate_limited() -> bool:
+    """当前是否处于失败退避期。"""
+    return _BACKOFF.limited()
 
 def _mark_rate_limited() -> None:
-    global _BACKOFF
-    _BACKOFF = time.time() + _BACKOFF_SECONDS
-    logger.warning("YouTube 榜单全部实例不可用，静默 %s 秒", _BACKOFF_SECONDS)
+    _BACKOFF.mark()
+    logger.warning("YouTube 榜单全部实例不可用，静默 %s 秒", _BACKOFF.seconds)
 
 
 def reset_state() -> None:
     """清空缓存、退避与实例偏好（测试用）。"""
-    global _BACKOFF, _PREFERRED
+    global _PREFERRED
     _CACHE.clear()
-    _BACKOFF = 0.0
+    _BACKOFF.reset()
     _PREFERRED = ""
 
 

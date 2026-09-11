@@ -71,6 +71,7 @@ def load_builtin_providers() -> None:
         "app.providers.indexer.torrents_csv",
         "app.providers.indexer.bt4g",
         "app.providers.indexer.bitsearch",
+        "app.providers.indexer.magnet_apis",
         "app.providers.indexer.animetosho",
         "app.providers.indexer.generic_api",
         "app.providers.indexer.generic_html",

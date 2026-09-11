@@ -70,20 +70,13 @@ from app.core.logger import get_logger
 from app.providers.base import Resource, SearchProvider
 from app.providers.registry import register
 from app.schemas.enums import ProviderKind, ResourceKind
-from app.utils.http import FetchError, fetch_text, is_cf_challenge
+from app.utils.http import BROWSER_UA, FetchError, fetch_text, is_cf_challenge
 
 logger = get_logger(__name__)
 
 #: 官方站点。BT4G 有多个镜像域名，允许用户覆盖。
 #: 实测 ``bt4g.com`` 会 302 到 ``bt4gprx.com``，这里直接写最终域名少一跳。
 DEFAULT_BASE = "https://bt4gprx.com"
-
-#: 浏览器 UA。实测缺省 httpx UA 也能拿到 RSS，但 HTML 端点会 403；
-#: 统一带上浏览器 UA，避免站点将来对 RSS 也收紧。
-BROWSER_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-)
 
 _MAGNET_RE = re.compile(r"magnet:\?xt=urn:btih:[0-9a-fA-F]{32,40}")
 

@@ -1639,7 +1639,7 @@
             total_episodes: values.total_episodes || 0,
           }),
         });
-        toast("已创建订阅，稍后自动追新", "ok");
+        toast("已创建订阅，正在自动搜索", "ok");
       },
       "创建订阅",
       { lead: "热榜里看到想追的，直接建订阅交给自动化。" }
@@ -2531,11 +2531,11 @@
           total_episodes: values.total_episodes || 0,
         });
         await api("/subscribes", { method: "POST", body: payload });
-        toast("订阅已创建，稍后会自动搜索", "ok");
+        toast("订阅已创建，正在自动搜索", "ok");
         pageSubscribes();
       },
       "创建订阅",
-      { lead: "创建后由「订阅巡检」与「追新雷达」两个定时任务自动追更。" }
+      { lead: "创建后立即搜索并补齐当前可找到的集数，之后由定时任务持续追更。" }
     );
   }
 

@@ -85,6 +85,63 @@ BT_SITE_PRESETS: list[dict[str, Any]] = [
         },
     },
     {
+        "id": "tpb",
+        "name": "TPB 磁力搜索（apibay）",
+        "kind": ProviderKind.INDEXER.value,
+        "provider": "tpb",
+        "url": "https://apibay.org",
+        "priority": 17,
+        "description": "The Pirate Bay 官方 API，免鉴权、不挂 Cloudflare、"
+                       "一次返回全部命中且带真实做种数。参考 magnet-finder 选型："
+                       "公开 JSON API 比 HTML 站稳定得多，是 Bitsearch 的全球内容备份。",
+        "measured": "2026-09-11 实测：「dune 2024」100 条（最高 947 做种，"
+                    "体积/IMDb/发布时间字段完整）；「流浪地球」100 条但相关性差",
+        "caveat": "以全球/英文内容为主，华语关键词相关性弱——与 Bitsearch 互补而非替代；"
+                  "接口不分页、一次全量返回",
+        "verified": True,
+        "options": {
+            "note": "数字字段全是字符串，Provider 内已转 int；id=0 是没结果时的占位记录",
+        },
+    },
+    {
+        "id": "therarbg",
+        "name": "therarbg 磁力搜索",
+        "kind": ProviderKind.INDEXER.value,
+        "provider": "therarbg",
+        "url": "https://therarbg.com",
+        "priority": 17,
+        "description": "RARBG 数据库的延续站点，?format=json 就是现成 REST 接口，"
+                       "免鉴权、带真实做种数、支持分页。",
+        "measured": "2026-09-11 实测：「dune 2024」50 条/页且 links.next 分页有效；"
+                    "「流浪地球」50 条但相关性差",
+        "caveat": "以全球/英文内容为主，华语覆盖弱；多词查询的空格必须 %20 而非 +"
+                  "（用 + 返回 0 条，Provider 已处理）",
+        "verified": True,
+        "options": {
+            "max_pages": 2,
+        },
+    },
+    {
+        "id": "knaben",
+        "name": "knaben 聚合磁力搜索",
+        "kind": ProviderKind.INDEXER.value,
+        "provider": "knaben",
+        "url": "https://api.knaben.org",
+        "priority": 17,
+        "description": "聚合几十个站点的索引（TPB/1337x/Nyaa 等），POST JSON 接口，"
+                       "免鉴权、按做种数排序、结果标注来源站（tracker 字段），"
+                       "且自带含 tracker 列表的完整磁力——比裸磁力更好连 peer。",
+        "measured": "2026-09-11 实测：「dune 2024」20 条（最高 945 做种）；"
+                    "「流浪地球」7 条且首条即目标（DBD-Raws 1080P BDRip，9 做种）——"
+                    "三个 API 源中华语表现最好",
+        "caveat": "华语结果数量仍少于 Bitsearch；默认 hide_xxx/hide_unsafe，"
+                  "结果偏保守",
+        "verified": True,
+        "options": {
+            "limit": 100,
+        },
+    },
+    {
         "id": "dmhy_search",
         "name": "动漫花园 dmhy（搜索）",
         "kind": ProviderKind.INDEXER.value,

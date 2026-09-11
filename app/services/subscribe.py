@@ -140,6 +140,13 @@ async def create_subscribe(payload: dict[str, Any]) -> Subscribe:
         session.expunge(subscribe)
 
     logger.info("新增订阅：%s 第%s季（共%s集）", title, season, total_episodes or "未知")
+    # 创建即搜：不必让用户干等最长 30 分钟到下一轮周期巡检。
+    # 调度器未运行（测试/脚本环境）时静默跳过。
+    from app.services.scheduler import scheduler_service
+
+    scheduled = scheduler_service.run_subscribe_soon(subscribe.id)
+    if scheduled:
+        logger.info("订阅 #%s 已安排立即搜索", subscribe.id)
     await notify_service.send(
         f"新增订阅：{title}",
         f"第 {season} 季"
@@ -150,6 +157,30 @@ async def create_subscribe(payload: dict[str, Any]) -> Subscribe:
         payload={"subscribe_id": subscribe.id},
     )
     return subscribe
+
+
+#: 探测「站点上最新到第几集」时允许的集数上限。
+#: 只用于防解析出的离谱集号（如把年份当集数）；周更综艺/番剧一季极少超过 200 集。
+_DISCOVERY_EPISODE_CAP = 200
+
+
+def latest_available_episode(resources: list[dict[str, Any]], season: int | None) -> int:
+    """从整季搜索结果里读出站点上**实际有片源**的最大集号。
+
+    只认能解析出集号的单集资源：季包无法说明「最新到第几集」；
+    标题白名单（片名匹配）已在搜索层完成，这里不再重复判相关性。
+    """
+    latest = 0
+    for resource in resources:
+        info = resource.get("meta") or {}
+        if info.get("is_season_pack"):
+            continue
+        if season is not None and info.get("season") not in (None, season):
+            continue
+        for episode in info.get("episodes") or []:
+            if isinstance(episode, int) and 0 < episode <= _DISCOVERY_EPISODE_CAP:
+                latest = max(latest, episode)
+    return latest
 
 
 def compute_missing(subscribe: Subscribe) -> list[int]:
@@ -225,8 +256,38 @@ async def refresh_total_episodes(subscribe_id: int) -> int:
     return total
 
 
+#: 正在巡检的订阅 id。防止「创建即搜」与 30 分钟周期巡检重叠，
+#: 同一订阅并发跑两遍——对限流敏感的站点（实测 Bitsearch 并发会 500）
+#: 等于自己打自己。
+_inflight: set[int] = set()
+
+
+async def safe_process_subscribe(subscribe_id: int) -> dict[str, Any]:
+    """调度器入口：异常只记录不抛出。
+
+    APScheduler 对协程任务里逃出的异常只打一行通用日志、丢掉堆栈，
+    这里兜住并返回结构化结果，方便排障。
+    """
+    try:
+        return await process_subscribe(subscribe_id)
+    except Exception:
+        logger.exception("订阅 #%s 自动巡检失败", subscribe_id)
+        return {"subscribe_id": subscribe_id, "error": "巡检异常，详见日志"}
+
+
 async def process_subscribe(subscribe_id: int) -> dict[str, Any]:
     """处理单个订阅：搜索 -> 择优 -> 下载。"""
+    if subscribe_id in _inflight:
+        return {"subscribe_id": subscribe_id, "skipped": True, "reason": "already_running"}
+    _inflight.add(subscribe_id)
+    try:
+        return await _process_subscribe_inner(subscribe_id)
+    finally:
+        _inflight.discard(subscribe_id)
+
+
+async def _process_subscribe_inner(subscribe_id: int) -> dict[str, Any]:
+    """process_subscribe 的实际逻辑（单飞闸门见外层）。"""
     await refresh_total_episodes(subscribe_id)
 
     with session_scope() as session:
@@ -261,6 +322,27 @@ async def process_subscribe(subscribe_id: int) -> dict[str, Any]:
         )
         return result
 
+    # 总集数未知（无 TMDB，番剧/综艺常态）时，compute_missing 只给出「下一集」。
+    # 用户要的是「一次性抓到最新集」：先按整季搜一次，从结果读出最新有片源的
+    # 集号，把缺集扩展到 [start .. latest]，同一次搜索的结果直接用于择优投递，
+    # 不必等每集下完、下一轮巡检再继续。
+    discovery = (
+        subscribe.media_type != MediaType.MOVIE.value and not subscribe.total_episodes
+    )
+    resources = await search_service.search_for_subscribe(
+        subscribe, missing, discovery=discovery
+    )
+    if discovery:
+        latest = latest_available_episode(resources, subscribe.season)
+        if latest > 1:
+            done = set(subscribe.downloaded_episodes or [])
+            done |= library_service.existing_episodes(
+                subscribe.title, subscribe.season
+            )
+            start = max(subscribe.start_episode or 1, 1)
+            missing = [ep for ep in range(start, latest + 1) if ep not in done]
+            result["missing"] = missing
+
     logger.info(
         "订阅巡检 #%s《%s》缺失 %d 集: %s",
         subscribe_id,
@@ -268,8 +350,6 @@ async def process_subscribe(subscribe_id: int) -> dict[str, Any]:
         len(missing),
         missing[:10],
     )
-
-    resources = await search_service.search_for_subscribe(subscribe, missing)
     result["matched"] = len(resources)
 
     if not resources:

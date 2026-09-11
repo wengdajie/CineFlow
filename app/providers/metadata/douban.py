@@ -20,6 +20,7 @@ from typing import Any
 from urllib.parse import quote
 
 from app.core.logger import get_logger
+from app.utils.backoff import Backoff
 from app.utils.http import fetch_json
 
 logger = get_logger(__name__)
@@ -28,12 +29,9 @@ SUGGEST_URL = "https://movie.douban.com/j/subject_suggest"
 
 #: 缓存 6 小时：封面几乎不变，没必要反复请求（也是对豆瓣的基本礼貌）
 _CACHE_TTL = 6 * 3600
-#: 被限流后静默这么久，避免雪上加霜
-_BACKOFF_SECONDS = 300
 
 _CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 #: 触发限流的时间戳；为 0 表示正常
-_rate_limited_until: float = 0.0
 
 
 def _cache_get(key: str) -> list[dict[str, Any]] | None:
@@ -51,22 +49,23 @@ def _cache_set(key: str, value: list[dict[str, Any]]) -> None:
     _CACHE[key] = (time.time() + _CACHE_TTL, value)
 
 
+_BACKOFF = Backoff(300)
+
+
 def is_rate_limited() -> bool:
-    """当前是否处于限流退避期。"""
-    return time.time() < _rate_limited_until
+    """当前是否处于失败退避期。"""
+    return _BACKOFF.limited()
 
 
 def _mark_rate_limited() -> None:
-    global _rate_limited_until
-    _rate_limited_until = time.time() + _BACKOFF_SECONDS
-    logger.warning("豆瓣接口疑似限流，静默 %s 秒后重试", _BACKOFF_SECONDS)
+    _BACKOFF.mark()
+    logger.warning("豆瓣接口疑似限流，静默 %s 秒后重试", _BACKOFF.seconds)
 
 
 def reset_state() -> None:
     """清空缓存与退避状态（测试用）。"""
-    global _rate_limited_until
     _CACHE.clear()
-    _rate_limited_until = 0.0
+    _BACKOFF.reset()
 
 
 def _headers() -> dict[str, str]:

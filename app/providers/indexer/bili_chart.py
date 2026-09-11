@@ -25,6 +25,7 @@ from typing import Any
 import httpx
 
 from app.core.logger import get_logger
+from app.utils.backoff import Backoff
 from app.utils.http import async_client
 
 logger = get_logger(__name__)
@@ -35,10 +36,8 @@ PGC_RANK_URL = "https://api.bilibili.com/pgc/season/rank/web/list"
 
 #: 榜单缓存 15 分钟：B 站榜单本身是小时级更新
 _CACHE_TTL = 900
-_BACKOFF_SECONDS = 300
 
 _CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
-_BACKOFF: float = 0.0
 
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -58,21 +57,23 @@ CATEGORIES: dict[str, dict[str, Any]] = {
 }
 
 
+_BACKOFF = Backoff(300)
+
+
 def is_rate_limited() -> bool:
-    return time.time() < _BACKOFF
+    """当前是否处于失败退避期。"""
+    return _BACKOFF.limited()
 
 
 def _mark_rate_limited() -> None:
-    global _BACKOFF
-    _BACKOFF = time.time() + _BACKOFF_SECONDS
-    logger.warning("B 站榜单疑似风控，静默 %s 秒", _BACKOFF_SECONDS)
+    _BACKOFF.mark()
+    logger.warning("B 站榜单疑似风控，静默 %s 秒", _BACKOFF.seconds)
 
 
 def reset_state() -> None:
     """清空缓存与退避（测试用）。"""
-    global _BACKOFF
     _CACHE.clear()
-    _BACKOFF = 0.0
+    _BACKOFF.reset()
 
 
 def _pick_cover(url: str) -> str | None:

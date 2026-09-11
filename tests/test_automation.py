@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from app.core.config import settings
+from app.db.init_db import create_tables
 from app.db.models import DownloadTask, LibraryFile, Subscribe
 from app.db.session import session_scope
 from app.providers.base import Resource, SearchProvider
@@ -123,7 +124,18 @@ def automation_env(tmp_path, monkeypatch):
     monkeypatch.setattr(site_service, "default_downloader", lambda prefer=None: downloader)
     monkeypatch.setattr(site_service, "notifiers", list)
     monkeypatch.setattr(site_service, "media_servers", list)
-    return {"library": library, "downloads": downloads}
+
+    def cleanup_tasks() -> None:
+        create_tables()
+        with session_scope() as session:
+            session.query(DownloadTask).delete()
+            session.query(Subscribe).delete()
+
+    cleanup_tasks()
+    try:
+        yield {"library": library, "downloads": downloads}
+    finally:
+        cleanup_tasks()
 
 
 # ---------------------------------------------------------------- 测试
@@ -292,3 +304,210 @@ def test_new_jobs_are_off_by_default_when_feature_disabled():
     assert "scrape" not in specs
     # STRM 同步默认间隔为 0 = 关闭（多数用户没有网盘）
     assert specs["strm_sync"].enabled is bool(settings.STRM_SYNC_INTERVAL_MINUTES > 0)
+
+# ---------------------------------------------------------------- v1.28.2
+def _make_gated_provider(title: str, gate: asyncio.Event | None = None,
+                         entered: asyncio.Event | None = None):
+    """造一个返回指定剧集的内存索引器；给 gate 时第一次搜索会阻塞。"""
+    @register
+    class GatedIndexer(SearchProvider):
+        name = f"gated_{abs(hash(title))}"
+        kind = ProviderKind.INDEXER.value
+        display_name = "门控测试索引器"
+        calls = 0
+
+        async def search(self, keyword, *, media_type=None, season=None,
+                         episode=None, page=0):
+            type(self).calls += 1
+            if entered is not None:
+                entered.set()
+            if gate is not None:
+                await gate.wait()
+            return [
+                Resource(
+                    title=f"{title}.S01E01.1080p.WEB-DL.H264-CF",
+                    link=f"magnet:?xt=urn:btih:{abs(hash(title)):040x}",
+                    site="GatedSite",
+                    kind=ResourceKind.MAGNET.value,
+                    size=2 * 1024**3,
+                    seeders=50,
+                )
+            ]
+
+    return GatedIndexer({"name": "GatedSite", "enabled": True})
+
+
+def test_create_subscribe_triggers_immediate_search_for_all_episodes(
+    automation_env, client, monkeypatch
+):
+    """创建订阅后应立即搜到站点最新集，并一次性投递全部缺失集。"""
+    from app.services.scheduler import scheduler_service
+
+    title = "即搜多集测试剧"
+    monkeypatch.setattr(
+        site_service, "search_providers",
+        lambda: [_episode_provider(title, episodes=(1, 2, 3))],
+    )
+
+    async def scenario() -> None:
+        # 直接起底层调度器（测试环境 SCHEDULER_ENABLED=false，
+        # start() 不注册内置周期任务；date 一次性任务照发）
+        scheduler_service.scheduler.start()
+        try:
+            sub = await subscribe_service.create_subscribe(
+                {"title": title, "media_type": "tv", "season": 1}
+            )
+            for _ in range(60):
+                await asyncio.sleep(0.05)
+                with session_scope() as session:
+                    count = (
+                        session.query(DownloadTask)
+                        .filter(DownloadTask.subscribe_id == sub.id)
+                        .count()
+                    )
+                if count == 3:
+                    break
+            with session_scope() as session:
+                tasks = (
+                    session.query(DownloadTask)
+                    .filter(DownloadTask.subscribe_id == sub.id)
+                    .all()
+                )
+            assert len(tasks) == 3, "创建订阅后应立即搜索并创建全部下载任务"
+        finally:
+            scheduler_service.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_process_subscribe_single_flight(automation_env, client, monkeypatch):
+    """同一订阅的巡检重叠时只允许一个在跑，防止打爆上游站点。"""
+    title = "单飞测试剧"
+    entered = asyncio.Event()
+    gate = asyncio.Event()
+    indexer = _make_gated_provider(title, gate=gate, entered=entered)
+    monkeypatch.setattr(site_service, "search_providers", lambda: [indexer])
+
+    subscribe = asyncio.run(
+        subscribe_service.create_subscribe(
+            {"title": title, "media_type": "tv", "season": 1, "total_episodes": 1}
+        )
+    )
+    sub_id = subscribe.id
+
+    async def scenario() -> None:
+        task1 = asyncio.create_task(
+            subscribe_service.process_subscribe(sub_id))
+        await entered.wait()
+        # 第一个还卡在搜索中，第二个必须直接跳过
+        task2 = asyncio.create_task(
+            subscribe_service.process_subscribe(sub_id))
+        result2 = await task2
+        gate.set()
+        result1 = await task1
+        assert result2.get("skipped") is True
+        assert result1.get("matched", 0) > 0
+
+    asyncio.run(scenario())
+
+# ---------------------------------------------------------------- v1.28.3
+def _episode_provider(title: str, *, episodes=(1, 2, 3), empty=False):
+    """返回指定剧 E01..En 资源的内存索引器（标题与订阅同名，能过白名单）。"""
+    @register
+    class EpisodeIndexer(SearchProvider):
+        name = f"epidx_{abs(hash((title, episodes, empty)))}"
+        kind = ProviderKind.INDEXER.value
+        display_name = "多集测试索引器"
+
+        async def search(self, keyword, *, media_type=None, season=None,
+                         episode=None, page=0):
+            if empty:
+                return []
+            return [
+                Resource(
+                    title=f"{title}.S01E{n:02d}.1080p.WEB-DL.H264-CF",
+                    link=f"magnet:?xt=urn:btih:{abs(hash((title, n))):040x}",
+                    site="EpisodeSite",
+                    kind=ResourceKind.MAGNET.value,
+                    size=2 * 1024**3,
+                    seeders=50,
+                )
+                for n in episodes
+            ]
+
+    return EpisodeIndexer({"name": "EpisodeSite", "enabled": True})
+
+
+def test_unknown_total_discovers_and_enqueues_all_episodes(
+    automation_env, client, monkeypatch
+):
+    """总集数未知（无 TMDB，番剧/综艺常态）时，应从搜索结果探测最新集，
+    并一次性投递全部缺失集——而不是下完一集再等下一轮巡检。"""
+    title = "探测多集剧甲"
+    monkeypatch.setattr(
+        site_service, "search_providers", lambda: [_episode_provider(title)]
+    )
+    subscribe = asyncio.run(
+        subscribe_service.create_subscribe(
+            {"title": title, "media_type": "tv", "season": 1}
+        )
+    )
+    sub_id = subscribe.id
+    with session_scope() as session:
+        assert session.get(Subscribe, sub_id).total_episodes == 0
+
+    result = asyncio.run(subscribe_service.process_subscribe(sub_id))
+
+    # 缺集探测应从 [1] 扩展到站点上实际有的 [1,2,3]
+    assert result["missing"] == [1, 2, 3]
+    assert result["matched"] >= 3
+    with session_scope() as session:
+        tasks = (
+            session.query(DownloadTask)
+            .filter(DownloadTask.subscribe_id == sub_id)
+            .all()
+        )
+    assert len(tasks) == 3, "应一次性创建 3 集的下载任务"
+
+
+def test_unknown_total_with_no_results_stays_single_probe(
+    automation_env, client, monkeypatch
+):
+    """站点上一集都没有时，缺集列表保持 [1]（不能凭空扩出几十集）。"""
+    title = "探测多集剧乙"
+    monkeypatch.setattr(
+        site_service, "search_providers",
+        lambda: [_episode_provider(title, empty=True)],
+    )
+    subscribe = asyncio.run(
+        subscribe_service.create_subscribe(
+            {"title": title, "media_type": "tv", "season": 1}
+        )
+    )
+    result = asyncio.run(subscribe_service.process_subscribe(subscribe.id))
+    assert result["missing"] == [1]
+    assert result["downloads"] == []
+
+
+def test_discovery_does_not_duplicate_after_completion(
+    automation_env, client, monkeypatch
+):
+    """已下载的集不应被探测逻辑重复投递。"""
+    title = "探测多集剧丙"
+    monkeypatch.setattr(
+        site_service, "search_providers", lambda: [_episode_provider(title)]
+    )
+    subscribe = asyncio.run(
+        subscribe_service.create_subscribe(
+            {"title": title, "media_type": "tv", "season": 1}
+        )
+    )
+    sub_id = subscribe.id
+    asyncio.run(subscribe_service.process_subscribe(sub_id))
+
+    # 模拟第 1 集已入库，再次巡检：缺集不再含 1，也不重下第 1 集
+    subscribe_service.mark_episodes_done(sub_id, [1])
+    before = _task_count(sub_id)
+    result = asyncio.run(subscribe_service.process_subscribe(sub_id))
+    assert 1 not in result["missing"]
+    assert _task_count(sub_id) == before, "已下载集不应重复创建任务"

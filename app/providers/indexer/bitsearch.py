@@ -62,7 +62,7 @@ from app.core.logger import get_logger
 from app.providers.base import Resource, SearchProvider
 from app.providers.registry import register
 from app.schemas.enums import ProviderKind, ResourceKind
-from app.utils.http import FetchError, fetch_text_result, is_cf_challenge
+from app.utils.http import BROWSER_UA, FetchError, fetch_text_result, is_cf_challenge
 from app.utils.strings import parse_size
 
 logger = get_logger(__name__)
@@ -83,11 +83,6 @@ DEFAULT_BASE = "https://bitsearch.eu"
 FALLBACK_BASES: tuple[str, ...] = (
     "https://solidtorrents.to",
     "https://bitsearch.to",
-)
-
-BROWSER_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
 
 #: 每张结果卡片的起始标记。站点用 Tailwind，类名长但**稳定**；

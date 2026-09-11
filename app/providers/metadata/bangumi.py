@@ -35,6 +35,7 @@ from datetime import date
 from typing import Any
 
 from app.core.logger import get_logger
+from app.utils.backoff import Backoff
 from app.utils.http import fetch_json
 
 logger = get_logger(__name__)
@@ -44,11 +45,8 @@ CALENDAR_URL = "https://api.bgm.tv/calendar"
 #: 日历缓存 1 小时。放送表是**按季度**定的，一天内几乎不会变，
 #: 1 小时足够新，又能挡住用户反复切页签造成的重复请求。
 _CACHE_TTL = 3600
-#: 失败后静默多久再试（对上游的基本礼貌）
-_BACKOFF_SECONDS = 300
 
 _CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
-_BACKOFF: float = 0.0
 
 #: Bangumi 要求带可辨识的 UA（裸 python-urllib 容易被限），
 #: 按其社区惯例带上项目地址。
@@ -74,22 +72,23 @@ def bgm_weekday_to_python(raw: object) -> int | None:
     return value - 1
 
 
+_BACKOFF = Backoff(300)
+
+
 def is_rate_limited() -> bool:
     """当前是否处于失败退避期。"""
-    return time.time() < _BACKOFF
+    return _BACKOFF.limited()
 
 
 def _mark_rate_limited() -> None:
-    global _BACKOFF
-    _BACKOFF = time.time() + _BACKOFF_SECONDS
-    logger.warning("Bangumi 日历接口不可用，静默 %s 秒后重试", _BACKOFF_SECONDS)
+    _BACKOFF.mark()
+    logger.warning("Bangumi 日历接口不可用，静默 %s 秒后重试", _BACKOFF.seconds)
 
 
 def reset_state() -> None:
     """清空缓存与退避状态（测试用）。"""
-    global _BACKOFF
     _CACHE.clear()
-    _BACKOFF = 0.0
+    _BACKOFF.reset()
 
 
 def _headers() -> dict[str, str]:

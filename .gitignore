@@ -20,3 +20,4 @@ node_modules/
 
 # 临时探测脚本（开发期生成，不提交）
 .tmp/
+.graphify/

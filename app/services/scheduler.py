@@ -545,6 +545,32 @@ class SchedulerService:
             )
         return jobs
 
+    def run_subscribe_soon(self, subscribe_id: int) -> bool:
+        """安排一个订阅的**一次性立即巡检**（创建订阅后自动搜索）。
+
+        走 date 触发器交给调度器执行，而不是接口里直接 create_task：
+        调度器没启动时（如测试环境 SCHEDULER_ENABLED=false）静默跳过，
+        不留下悬挂任务；运行期则与周期巡检共用同一个执行入口。
+        同一订阅已有一次性任务在排队时不重复添加（与 process_subscribe
+        的单飞闸门共同保证不会并发打爆上游）。
+        """
+        if not self.running:
+            return False
+        from app.services import subscribe as subscribe_service
+
+        job_id = f"subscribe-now-{subscribe_id}"
+        if self._scheduler.get_job(job_id):
+            return False
+        self._scheduler.add_job(
+            subscribe_service.safe_process_subscribe,
+            "date",
+            id=job_id,
+            args=[subscribe_id],
+            replace_existing=True,
+            max_instances=1,
+        )
+        return True
+
     async def run_job_now(self, job_id: str) -> bool:
         """立即执行一次任务。"""
         if not self._scheduler:

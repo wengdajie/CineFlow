@@ -122,3 +122,33 @@ def truncate(text: str | None, limit: int = 120) -> str:
     """截断长文本。"""
     value = str(text or "")
     return value if len(value) <= limit else value[: limit - 1] + "…"
+
+
+#: 公开 tracker。裸磁力要靠 DHT 慢慢找 peer，补几个公开 tracker
+#: 能显著加快起步速度（原 torrents_csv.DEFAULT_TRACKERS，上移共享）。
+DEFAULT_TRACKERS = (
+    "udp://tracker.opentrackr.org:1337/announce",
+    "udp://open.demonii.com:1337/announce",
+    "udp://tracker.torrent.eu.org:451/announce",
+    "udp://exodus.desync.com:6969/announce",
+)
+
+
+def build_magnet(infohash: str, title: str, trackers: tuple[str, ...] = DEFAULT_TRACKERS) -> str:
+    """由 infohash 拼出磁力链。
+
+    ``dn=`` 必须带上：下游 ``guess_kind``/入库命名都靠标题，
+    而详情页二段抓取的经验（见 generic_html 文档）是「不带 dn 的磁力
+    会让标题退化」。数据源本来就给了 name，没有理由丢掉。
+
+    ``trackers`` 由调用方决定：裸磁力要靠 DHT 慢慢找 peer，
+    补几个公开 tracker 能显著加快起步速度（见 torrents_csv 的
+    ``DEFAULT_TRACKERS``）；站点已提供完整磁力时不需要。
+    """
+    from urllib.parse import quote
+
+    parts = [f"magnet:?xt=urn:btih:{str(infohash).lower()}"]
+    if title:
+        parts.append(f"dn={quote(title)}")
+    parts.extend(f"tr={quote(tracker, safe='')}" for tracker in trackers)
+    return "&".join(parts)

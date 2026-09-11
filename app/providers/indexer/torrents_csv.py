@@ -42,7 +42,7 @@ from app.providers.base import Resource, SearchProvider
 from app.providers.registry import register
 from app.schemas.enums import ProviderKind, ResourceKind
 from app.utils.http import FetchError, fetch_json
-from app.utils.strings import match_keywords
+from app.utils.strings import build_magnet, match_keywords
 
 logger = get_logger(__name__)
 
@@ -51,32 +51,6 @@ DEFAULT_BASE = "https://torrents-csv.com/service"
 
 #: 服务端把 size 钳在 25，写死是为了让翻页数算得准
 PAGE_SIZE = 25
-
-#: 附加 tracker：接口只给 infohash，裸磁力（无 tr=）在部分下载器上
-#: 要靠 DHT 慢慢找 peer。补几个公开 tracker 能显著加快起步速度。
-DEFAULT_TRACKERS = (
-    "udp://tracker.opentrackr.org:1337/announce",
-    "udp://open.demonii.com:1337/announce",
-    "udp://tracker.torrent.eu.org:451/announce",
-    "udp://exodus.desync.com:6969/announce",
-)
-
-
-def build_magnet(infohash: str, title: str, trackers: tuple[str, ...] = DEFAULT_TRACKERS) -> str:
-    """由 infohash 拼出磁力链。
-
-    ``dn=`` 必须带上：下游 ``guess_kind``/入库命名都靠标题，
-    而详情页二段抓取的经验（见 generic_html 文档）是「不带 dn 的磁力
-    会让标题退化」。这里数据源本来就给了 name，没有理由丢掉。
-    """
-    from urllib.parse import quote
-
-    parts = [f"magnet:?xt=urn:btih:{infohash.lower()}"]
-    if title:
-        parts.append(f"dn={quote(title)}")
-    parts.extend(f"tr={quote(tracker, safe='')}" for tracker in trackers)
-    return "&".join(parts)
-
 
 @register
 class TorrentsCsvIndexer(SearchProvider):
