@@ -22,6 +22,8 @@
 
 **面向 NAS 的自动化观影追剧平台**
 
+该项目全程使用火山code plan订阅配合codex完成
+
 聚合 BT 站点与网盘搜索 → 自动追新 → 择优下载 → 规范命名入库 → 通知媒体服务器
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
