@@ -8,14 +8,14 @@
 | API 端点 | 183 |
 | router | 24 |
 | 数据库表 | 20 |
-| Provider | 40 |
+| Provider | 41 |
 | 可访问页面 | 22 |
 | 一级导航 | 7 |
 | 内置调度任务 | 14 |
 | 默认站点 | 22 |
 | 配置分组 | 17 |
 | 兼容配置键 | 63 |
-| 测试模块 | 64 |
+| 测试模块 | 66 |
 | 规则组模板 | 4 |
 | 发现榜分类 | 7 |
 
@@ -28,4 +28,4 @@
 | mediaserver | 3 | `emby`, `jellyfin`, `plex` |
 | notifier | 4 | `bark`, `telegram`, `webhook`, `wecom` |
 | pan | 3 | `kkso`, `pan_generic`, `pansou` |
-| panstorage | 7 | `alist`, `baidu`, `baidu_openapi`, `local_dir`, `pan115`, `quark`, `webdav` |
+| panstorage | 8 | `alipan`, `alist`, `baidu`, `baidu_openapi`, `local_dir`, `pan115`, `quark`, `webdav` |

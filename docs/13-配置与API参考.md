@@ -43,9 +43,9 @@ YAML 里的二级 key 会拍平成 `CF_<父>_<子>`，例如 `tmdb.api_key` → 
 | 关键词黑名单 | `CF_EXCLUDE_KEYWORDS` | `枪版,抢先版,CAM,…` | 支持正则 |
 | TMDB | `CF_TMDB_API_KEY` | 空 | **留空也能用**，只是没海报/总集数 |
 | API 令牌 | `CF_API_TOKEN` | 空 | 外部脚本用请求头 `X-API-Token` |
-| 网盘自动转存 | `CF_PAN_AUTO_SAVE` | `true` | 盘搜命中后自动转存进已配置的网盘 |
-| 转存重试间隔 | `CF_PAN_TRANSFER_INTERVAL_MINUTES` | `20` | 分钟，设 0 关闭该定时任务 |
-| 转存批量 | `CF_PAN_TRANSFER_BATCH` | `20` | 单次最多转存多少条 |
+| 网盘自动转存 | `CF_PAN_AUTO_SAVE` | `true` | 仅控制显式 `pan_mode=save_then_download`；普通下载不自动转存 |
+| 网盘任务重试间隔 | `CF_PAN_TRANSFER_INTERVAL_MINUTES` | `20` | 分钟，按原下载/转存意图重试，设 0 关闭 |
+| 网盘任务批量 | `CF_PAN_TRANSFER_BATCH` | `20` | 单次最多重试多少条 |
 | 机器人总开关 | `CF_CHATOPS_ENABLED` | `true` | 关掉后所有入站指令直接忽略 |
 | 指令自动下载 | `CF_CHATOPS_AUTO_DOWNLOAD` | `false` | 开启后「搜索」直接下最优的一条 |
 | 指令回复条数 | `CF_CHATOPS_RESULT_LIMIT` | `5` | 搜索结果回复几条 |
