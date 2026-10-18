@@ -131,6 +131,8 @@ class LocalDirStorage(BasePanStorage):
             target = self._resolve(path)
         except ValueError:
             return False
+        if target == self.base_dir.resolve():
+            return False
         if not target.exists():
             return False
         try:
@@ -153,7 +155,7 @@ class LocalDirStorage(BasePanStorage):
             return False
         try:
             source = self._resolve(path)
-            if not source.exists():
+            if source == self.base_dir.resolve() or not source.exists():
                 return False
             source.rename(source.parent / name)
             return True
@@ -167,7 +169,7 @@ class LocalDirStorage(BasePanStorage):
         try:
             source = self._resolve(path)
             dest_dir = self._resolve(target_dir)
-            if not source.exists():
+            if source == self.base_dir.resolve() or not source.exists():
                 return False
             dest_dir.mkdir(parents=True, exist_ok=True)
             shutil.move(str(source), str(dest_dir / source.name))

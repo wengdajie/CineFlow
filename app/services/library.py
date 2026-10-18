@@ -6,6 +6,7 @@ import os
 import shutil
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from sqlalchemy import select
 
@@ -18,10 +19,11 @@ from app.core.organizer import (
     is_subtitle_file,
     iter_media_files,
     transfer_directory,
+    transfer_path,
 )
 from app.db.models import DownloadTask, LibraryFile, MediaItem, Subscribe, TransferRecord
 from app.db.session import session_scope
-from app.schemas.enums import EventType, MediaType, NotifyLevel, TaskStatus
+from app.schemas.enums import EventType, MediaType, NotifyLevel, TaskStatus, TransferMode
 from app.services import notify as notify_service
 from app.services import sites as site_service
 from app.utils.strings import truncate
@@ -154,7 +156,17 @@ async def transfer_completed_tasks() -> dict[str, int]:
         stats["tasks"] += 1
         success_files = 0
         with session_scope() as session:
+            previous = set(session.execute(
+                select(TransferRecord.source_path, TransferRecord.target_path, TransferRecord.size).where(
+                    TransferRecord.task_id == snapshot["id"], TransferRecord.success.is_(True),
+                )
+            ).all())
             for result in results:
+                if (not result.success and result.target and "目标已存在" in result.message
+                        and (str(result.source), str(result.target), result.size) in previous
+                        and result.target.is_file() and result.target.stat().st_size == result.size):
+                    result.success = True
+                    result.message = "此前已完成整理"
                 session.add(
                     TransferRecord(
                         task_id=snapshot["id"],
@@ -190,7 +202,7 @@ async def transfer_completed_tasks() -> dict[str, int]:
                     )
 
             task = session.get(DownloadTask, snapshot["id"])
-            if task and success_files:
+            if task and success_files and all(result.success for result in results):
                 task.status = TaskStatus.TRANSFERRED.value
 
         stats["files"] += success_files
@@ -673,7 +685,12 @@ def _reindex_paths(old: Path, new: Path) -> int:
     changed = 0
     with session_scope() as session:
         rows = list(session.execute(select(LibraryFile)).scalars())
+        moving = [row for row in rows if _is_within(Path(row.path), old)]
         for row in rows:
+            if row not in moving and _is_within(Path(row.path), new):
+                session.delete(row)
+        session.flush()
+        for row in moving:
             current = row.path or ""
             if os.path.normcase(current) == os.path.normcase(old_text):
                 row.path = new_text
@@ -705,6 +722,8 @@ def _forget_paths(target: Path) -> int:
 def rename_entry(path: str | Path, new_name: str) -> dict[str, Any]:
     """重命名媒体库/下载目录里的文件或目录。"""
     source = resolve_library_path(path)
+    if source in library_roots():
+        raise ConfigError("不能重命名配置的根目录")
     name = _validate_name(new_name)
     target = source.parent / name
     if os.path.normcase(str(target)) == os.path.normcase(str(source)):
@@ -737,6 +756,8 @@ def move_entry(
 ) -> dict[str, Any]:
     """把文件或目录移动到另一个（同样受限的）目录下。"""
     source = resolve_library_path(path)
+    if source in library_roots():
+        raise ConfigError("不能移动配置的根目录")
     destination = resolve_library_path(dest_dir, must_exist=False)
     if destination.exists() and not destination.is_dir():
         raise ConfigError(f"目标不是目录：{destination}")
@@ -750,22 +771,37 @@ def move_entry(
             "reindexed": 0,
             "message": "已在目标目录，无需移动",
         }
-    if target.exists():
-        if not overwrite:
-            raise ConfigError(f"目标已存在：{target}（勾选覆盖后重试）")
-        try:
-            if target.is_dir():
-                shutil.rmtree(target)
-            else:
-                target.unlink()
-        except OSError as exc:
-            raise ConfigError(f"覆盖目标失败：{exc}") from exc
+    resolve_library_path(target, must_exist=False)
+    if _is_within(source, target):
+        raise ConfigError("不能覆盖源文件所在的上级目录")
+    if target.exists() and not overwrite:
+        raise ConfigError(f"目标已存在：{target}（勾选覆盖后重试）")
+    if target.exists() and source.is_dir() != target.is_dir():
+        raise ConfigError("源与目标类型不同，请选择其他目标目录")
     destination.mkdir(parents=True, exist_ok=True)
+    backup = None
     try:
-        # shutil.move 能跨盘（K: -> D:），Path.rename 不能，媒体库和下载盘常常不同盘
-        shutil.move(str(source), str(target))
+        if source.is_file():
+            transfer_path(source, target, TransferMode.MOVE.value, overwrite=overwrite)
+        else:
+            if target.exists():
+                backup = resolve_library_path(target.with_name(f".cineflow-backup-{uuid4().hex}"), must_exist=False)
+                target.rename(backup)
+            shutil.move(str(source), str(target))
     except OSError as exc:
+        if backup and backup.exists():
+            if target.exists():
+                recovery = resolve_library_path(target.with_name(f".cineflow-recovery-{uuid4().hex}"), must_exist=False)
+                target.rename(recovery)
+                logger.warning("未完成的移动保留在 %s", recovery)
+            backup.rename(target)
         raise ConfigError(f"移动失败：{exc}") from exc
+    if backup and backup.exists():
+        try:
+            # 仅在新目录完整移动成功后清理已验证在媒体根目录内的旧版本。
+            shutil.rmtree(resolve_library_path(backup))
+        except OSError:
+            logger.warning("移动已完成，旧版本保留在 %s", backup)
     reindexed = _reindex_paths(source, target)
     logger.info("移动 %s -> %s（同步索引 %d 条）", source, target, reindexed)
     return {

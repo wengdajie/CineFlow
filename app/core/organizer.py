@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import os
 import shutil
+import threading
 from dataclasses import dataclass
 from pathlib import Path
+from uuid import uuid4
 
 from app.core.config import settings
 from app.core.logger import get_logger
@@ -14,6 +16,7 @@ from app.schemas.enums import MediaType, TransferMode
 from app.utils.strings import safe_filename
 
 logger = get_logger(__name__)
+_PUBLISH_LOCK = threading.Lock()
 
 
 @dataclass
@@ -122,7 +125,7 @@ def _link_or_copy(source: Path, target: Path, mode: str) -> str:
         shutil.move(str(source), str(target))
         return mode
     if mode == TransferMode.SOFTLINK.value:
-        os.symlink(str(source), str(target))
+        os.symlink(str(source.resolve()), str(target))
         return mode
     if mode == TransferMode.LINK.value:
         try:
@@ -134,6 +137,43 @@ def _link_or_copy(source: Path, target: Path, mode: str) -> str:
             return TransferMode.COPY.value
     shutil.copy2(str(source), str(target))
     return TransferMode.COPY.value
+
+
+def _safe_target(root: Path, relative: str) -> Path:
+    path = Path(relative)
+    target = root / path
+    if path.is_absolute() or path.drive or not target.resolve().is_relative_to(root.resolve()):
+        raise ValueError("命名模板必须生成根目录内的相对路径")
+    return target
+
+
+def transfer_path(source: Path, target: Path, mode: str, *, overwrite: bool = False) -> str:
+    """先完成同目录临时文件，再发布；覆盖失败时保留源文件与旧版本。"""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists() or target.is_symlink():
+        if not overwrite:
+            raise FileExistsError("目标已存在，跳过")
+        if target.exists() and source.samefile(target):
+            if mode == TransferMode.MOVE.value and source.resolve() != target.resolve():
+                source.unlink()
+            return mode
+    staging = target.with_name(f".cineflow-{uuid4().hex}.tmp")
+    try:
+        staging_mode = TransferMode.LINK.value if mode == TransferMode.MOVE.value else mode
+        used_mode = _link_or_copy(source, staging, staging_mode)
+        with _PUBLISH_LOCK:
+            if (target.exists() or target.is_symlink()) and not overwrite:
+                raise FileExistsError("目标已存在，跳过")
+            staging.replace(target)
+        if mode == TransferMode.MOVE.value:
+            try:
+                source.unlink()
+                used_mode = mode
+            except OSError:
+                logger.warning("目标已完成，源文件无法移除，保留源文件：%s", source)
+        return used_mode
+    finally:
+        staging.unlink(missing_ok=True)
 
 
 def transfer_file(
@@ -182,21 +222,17 @@ def transfer_file(
     if mode == TransferMode.STRM.value:
         return _write_strm(source, library, relative, info, size, dry_run=dry_run)
 
-    target = library / relative
+    try:
+        target = _safe_target(library, relative)
+    except (OSError, ValueError) as exc:
+        return TransferResult(False, source, mode=mode, message=str(exc), size=size, meta=info)
     if dry_run:
         return TransferResult(
             True, source, target, mode, "试运行", size=size, meta=info
         )
 
     try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if target.exists():
-            if not overwrite:
-                return TransferResult(
-                    False, source, target, mode, "目标已存在，跳过", size=size, meta=info
-                )
-            target.unlink()
-        used_mode = _link_or_copy(source, target, mode)
+        used_mode = transfer_path(source, target, mode, overwrite=overwrite)
     except Exception as exc:
         logger.error("整理失败 %s -> %s: %s", source, target, exc)
         return TransferResult(False, source, target, mode, str(exc), size, info)
@@ -217,18 +253,26 @@ def _write_strm(
 ) -> TransferResult:
     """生成 STRM 文件（网盘直链播放场景）。"""
     strm_root = Path(settings.STRM_DIR)
-    target = strm_root / Path(relative).with_suffix(".strm")
+    try:
+        target = _safe_target(strm_root, str(Path(relative).with_suffix(".strm")))
+    except (OSError, ValueError) as exc:
+        return TransferResult(False, source, mode=TransferMode.STRM.value, message=str(exc), size=size, meta=info)
     if dry_run:
         return TransferResult(
             True, source, target, TransferMode.STRM.value, "试运行", size, info
         )
+    staging = target.with_name(f".cineflow-{uuid4().hex}.tmp")
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(str(source), encoding="utf-8")
+        staging.write_text(str(source.resolve()), encoding="utf-8")
+        with _PUBLISH_LOCK:
+            staging.replace(target)
     except Exception as exc:
         return TransferResult(
             False, source, target, TransferMode.STRM.value, str(exc), size, info
         )
+    finally:
+        staging.unlink(missing_ok=True)
     return TransferResult(
         True, source, target, TransferMode.STRM.value, "成功", size, info
     )
@@ -241,13 +285,17 @@ def _transfer_subtitles(source: Path, target: Path, mode: str) -> None:
         for sibling in source.parent.iterdir():
             if not is_subtitle_file(sibling):
                 continue
-            if not sibling.stem.lower().startswith(stem[: max(len(stem) - 2, 4)]):
+            subtitle_stem = sibling.stem.lower()
+            if not subtitle_stem.startswith(stem):
                 continue
-            suffix = sibling.name[len(source.stem) :] if sibling.name.startswith(source.stem) else sibling.suffix
+            remainder = subtitle_stem[len(stem):]
+            if remainder and remainder[0] not in ". _-":
+                continue
+            suffix = sibling.name[len(source.stem):]
             subtitle_target = target.with_name(target.stem + suffix)
             if subtitle_target.exists():
                 continue
-            _link_or_copy(sibling, subtitle_target, mode)
+            transfer_path(sibling, subtitle_target, mode)
     except Exception as exc:  # pragma: no cover - 字幕失败不影响主流程
         logger.debug("字幕整理跳过: %s", exc)
 
