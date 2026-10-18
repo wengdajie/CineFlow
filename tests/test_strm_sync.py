@@ -56,7 +56,11 @@ def pan_site(client):
         )
         session.add(site)
         session.flush()
-        return site.id
+        site_id = site.id
+    yield site_id
+    with session_scope() as session:
+        session.query(StrmRecord).filter_by(site_id=site_id).delete()
+        session.query(SiteConfig).filter_by(id=site_id).delete()
 
 
 @pytest.fixture
@@ -136,6 +140,107 @@ def test_clean_can_be_disabled(fake_pan, pan_site, tmp_path):
 
 
 # ------------------------------------------------------------- 两种链接模式
+def test_scoped_sync_preserves_other_source_directories(fake_pan, pan_site, tmp_path):
+    FakePan.tree["/剧集2"] = [PanFile("other.mkv", "/剧集2/other.mkv")]
+    run(strm_sync.sync_storage(pan_site, pan_path="/剧集2", strm_subdir="other"))
+    run(strm_sync.sync_storage(pan_site, pan_path="/剧集", clean=True))
+    assert (tmp_path / "strm/other/other.strm").exists()
+
+
+def test_complete_empty_directory_cleans_only_its_scope(fake_pan, pan_site, tmp_path):
+    run(strm_sync.sync_storage(pan_site, pan_path="/剧集"))
+    FakePan.tree["/剧集"] = []
+    result = run(strm_sync.sync_storage(pan_site, pan_path="/剧集", clean=True))
+    assert result["removed"] == 2
+    assert not _strm_files(tmp_path)
+
+
+def test_directory_error_cannot_delete_previous_strm(fake_pan, pan_site, monkeypatch, tmp_path):
+    run(strm_sync.sync_storage(pan_site))
+    original = fake_pan.list_dir
+
+    async def failed(path="/"):
+        if path == "/剧集":
+            raise OSError("temporary failure")
+        return [*(await original(path)), PanFile("ok.mkv", "/ok.mkv")]
+
+    monkeypatch.setattr(fake_pan, "list_dir", failed)
+    result = run(strm_sync.sync_storage(pan_site, clean=True))
+    assert result["truncated"] is True
+    assert result["removed"] == 0
+    assert "S01E01.strm" in _strm_files(tmp_path)
+
+
+def test_depth_limit_marks_scan_incomplete(fake_pan):
+    _, incomplete = run(strm_sync._walk(fake_pan, "/", max_depth=0))
+    assert incomplete is True
+
+
+def test_remote_paths_cannot_escape_output_directory(fake_pan, pan_site, tmp_path):
+    FakePan.tree["/剧集"].append(PanFile("escape.mkv", "/剧集/../../escape.mkv"))
+    result = run(strm_sync.sync_storage(pan_site, pan_path="/剧集", clean=True))
+    assert result["truncated"] is True and result["created"] == 2
+    assert not (tmp_path / "escape.strm").exists()
+    assert strm_sync._output_path("/剧集2/other.mkv", "/剧集", tmp_path) is None
+
+
+@pytest.mark.parametrize(("module", "class_name", "method"), [
+    ("quark", "QuarkStorage", "_call"),
+    ("pan115", "Pan115Storage", "_call"),
+    ("baidu", "BaiduPanStorage", "_call"),
+    ("baidu_openapi", "BaiduOpenApiStorage", "_call"),
+    ("alist", "AListStorage", "_request"),
+    ("webdav", "WebDavStorage", "_request"),
+])
+def test_native_listing_failure_is_not_an_empty_directory(module, class_name, method, monkeypatch):
+    from importlib import import_module
+    from unittest.mock import AsyncMock
+
+    storage = getattr(import_module(f"app.providers.panstorage.{module}"), class_name)({})
+    result = (503, "unavailable") if module == "webdav" else None
+    monkeypatch.setattr(storage, method, AsyncMock(return_value=result))
+    with pytest.raises(OSError):
+        run(storage.list_dir_for_sync("/"))
+    files, incomplete = run(strm_sync._walk(storage, "/"))
+    assert files == [] and incomplete is True
+
+
+@pytest.mark.parametrize("module", ["quark", "pan115", "baidu"])
+def test_native_page_limit_keeps_results_but_disables_cleanup(module, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from app.providers.panstorage.baidu import BaiduPanStorage
+    from app.providers.panstorage.pan115 import Pan115Storage
+    from app.providers.panstorage.quark import QuarkStorage
+
+    count = 1000 if module == "baidu" else 200
+    if module == "quark":
+        storage = QuarkStorage({})
+        payload = {"data": {"list": [{"file_name": f"{i}.mkv", "fid": str(i), "file_type": 1} for i in range(count)]}}
+    elif module == "pan115":
+        storage = Pan115Storage({})
+        payload = {"data": [{"n": f"{i}.mkv", "fid": str(i + 1)} for i in range(count)]}
+    else:
+        storage = BaiduPanStorage({})
+        payload = {"list": [{"server_filename": f"{i}.mkv", "path": f"/{i}.mkv", "fs_id": i + 1} for i in range(count)]}
+    monkeypatch.setattr(storage, "_call", AsyncMock(return_value=payload))
+    files, incomplete = run(strm_sync._walk(storage, "/"))
+    assert incomplete is True and len(files) == count
+    assert all(item.path.startswith("/") for _, item in files)
+
+
+def test_webdav_partial_failure_cannot_enable_cleanup(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from app.providers.panstorage.webdav import WebDavStorage
+
+    xml = '<d:multistatus xmlns:d="DAV:"><d:response><d:href>/missing.mkv</d:href><d:status>HTTP/1.1 404 Not Found</d:status></d:response></d:multistatus>'
+    storage = WebDavStorage({"url": "https://example.invalid"})
+    monkeypatch.setattr(storage, "_request", AsyncMock(return_value=(207, xml)))
+    _, incomplete = run(strm_sync._walk(storage, "/"))
+    assert incomplete is True
+
+
 def test_proxy_mode_writes_internal_302_endpoint(fake_pan, pan_site, tmp_path):
     """默认 proxy 模式写自家 302 端点，链接永不过期。"""
     run(strm_sync.sync_storage(pan_site, pan_path="/剧集", link_mode="proxy"))
@@ -175,6 +280,31 @@ def test_resolve_play_url_missing_record(client):
 
 
 # ------------------------------------------------------------------ 统计
+def test_play_requires_record_bound_token_and_rotation(fake_pan, pan_site, tmp_path, client, auth_headers):
+    run(strm_sync.sync_storage(pan_site, pan_path="/剧集"))
+    paths = sorted((tmp_path / "strm").rglob("*.strm"))
+    old = paths[0].read_text(encoding="utf-8")
+    other = paths[1].read_text(encoding="utf-8")
+    assert client.get(old, follow_redirects=False).status_code == 302
+    assert client.get(old.split("?")[0], follow_redirects=False).status_code == 404
+    assert client.get(old.split("?")[0] + "?token=无效", follow_redirects=False).status_code == 404
+    assert client.get(old.split("?")[0] + "?" + other.split("?")[1], follow_redirects=False).status_code == 404
+    response = client.post("/api/v1/strm/rewrite?rotate=true", headers=auth_headers)
+    assert response.json()["rewritten"] == 2
+    assert client.get(old, follow_redirects=False).status_code == 404
+    assert client.get(paths[0].read_text(encoding="utf-8"), follow_redirects=False).status_code == 302
+
+
+def test_rewrite_migrates_legacy_proxy_without_cloud_request(fake_pan, pan_site, tmp_path):
+    run(strm_sync.sync_storage(pan_site, pan_path="/剧集"))
+    with session_scope() as session:
+        for record in session.query(StrmRecord):
+            record.play_token = None
+    result = strm_sync.rewrite_play_links()
+    assert result == {"rewritten": 2, "failed": 0}
+    assert all("?token=" in p.read_text() for p in (tmp_path / "strm").rglob("*.strm"))
+
+
 def test_stats_and_list_records(fake_pan, pan_site):
     run(strm_sync.sync_storage(pan_site, pan_path="/剧集"))
     data = strm_sync.stats()

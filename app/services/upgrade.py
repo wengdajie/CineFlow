@@ -225,27 +225,32 @@ def replace_library_file(
     这一步刻意与「提交下载」分离：只有新文件确实落地了才删旧的，
     避免下载失败留下空洞。
     """
-    outcome: dict[str, Any] = {"deleted": False, "message": ""}
-    old = Path(old_path)
-    with session_scope() as session:
-        record = session.execute(
-            select(LibraryFile).where(LibraryFile.path == str(old_path))
-        ).scalar_one_or_none()
-        if record:
-            record.path = str(new_path)
-            record.quality_score = new_score
-            record.upgrade_count = (record.upgrade_count or 0) + 1
-
-    if delete_old and old.exists() and str(old) != str(new_path):
+    outcome: dict[str, Any] = {"deleted": False, "completed": False, "message": ""}
+    old, new = Path(old_path), Path(new_path)
+    if not new.is_file() or new.stat().st_size == 0:
+        outcome["message"] = "新文件不存在或为空，未删除旧版本"
+        return outcome
+    if delete_old and old.exists() and old.resolve() != new.resolve():
         try:
             old.unlink()
             outcome["deleted"] = True
-            outcome["message"] = f"已删除旧版本 {old.name}"
         except OSError as exc:
-            outcome["message"] = f"删除旧版本失败：{exc}"
-            logger.warning("洗版删除旧文件失败 %s: %s", old, exc)
-    else:
-        outcome["message"] = "旧文件不存在或与新文件相同，未删除"
+            outcome["message"] = f"删除旧版本失败，可重试：{exc}"
+            return outcome
+    with session_scope() as session:
+        previous = session.scalar(select(LibraryFile).where(LibraryFile.path == str(old_path)))
+        current = session.scalar(select(LibraryFile).where(LibraryFile.path == str(new_path)))
+        if current is None and previous is not None:
+            current = previous
+            current.path = str(new_path)
+        if current is not None:
+            current.quality_score = new_score
+            if old.resolve() != new.resolve():
+                current.upgrade_count = max(current.upgrade_count or 0, (previous.upgrade_count or 0) + 1 if previous else 1)
+        if previous is not None and previous is not current and not old.exists():
+            session.delete(previous)
+    outcome["completed"] = True
+    outcome["message"] = f"已删除旧版本 {old.name}" if outcome["deleted"] else "旧文件不存在或与新文件相同，未删除"
     return outcome
 
 

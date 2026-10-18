@@ -177,6 +177,7 @@ class DownloadTask(IdMixin, TimestampMixin, Base):
     """下载任务。"""
 
     __tablename__ = "download_tasks"
+    dispatch_key: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True)
 
     subscribe_id: Mapped[int | None] = mapped_column(
         ForeignKey("subscribes.id", ondelete="SET NULL"), nullable=True, index=True
@@ -413,6 +414,7 @@ class StrmRecord(IdMixin, TimestampMixin, Base):
     size: Mapped[int] = mapped_column(BigInteger, default=0)
     #: 写入 STRM 的链接形式：direct / proxy
     link_mode: Mapped[str] = mapped_column(String(16), default="proxy")
+    play_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
     #: 上次校验时源文件是否仍存在
     alive: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     last_synced_at: Mapped[datetime | None] = mapped_column(nullable=True)
@@ -566,4 +568,3 @@ class FilterRuleGroup(IdMixin, TimestampMixin, Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     #: 是否为默认规则组（新订阅自动套用）
     is_default: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
-

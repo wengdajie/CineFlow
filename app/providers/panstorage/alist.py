@@ -14,7 +14,13 @@ import time
 from typing import Any
 
 from app.core.logger import get_logger
-from app.providers.panstorage.base import BasePanStorage, PanFile, PanQuota, SaveResult
+from app.providers.panstorage.base import (
+    BasePanStorage,
+    IncompleteDirectory,
+    PanFile,
+    PanQuota,
+    SaveResult,
+)
 from app.providers.registry import register
 from app.utils.http import fetch_json
 
@@ -25,6 +31,7 @@ logger = get_logger(__name__)
 class AListStorage(BasePanStorage):
     """AList v3 网关。"""
 
+    supports_strict_list = True
     name = "alist"
     display_name = "AList 网盘网关"
 
@@ -97,12 +104,14 @@ class AListStorage(BasePanStorage):
         return data if isinstance(data, dict) else {"_raw": data}
 
     # ---------------- 能力实现 ----------------
-    async def list_dir(self, path: str = "/") -> list[PanFile]:
+    async def list_dir(self, path: str = "/", *, strict: bool = False) -> list[PanFile]:
         target = self.normalize_path(path)
         data = await self._request(
             "/api/fs/list",
             body={"path": target, "page": 1, "per_page": 0, "refresh": False},
         )
+        if strict and (not data or "content" not in data or not isinstance(data["content"], (list, type(None)))):
+            raise OSError("AList 目录读取失败")
         if not data:
             return []
         content = data.get("content") or []
@@ -125,6 +134,8 @@ class AListStorage(BasePanStorage):
             )
         # 目录在前，同类按名称排序，符合文件管理器直觉
         files.sort(key=lambda f: (not f.is_dir, f.name.lower()))
+        if strict and (int(data.get("total") or 0) > len(files) or len(files) != len(content)):
+            raise IncompleteDirectory(files)
         return files
 
     async def save_share(

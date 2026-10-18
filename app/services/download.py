@@ -9,10 +9,13 @@
 
 from __future__ import annotations
 
+import asyncio
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 
 from app.core.config import settings
 from app.core.logger import get_logger
@@ -20,6 +23,7 @@ from app.core.meta import parse
 from app.db.base import utcnow
 from app.db.models import DownloadTask
 from app.db.session import session_scope
+from app.providers.base import Resource
 from app.schemas.enums import EventType, NotifyLevel, ResourceKind, TaskStatus
 from app.services import download_routing
 from app.services import notify as notify_service
@@ -53,7 +57,7 @@ def _existing_task(link: str, subscribe_id: int | None) -> int | None:
                     TaskStatus.CANCELED.value,
                 ]),
             )
-        ).scalar_one_or_none()
+        ).scalars().first()
         return existing
 
 
@@ -84,6 +88,77 @@ async def add_download(
     notify: bool = True,
     video_format: str | None = None,
 ) -> DownloadTask | None:
+    """先持久化自动任务占位，再执行外部投递；中断状态保留供人工核对。"""
+    if subscribe_id is None or not resource.get("link"):
+        return await _dispatch_download(
+            resource,
+            subscribe_id=subscribe_id,
+            downloader_name=downloader_name,
+            save_path=save_path,
+            notify=notify,
+            video_format=video_format,
+        )
+    link = str(resource["link"])
+    if _existing_task(link, subscribe_id):
+        return None
+    kind = str(resource.get("kind") or ResourceKind.TORRENT.value)
+    key = sha256(
+        f"{subscribe_id}:{Resource(title='', link=link, kind=kind).unique_key}".encode()
+    ).hexdigest()
+    try:
+        with session_scope() as session:
+            session.execute(
+                update(DownloadTask)
+                .where(
+                    DownloadTask.dispatch_key == key,
+                    DownloadTask.status.in_([TaskStatus.FAILED.value, TaskStatus.CANCELED.value]),
+                )
+                .values(dispatch_key=None)
+            )
+            claim = DownloadTask(
+                title=str(resource.get("title") or "")[:500],
+                link=link,
+                kind=kind,
+                subscribe_id=subscribe_id,
+                dispatch_key=key,
+                status=TaskStatus.SUBMITTING.value,
+                error="正在投递；如进程中断，请核对下载器后移除此占位再重试",
+            )
+            session.add(claim)
+            session.flush()
+            reserved_id = claim.id
+    except IntegrityError:
+        return None
+    try:
+        return await _dispatch_download(
+            resource,
+            subscribe_id=subscribe_id,
+            downloader_name=downloader_name,
+            save_path=save_path,
+            notify=notify,
+            video_format=video_format,
+            reserved_id=reserved_id,
+        )
+    except asyncio.CancelledError:
+        raise  # 保留占位：外部服务可能已接受，自动重发可能重复下载
+    except Exception as exc:
+        with session_scope() as session:
+            claim = session.get(DownloadTask, reserved_id)
+            if claim:
+                claim.error = f"投递结果未知，请核对下载器后移除此占位再重试：{type(exc).__name__}"
+        raise
+
+
+async def _dispatch_download(
+    resource: dict[str, Any],
+    *,
+    subscribe_id: int | None = None,
+    downloader_name: str | None = None,
+    save_path: str | None = None,
+    notify: bool = True,
+    video_format: str | None = None,
+    reserved_id: int | None = None,
+) -> DownloadTask | None:
     """添加下载任务。
 
     ``video_format`` 只对 ``kind=webvideo`` 有意义：界面上用户选定的画质
@@ -101,20 +176,6 @@ async def add_download(
     target_path = _resolve_save_path(
         media_type, meta.get("title") or title, meta.get("season"), save_path
     )
-
-    # 幂等：**订阅自动投递**时，同一订阅+同一链接已有在办任务就跳过。
-    # 只挡自动链路（subscribe_id 非空）：手动点下载是用户的明确意图，
-    # 他可能就是想重下一遍（换目录、上次删了、想覆盖），挡掉会很费解。
-    if subscribe_id is not None:
-        already = _existing_task(link, subscribe_id)
-        if already:
-            logger.info(
-                "订阅 #%s 跳过重复投递（已有任务 #%s）：%s",
-                subscribe_id,
-                already,
-                truncate(title, 80),
-            )
-            return None
 
     external_id: str | None = None
     downloader = None
@@ -226,22 +287,22 @@ async def add_download(
             error = download_routing.pan_pending_hint() or None
 
     with session_scope() as session:
-        task = DownloadTask(
-            subscribe_id=subscribe_id,
-            title=title[:500],
-            kind=kind,
-            site=str(resource.get("site") or "")[:128] or None,
-            link=link,
-            downloader=downloader.site_name if downloader else None,
-            external_id=external_id,
-            save_path=target_path,
-            status=status,
-            size=int(resource.get("size") or 0),
-            media_type=media_type,
-            season=meta.get("season"),
-            episodes=meta.get("episodes") or [],
-            error=error,
-            meta={
+        values = {
+            "subscribe_id": subscribe_id,
+            "title": title[:500],
+            "kind": kind,
+            "site": str(resource.get("site") or "")[:128] or None,
+            "link": link,
+            "downloader": downloader.site_name if downloader else None,
+            "external_id": external_id,
+            "save_path": target_path,
+            "status": status,
+            "size": int(resource.get("size") or 0),
+            "media_type": media_type,
+            "season": meta.get("season"),
+            "episodes": meta.get("episodes") or [],
+            "error": error,
+            "meta": {
                 "password": resource.get("password"),
                 "page_url": resource.get("page_url"),
                 "score": resource.get("score"),
@@ -258,8 +319,14 @@ async def add_download(
                     else {}
                 ),
             },
-        )
-        session.add(task)
+        }
+        if reserved_id is None:
+            task = DownloadTask(**values)
+            session.add(task)
+        else:
+            task = session.get(DownloadTask, reserved_id)
+            for key, value in values.items():
+                setattr(task, key, value)
         session.flush()
         task_id = task.id
         session.expunge(task)
@@ -398,8 +465,6 @@ async def sync_tasks() -> dict[str, int]:
     #: 本轮新完成的任务，循环结束后广播 download.completed 给插件
     completed: list[dict[str, Any]] = []
     downloaders = {item.site_name: item for item in site_service.downloaders()}
-    if not downloaders:
-        return stats
 
     with session_scope() as session:
         pending = list(
@@ -512,8 +577,7 @@ async def sync_tasks() -> dict[str, int]:
         await notify_service.emit(EventType.DOWNLOAD_COMPLETED.value, item)
 
     # 对已完成任务执行整理
-    if stats["completed"]:
-        await library_service.transfer_completed_tasks()
+    await library_service.transfer_completed_tasks()
     return stats
 
 

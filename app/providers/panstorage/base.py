@@ -43,6 +43,14 @@ class PanFile:
         }
 
 
+class IncompleteDirectory(OSError):
+    """目录只返回部分条目，允许同步已知文件，但不能据此推断删除。"""
+
+    def __init__(self, files: list[PanFile]):
+        super().__init__("网盘目录返回不完整，跳过失效清理")
+        self.files = files
+
+
 @dataclass
 class PanQuota:
     """网盘容量信息。"""
@@ -110,6 +118,7 @@ class BasePanStorage(BaseProvider):
     #: 该网盘是否支持盘内搜索
     supports_search: bool = False
     #: 该网盘是否支持 Cookie/凭据保活（keep_alive）
+    supports_strict_list: bool = False
     supports_keepalive: bool = False
 
     def capabilities(self) -> dict[str, bool]:
@@ -132,8 +141,14 @@ class BasePanStorage(BaseProvider):
         """转存的默认落地目录。"""
         return str(self.option("root_path") or "/")
 
+    async def list_dir_for_sync(self, path: str = "/") -> list[PanFile]:
+        """内置存储使用严格读取；第三方存储须在读取失败时抛异常。"""
+        if self.supports_strict_list:
+            return await self.list_dir(path, strict=True)
+        return await self.list_dir(path)
+
     @abstractmethod
-    async def list_dir(self, path: str = "/") -> list[PanFile]:
+    async def list_dir(self, path: str = "/", *, strict: bool = False) -> list[PanFile]:
         """列出目录内容。"""
 
     @abstractmethod

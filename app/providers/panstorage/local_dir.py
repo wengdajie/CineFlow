@@ -16,7 +16,13 @@ import shutil
 from pathlib import Path
 
 from app.core.logger import get_logger
-from app.providers.panstorage.base import BasePanStorage, PanFile, PanQuota, SaveResult
+from app.providers.panstorage.base import (
+    BasePanStorage,
+    IncompleteDirectory,
+    PanFile,
+    PanQuota,
+    SaveResult,
+)
 from app.providers.registry import register
 
 logger = get_logger(__name__)
@@ -26,6 +32,7 @@ logger = get_logger(__name__)
 class LocalDirStorage(BasePanStorage):
     """把本地/挂载目录当作网盘浏览。"""
 
+    supports_strict_list = True
     name = "local_dir"
     display_name = "本地目录（含 rclone/CloudDrive 挂载）"
     supports_save = False
@@ -56,15 +63,21 @@ class LocalDirStorage(BasePanStorage):
             raise ValueError("路径越界")
         return target
 
-    async def list_dir(self, path: str = "/") -> list[PanFile]:
+    async def list_dir(self, path: str = "/", *, strict: bool = False) -> list[PanFile]:
         if not self.base_dir:
+            if strict:
+                raise OSError("本地存储未配置目录")
             return []
         try:
             target = self._resolve(path)
         except ValueError:
+            if strict:
+                raise
             logger.warning("本地网盘路径越界：%s", path)
             return []
         if not target.is_dir():
+            if strict:
+                raise FileNotFoundError("本地存储目录不可访问")
             return []
 
         base = self.normalize_path(path)
@@ -73,6 +86,8 @@ class LocalDirStorage(BasePanStorage):
             try:
                 stat = entry.stat()
             except OSError:
+                if strict:
+                    raise IncompleteDirectory(files) from None
                 continue
             files.append(
                 PanFile(

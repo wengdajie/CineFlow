@@ -19,8 +19,10 @@
 
 from __future__ import annotations
 
+import posixpath
+import secrets
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from sqlalchemy import select
@@ -30,7 +32,7 @@ from app.core.logger import get_logger
 from app.db.base import utcnow
 from app.db.models import SiteConfig, StrmRecord
 from app.db.session import session_scope
-from app.providers.panstorage.base import BasePanStorage, PanFile
+from app.providers.panstorage.base import BasePanStorage, IncompleteDirectory, PanFile
 from app.schemas.enums import EventType, NotifyLevel, ProviderKind
 from app.utils.strings import format_size
 
@@ -58,12 +60,24 @@ def _strm_root() -> Path:
     return Path(settings.STRM_DIR)
 
 
-def _link_for(record_id: int, direct: str | None, mode: str) -> str:
+def _output_path(source: str, base: str, root: Path) -> Path | None:
+    """远端路径只能映射到本轮输出目录内。"""
+    try:
+        relative = PurePosixPath("/" + source.lstrip("/")).relative_to(
+            PurePosixPath("/" + base.lstrip("/"))
+        )
+    except ValueError:
+        return None
+    target = root / str(relative)
+    return target if target.resolve().is_relative_to(root.resolve()) else None
+
+
+def _link_for(record_id: int, direct: str | None, mode: str, token: str) -> str:
     """算出写进 .strm 文件的那一行内容。"""
     if mode == "direct" and direct:
         return direct
     base = str(settings.STRM_BASE_URL or "").rstrip("/")
-    return f"{base}/api/v1/strm/play/{record_id}"
+    return f"{base}/api/v1/strm/play/{record_id}?token={token}"
 
 
 #: 一次遍历的墙钟预算（秒）与目录请求上限。
@@ -143,6 +157,7 @@ async def _walk(
 
     async def walk(current: str, current_depth: int) -> list[tuple[str, PanFile]]:
         if current_depth > max_depth:
+            budget_state["truncated"] = True
             return []
         if time.monotonic() > deadline or budget_state["dirs"] >= max_dirs:
             budget_state["truncated"] = True
@@ -150,9 +165,13 @@ async def _walk(
         budget_state["dirs"] += 1
         collected: list[tuple[str, PanFile]] = []
         try:
-            entries = await storage.list_dir(current)
+            entries = await storage.list_dir_for_sync(current)
+        except IncompleteDirectory as exc:
+            budget_state["truncated"] = True
+            entries = exc.files
         except Exception as exc:
             logger.warning("STRM 遍历目录失败 %s: %s", current, exc)
+            budget_state["truncated"] = True
             return []
         for entry in entries:
             if entry.is_dir:
@@ -234,29 +253,36 @@ async def sync_storage(
     )
     stats["truncated"] = truncated
     videos = [(parent, item) for parent, item in files if _is_video(item.name)]
+    root = _strm_root().resolve()
+    if strm_subdir:
+        root = (root / strm_subdir).resolve()
+    if not root.is_relative_to(_strm_root().resolve()):
+        raise ValueError("STRM 子目录超出输出目录")
+    base = storage.normalize_path(pan_path)
     if not videos:
         # 截断时"没找到视频"极可能只是还没扫到，不能说成"这里没有视频"
         stats["message"] = (
             f"{storage.site_name} 的 {pan_path} 下暂未扫到视频文件"
-            f"（遍历达到上限提前收工，仅覆盖一部分目录，可指定更具体的 pan_path 重试）"
+            f"（目录读取失败、过深、分页未读全或超出预算，只覆盖一部分目录，可指定 pan_path 重试）"
             if truncated
             else f"{storage.site_name} 的 {pan_path} 下没有找到视频文件"
         )
+        if clean and not dry_run and not truncated:
+            stats["removed"] = _clean_invalid(site_id, set(), base=base, root=root)
         return stats
 
     # STRM 目录结构镜像网盘结构；可选再套一层子目录便于多盘并存
-    root = _strm_root()
-    if strm_subdir:
-        root = root / strm_subdir
-
-    base = storage.normalize_path(pan_path)
     seen_sources: set[str] = set()
 
     for _parent, item in videos:
         seen_sources.add(item.path)
         # 网盘路径相对 pan_path 的部分，用来在本地重建同样的层级
-        relative = item.path[len(base) :].lstrip("/") if base != "/" else item.path.lstrip("/")
-        target = (root / relative).with_suffix(".strm")
+        target = _output_path(item.path, base, root)
+        if target is None:
+            truncated = stats["truncated"] = True
+            stats["skipped"] += 1
+            continue
+        target = target.with_suffix(".strm")
         stats["total_size"] += item.size
 
         if dry_run:
@@ -287,6 +313,8 @@ async def sync_storage(
                 record.size = item.size
                 record.link_mode = mode
             record.alive = True
+            record.play_token = record.play_token or secrets.token_urlsafe(32)
+            play_token = record.play_token
             record.last_synced_at = utcnow()
             record_id = record.id
 
@@ -296,7 +324,7 @@ async def sync_storage(
                 direct = await storage.download_url(item.path, file_id=item.file_id)
             except Exception as exc:
                 logger.debug("换取直链失败 %s: %s", item.path, exc)
-        content = _link_for(record_id, direct, mode)
+        content = _link_for(record_id, direct, mode, play_token)
 
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -331,7 +359,7 @@ async def sync_storage(
     # 于是每跑一次就在"新增 636"和"清理 636"之间来回翻，媒体库反复丢片重扫。
     # 这是 ADR-82 的直接推论：把"没看到"当成"不存在"就会误删。
     if clean and not dry_run and not truncated:
-        stats["removed"] = _clean_invalid(site_id, seen_sources)
+        stats["removed"] = _clean_invalid(site_id, seen_sources, base=base, root=root)
     elif clean and truncated:
         logger.warning(
             "%s 本轮遍历被截断，跳过失效清理（避免把没扫到的文件误判成已删除）",
@@ -345,7 +373,7 @@ async def sync_storage(
     )
     if truncated:
         stats["message"] += (
-            "；⚠️ 本轮只扫了一部分（目录太多或网盘太慢），"
+            "；⚠️ 本轮只扫了一部分（目录读取失败、过深、分页未读全或超出预算），"
             "已跳过失效清理，建议改用「指定目录同步」"
         )
     logger.info("STRM 同步完成 %s", stats["message"])
@@ -382,8 +410,10 @@ async def _sync_metadata(
             truncated = True
             break
         attempted += 1
-        relative = item.path[len(base) :].lstrip("/") if base != "/" else item.path.lstrip("/")
-        target = root / relative
+        target = _output_path(item.path, base, root)
+        if target is None:
+            truncated = True
+            continue
         if target.exists() and target.stat().st_size > 0:
             continue
         try:
@@ -412,7 +442,7 @@ async def _sync_metadata(
     return count, truncated
 
 
-def _clean_invalid(site_id: int, seen_sources: set[str]) -> int:
+def _clean_invalid(site_id: int, seen_sources: set[str], *, base: str, root: Path) -> int:
     """删除源文件已消失的 STRM，并清理由此产生的空目录。"""
     removed = 0
     stale_dirs: set[Path] = set()
@@ -423,9 +453,15 @@ def _clean_invalid(site_id: int, seen_sources: set[str]) -> int:
             ).scalars()
         )
         for record in records:
+            source = posixpath.normpath("/" + record.source_path.lstrip("/"))
+            scope = posixpath.normpath("/" + base.lstrip("/"))
+            path = Path(record.strm_path)
+            if not (source == scope or source.startswith(scope.rstrip("/") + "/")):
+                continue
+            if not path.resolve().is_relative_to(root.resolve()):
+                continue
             if record.source_path in seen_sources:
                 continue
-            path = Path(record.strm_path)
             try:
                 if path.exists():
                     path.unlink()
@@ -559,6 +595,41 @@ async def sync_all(*, notify: bool = True) -> dict[str, Any]:
             event=EventType.LIBRARY_REFRESHED.value,
         )
     return summary
+
+
+def valid_play_token(record_id: int, token: str) -> bool:
+    """播放凭据与用户登录无关，稳定到显式轮换为止。"""
+    with session_scope() as session:
+        record = session.get(StrmRecord, record_id)
+        return bool(
+            record
+            and record.play_token
+            and secrets.compare_digest(record.play_token.encode(), token.encode())
+        )
+
+
+def rewrite_play_links(*, rotate: bool = False) -> dict[str, int]:
+    """无需访问网盘，重写已有 proxy STRM；可同时吊销旧凭据。"""
+    stats = {"rewritten": 0, "failed": 0}
+    with session_scope() as session:
+        records = session.scalars(select(StrmRecord).where(StrmRecord.link_mode == "proxy")).all()
+        for record in records:
+            path = Path(record.strm_path)
+            if not path.resolve().is_relative_to(_strm_root().resolve()):
+                stats["failed"] += 1
+                continue
+            token = (
+                secrets.token_urlsafe(32) if rotate or not record.play_token else record.play_token
+            )
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(_link_for(record.id, None, "proxy", token), encoding="utf-8")
+            except OSError:
+                stats["failed"] += 1
+                continue
+            record.play_token = token
+            stats["rewritten"] += 1
+    return stats
 
 
 async def resolve_play_url(record_id: int) -> tuple[str | None, str]:

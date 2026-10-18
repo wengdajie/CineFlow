@@ -76,12 +76,16 @@ async def transfer_completed_tasks() -> dict[str, int]:
                 "save_path": task.save_path,
                 # 洗版上下文：新版本入库成功后据此删除旧文件
                 "upgrade_for": (task.meta or {}).get("upgrade_for"),
+                "upgrade_target": (task.meta or {}).get("upgrade_target"),
                 "score": (task.meta or {}).get("score") or 0,
             }
             for task in tasks
         ]
 
     for snapshot in snapshots:
+        if snapshot.get("upgrade_target"):
+            _finish_upgrade_task(snapshot, snapshot["upgrade_target"])
+            continue
         source = None
         candidate = snapshot["content_path"]
         if candidate and Path(candidate).exists():
@@ -207,17 +211,11 @@ async def transfer_completed_tasks() -> dict[str, int]:
             )
             # 洗版收尾：新版本已确实落地，此时才删旧文件（失败下载不会留空洞）
             if snapshot.get("upgrade_for"):
-                from app.services import upgrade as upgrade_service
-
                 new_target = next(
                     (str(r.target) for r in results if r.success and r.target), None
                 )
                 if new_target:
-                    outcome = upgrade_service.replace_library_file(
-                        snapshot["upgrade_for"],
-                        new_target,
-                        new_score=float(snapshot.get("score") or 0),
-                    )
+                    outcome = _finish_upgrade_task(snapshot, new_target)
                     logger.info("洗版替换：%s", outcome["message"])
 
             await refresh_media_servers(
@@ -262,6 +260,21 @@ async def transfer_completed_tasks() -> dict[str, int]:
             payload={"skipped": len(skipped_detail)},
         )
     return stats
+
+
+def _finish_upgrade_task(snapshot: dict[str, Any], target: str) -> dict[str, Any]:
+    from app.services import upgrade
+
+    outcome = upgrade.replace_library_file(
+        snapshot["upgrade_for"], target, new_score=float(snapshot.get("score") or 0)
+    )
+    with session_scope() as session:
+        task = session.get(DownloadTask, snapshot["id"])
+        if task:
+            task.status = TaskStatus.TRANSFERRED.value if outcome["completed"] else TaskStatus.COMPLETED.value
+            task.error = None if outcome["completed"] else outcome["message"]
+            task.meta = {**(task.meta or {}), "upgrade_target": target}
+    return outcome
 
 
 def _register_library_file(

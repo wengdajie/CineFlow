@@ -28,7 +28,13 @@ import re
 from typing import Any
 
 from app.core.logger import get_logger
-from app.providers.panstorage.base import BasePanStorage, PanFile, PanQuota, SaveResult
+from app.providers.panstorage.base import (
+    BasePanStorage,
+    IncompleteDirectory,
+    PanFile,
+    PanQuota,
+    SaveResult,
+)
 from app.providers.registry import register
 from app.utils.http import fetch_json
 
@@ -48,6 +54,7 @@ UA = (
 class Pan115Storage(BasePanStorage):
     """115 网盘。"""
 
+    supports_strict_list = True
     name = "pan115"
     display_name = "115 网盘"
 
@@ -111,7 +118,7 @@ class Pan115Storage(BasePanStorage):
             cid = match.file_id
         return cid
 
-    async def _list_by_cid(self, cid: str) -> list[PanFile]:
+    async def _list_by_cid(self, cid: str, *, strict: bool = False) -> list[PanFile]:
         payload = await self._call(
             "/files",
             params={
@@ -125,7 +132,12 @@ class Pan115Storage(BasePanStorage):
                 "format": "json",
             },
         )
-        return self._parse_files((payload or {}).get("data") or [])
+        if strict and (not payload or not isinstance(payload.get("data"), list)):
+            raise OSError("115 目录读取失败")
+        files = self._parse_files((payload or {}).get("data") or [])
+        if strict and (len(payload["data"]) >= 200 or len(files) != len(payload["data"])):
+            raise IncompleteDirectory(files)
+        return files
 
     @staticmethod
     def _parse_files(items: Any) -> list[PanFile]:
@@ -153,15 +165,23 @@ class Pan115Storage(BasePanStorage):
             )
         return files
 
-    async def list_dir(self, path: str = "/") -> list[PanFile]:
+    async def list_dir(self, path: str = "/", *, strict: bool = False) -> list[PanFile]:
         target = self.normalize_path(path)
         cid = await self._resolve_cid(target)
         if not cid and target != "/":
+            if strict:
+                raise OSError("115 目录无法解析")
             return []
-        files = await self._list_by_cid(cid or "0")
+        incomplete = False
+        try:
+            files = await self._list_by_cid(cid or "0", strict=True) if strict else await self._list_by_cid(cid or "0")
+        except IncompleteDirectory as exc:
+            files, incomplete = exc.files, True
         for item in files:
             item.path = self.join_path(target, item.name)
         files.sort(key=lambda f: (not f.is_dir, f.name.lower()))
+        if incomplete:
+            raise IncompleteDirectory(files)
         return files
 
     # ---------------- 容量 ----------------

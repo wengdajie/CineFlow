@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -511,3 +512,86 @@ def test_discovery_does_not_duplicate_after_completion(
     result = asyncio.run(subscribe_service.process_subscribe(sub_id))
     assert 1 not in result["missing"]
     assert _task_count(sub_id) == before, "已下载集不应重复创建任务"
+
+
+def test_concurrent_automatic_dispatch_has_one_external_call(client, monkeypatch):
+    from app.db.session import session_scope
+    from app.services import download
+    calls = []
+
+    async def add(*args, **kwargs):
+        calls.append(args)
+        await asyncio.sleep(0.01)
+        return "dispatch-test"
+
+    fake = SimpleNamespace(site_name="fake", add=add)
+    monkeypatch.setattr(download.download_routing, "candidates_for", lambda *a: [fake])
+    with session_scope() as session:
+        sub = Subscribe(title="concurrent claim", media_type="movie")
+        session.add(sub)
+        session.flush()
+        sid = sub.id
+    resource = {"title": "Example.2026", "link": "magnet:?xt=urn:btih:concurrent", "kind": "magnet"}
+
+    async def run_both():
+        return await asyncio.gather(*(download.add_download(resource, subscribe_id=sid, notify=False) for _ in range(2)))
+
+    results = asyncio.run(run_both())
+    assert len(calls) == 1
+    assert sum(item is not None for item in results) == 1
+    with session_scope() as session:
+        task = session.query(DownloadTask).filter_by(subscribe_id=sid).one()
+        task.status = "failed"
+    assert asyncio.run(download.add_download(resource, subscribe_id=sid, notify=False)) is not None
+    assert len(calls) == 2
+    with session_scope() as session:
+        session.query(DownloadTask).filter_by(subscribe_id=sid).delete()
+        session.query(Subscribe).filter_by(id=sid).delete()
+
+
+def test_interrupted_dispatch_keeps_claim_until_operator_removes_it(client, monkeypatch):
+    from app.services import download
+
+    with session_scope() as session:
+        sub = Subscribe(title="interrupted claim", media_type="movie")
+        session.add(sub)
+        session.flush()
+        sid = sub.id
+    resource = {"title": "Interrupted", "link": "magnet:?xt=urn:btih:interrupted", "kind": "magnet"}
+
+    async def scenario():
+        started = asyncio.Event()
+        calls = []
+
+        async def add(*args, **kwargs):
+            calls.append(args)
+            started.set()
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(download.download_routing, "candidates_for", lambda *a: [SimpleNamespace(site_name="fake", add=add)])
+        active = asyncio.create_task(download.add_download(resource, subscribe_id=sid, notify=False))
+        await started.wait()
+        active.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await active
+        assert await download.add_download(resource, subscribe_id=sid, notify=False) is None
+        with session_scope() as session:
+            claim = session.query(DownloadTask).filter_by(subscribe_id=sid).one()
+            assert claim.status == "submitting"
+            tid = claim.id
+        assert len(calls) == 1
+        assert await download.remove_task(tid)
+
+    asyncio.run(scenario())
+    with session_scope() as session:
+        session.query(Subscribe).filter_by(id=sid).delete()
+
+
+def test_sync_retries_library_cleanup_even_without_new_completions(client, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    cleanup = AsyncMock()
+    monkeypatch.setattr(site_service, "downloaders", lambda: [])
+    monkeypatch.setattr(library_service, "transfer_completed_tasks", cleanup)
+    asyncio.run(download_service.sync_tasks())
+    cleanup.assert_awaited_once()

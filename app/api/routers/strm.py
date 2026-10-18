@@ -2,8 +2,7 @@
 
 **为什么 ``/strm/play/{id}`` 必须匿名**：这个地址会被写进 .strm 文件，
 由 Emby/Jellyfin/Plex 或播放器直接请求，它们带不了 JWT。
-所以这里不挂认证依赖，安全性靠「ID 不可枚举猜测 + 只返回 302 跳转」兜底，
-与 ADR-03（Webhook 匿名端点）同一思路。
+所以这里校验 STRM 内携带的随机播放凭据，不依赖播放器携带登录 JWT。
 """
 
 from __future__ import annotations
@@ -54,12 +53,19 @@ async def sync(payload: StrmSyncRequest, user: OperatorUser) -> dict[str, Any]:
 
 
 @router.get("/play/{record_id}", summary="播放跳转（匿名 302）", include_in_schema=True)
-async def play(record_id: int) -> RedirectResponse:
+async def play(record_id: int, token: str = "") -> RedirectResponse:
     """把 STRM 记录换成当前有效的网盘直链并 302 跳转。
 
     刻意不代理流量：只回一个 Location 头，视频数据由播放器直连网盘。
     """
+    if not strm_service.valid_play_token(record_id, token):
+        raise HTTPException(status_code=404, detail="播放链接无效，请重新同步 STRM")
     url, message = await strm_service.resolve_play_url(record_id)
     if not url:
         raise HTTPException(status_code=404, detail=message)
     return RedirectResponse(url, status_code=302)
+
+
+@router.post("/rewrite", summary="重写播放链接（可轮换凭据）")
+def rewrite(user: OperatorUser, rotate: bool = False) -> dict[str, Any]:
+    return {"success": True, **strm_service.rewrite_play_links(rotate=rotate)}

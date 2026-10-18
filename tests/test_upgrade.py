@@ -98,3 +98,68 @@ def test_replace_library_file_tolerates_missing_old(client, tmp_path):
     )
     assert outcome["deleted"] is False
     assert "未删除" in outcome["message"]
+
+
+def test_replace_merges_existing_new_index(client, tmp_path):
+    from sqlalchemy import select
+
+    from app.db.models import LibraryFile
+    from app.db.session import session_scope
+    old, new = tmp_path / "indexed-old.mkv", tmp_path / "indexed-new.mkv"
+    old.write_bytes(b"old")
+    new.write_bytes(b"new")
+    with session_scope() as session:
+        session.add_all([LibraryFile(path=str(old), title="merge", upgrade_count=2),
+                         LibraryFile(path=str(new), title="merge")])
+    result = upgrade.replace_library_file(str(old), str(new), new_score=99)
+    assert result["completed"] and not old.exists() and new.exists()
+    with session_scope() as session:
+        assert session.scalar(select(LibraryFile).where(LibraryFile.path == str(old))) is None
+        current = session.scalar(select(LibraryFile).where(LibraryFile.path == str(new)))
+        assert current.upgrade_count == 3 and current.quality_score == 99
+
+
+def test_missing_new_preserves_old_index(client, tmp_path):
+    from app.db.models import LibraryFile
+    from app.db.session import session_scope
+    old = tmp_path / "keep.mkv"
+    old.write_bytes(b"original")
+    with session_scope() as session:
+        session.add(LibraryFile(path=str(old), title="keep"))
+    outcome = upgrade.replace_library_file(str(old), str(tmp_path / "missing.mkv"))
+    assert old.exists() and not outcome["completed"]
+    with session_scope() as session:
+        assert session.query(LibraryFile).filter_by(path=str(old)).count() == 1
+
+
+def test_failed_delete_keeps_retryable_task(client, tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from app.db.models import DownloadTask, LibraryFile
+    from app.db.session import session_scope
+    from app.services.library import _finish_upgrade_task
+    old, new = tmp_path / "retry-old.mkv", tmp_path / "retry-new.mkv"
+    old.write_bytes(b"old")
+    new.write_bytes(b"new")
+    with session_scope() as session:
+        session.add_all([LibraryFile(path=str(old), title="retry"), LibraryFile(path=str(new), title="retry")])
+        task = DownloadTask(title="retry", link="audit", status="completed", meta={"upgrade_for": str(old)})
+        session.add(task)
+        session.flush()
+        tid = task.id
+    snapshot = {"id": tid, "upgrade_for": str(old), "score": 90}
+    original = Path.unlink
+    def failed(path, *args, **kwargs):
+        if path == old:
+            raise PermissionError("busy")
+        return original(path, *args, **kwargs)
+    with monkeypatch.context() as scoped:
+        scoped.setattr(Path, "unlink", failed)
+        assert not _finish_upgrade_task(snapshot, str(new))["completed"]
+    with session_scope() as session:
+        task = session.get(DownloadTask, tid)
+        assert task.status == "completed" and task.meta["upgrade_target"] == str(new)
+        assert session.query(LibraryFile).filter_by(path=str(old)).count() == 1
+    assert _finish_upgrade_task(snapshot, str(new))["completed"]
+    with session_scope() as session:
+        assert session.get(DownloadTask, tid).status == "transferred"

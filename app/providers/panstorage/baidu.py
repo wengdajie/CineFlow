@@ -43,7 +43,13 @@ from typing import Any
 import httpx
 
 from app.core.logger import get_logger
-from app.providers.panstorage.base import BasePanStorage, PanFile, PanQuota, SaveResult
+from app.providers.panstorage.base import (
+    BasePanStorage,
+    IncompleteDirectory,
+    PanFile,
+    PanQuota,
+    SaveResult,
+)
 from app.providers.registry import register
 from app.utils.http import async_client, fetch_json
 
@@ -102,6 +108,7 @@ def _as_int(value: Any, default: int = -1) -> int:
 class BaiduPanStorage(BasePanStorage):
     """百度网盘。"""
 
+    supports_strict_list = True
     name = "baidu"
     display_name = "百度网盘"
 
@@ -283,7 +290,7 @@ class BaiduPanStorage(BasePanStorage):
             )
         return files
 
-    async def list_dir(self, path: str = "/") -> list[PanFile]:
+    async def list_dir(self, path: str = "/", *, strict: bool = False) -> list[PanFile]:
         target = self.normalize_path(path)
         payload = await self._call(
             "/api/list",
@@ -296,7 +303,11 @@ class BaiduPanStorage(BasePanStorage):
                 "showempty": 0,
             },
         )
+        if strict and (not payload or not isinstance(payload.get("list"), list)):
+            raise OSError("网盘目录读取失败或响应无效")
         files = self._parse_files((payload or {}).get("list") or [])
+        if strict and (len(payload["list"]) >= 1000 or len(files) != len(payload["list"])):
+            raise IncompleteDirectory(files)
         files.sort(key=lambda f: (not f.is_dir, f.name.lower()))
         return files
 

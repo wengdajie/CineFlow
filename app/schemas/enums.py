@@ -37,6 +37,7 @@ class SubscribeStatus(StrEnum):
 
 
 class TaskStatus(StrEnum):
+    SUBMITTING = "submitting"
     PENDING = "pending"
     DOWNLOADING = "downloading"
     PAUSED = "paused"

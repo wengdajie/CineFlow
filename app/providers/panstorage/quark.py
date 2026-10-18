@@ -21,7 +21,13 @@ import re
 from typing import Any
 
 from app.core.logger import get_logger
-from app.providers.panstorage.base import BasePanStorage, PanFile, PanQuota, SaveResult
+from app.providers.panstorage.base import (
+    BasePanStorage,
+    IncompleteDirectory,
+    PanFile,
+    PanQuota,
+    SaveResult,
+)
 from app.providers.registry import register
 from app.utils.http import fetch_json
 
@@ -45,6 +51,7 @@ _SHARE_MAX_FILES = 3000
 class QuarkStorage(BasePanStorage):
     """夸克网盘。"""
 
+    supports_strict_list = True
     name = "quark"
     display_name = "夸克网盘"
 
@@ -111,7 +118,7 @@ class QuarkStorage(BasePanStorage):
             fid = match.file_id
         return fid
 
-    async def _list_by_fid(self, fid: str) -> list[PanFile]:
+    async def _list_by_fid(self, fid: str, *, strict: bool = False) -> list[PanFile]:
         payload = await self._call(
             "/file/sort",
             params={
@@ -122,6 +129,8 @@ class QuarkStorage(BasePanStorage):
                 "_sort": "file_type:asc,updated_at:desc",
             },
         )
+        if strict and (not payload or not isinstance((payload.get("data") or {}).get("list"), list)):
+            raise OSError("夸克目录读取失败")
         items = ((payload or {}).get("data") or {}).get("list") or []
         files: list[PanFile] = []
         for item in items:
@@ -140,17 +149,27 @@ class QuarkStorage(BasePanStorage):
                     modified_at=str(item.get("updated_at") or "") or None,
                 )
             )
+        if strict and (len(items) >= 200 or len(files) != len(items)):
+            raise IncompleteDirectory(files)
         return files
 
-    async def list_dir(self, path: str = "/") -> list[PanFile]:
+    async def list_dir(self, path: str = "/", *, strict: bool = False) -> list[PanFile]:
         target = self.normalize_path(path)
         fid = await self._resolve_fid(target)
         if not fid:
+            if strict:
+                raise OSError("夸克目录无法解析")
             return []
-        files = await self._list_by_fid(fid)
+        incomplete = False
+        try:
+            files = await self._list_by_fid(fid, strict=True) if strict else await self._list_by_fid(fid)
+        except IncompleteDirectory as exc:
+            files, incomplete = exc.files, True
         for item in files:
             item.path = self.join_path(target, item.name)
         files.sort(key=lambda f: (not f.is_dir, f.name.lower()))
+        if incomplete:
+            raise IncompleteDirectory(files)
         return files
 
     # ---------------- 转存 ----------------

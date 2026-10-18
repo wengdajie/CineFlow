@@ -22,7 +22,13 @@ from typing import Any
 from xml.etree import ElementTree as ET
 
 from app.core.logger import get_logger
-from app.providers.panstorage.base import BasePanStorage, PanFile, PanQuota, SaveResult
+from app.providers.panstorage.base import (
+    BasePanStorage,
+    IncompleteDirectory,
+    PanFile,
+    PanQuota,
+    SaveResult,
+)
 from app.providers.registry import register
 from app.utils.http import async_client
 
@@ -40,6 +46,7 @@ def _text(node: ET.Element | None) -> str:
 class WebDavStorage(BasePanStorage):
     """通过 WebDAV 协议访问的网盘/NAS 目录。"""
 
+    supports_strict_list = True
     name = "webdav"
     display_name = "WebDAV（Nextcloud/坚果云/群晖等）"
     #: WebDAV 无分享转存概念
@@ -144,7 +151,7 @@ class WebDavStorage(BasePanStorage):
         files.sort(key=lambda item: (not item.is_dir, item.name.lower()))
         return files
 
-    async def list_dir(self, path: str = "/") -> list[PanFile]:
+    async def list_dir(self, path: str = "/", *, strict: bool = False) -> list[PanFile]:
         body = (
             '<?xml version="1.0" encoding="utf-8"?>'
             '<d:propfind xmlns:d="DAV:"><d:prop>'
@@ -155,8 +162,18 @@ class WebDavStorage(BasePanStorage):
             "PROPFIND", path, body=body, headers={"Depth": "1"}
         )
         if status not in (200, 207):
+            if strict:
+                raise OSError(f"WebDAV 目录读取失败（HTTP {status}）")
             return []
-        return self._parse_propfind(text, path)
+        if strict and ET.fromstring(text).tag.split("}")[-1].lower() != "multistatus":
+            raise OSError("WebDAV 目录响应不是 multistatus")
+        files = self._parse_propfind(text, path)
+        if strict:
+            for status_node in ET.fromstring(text).iter("{DAV:}status"):
+                parts = (status_node.text or "").split()
+                if len(parts) < 2 or not parts[1].startswith("2"):
+                    raise IncompleteDirectory(files)
+        return files
 
     async def save_share(
         self,
