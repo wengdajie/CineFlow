@@ -39,7 +39,23 @@ jobs:
         run: python -m pytest --disable-warnings
       - name: Documentation facts
         run: |
+          set -euo pipefail
           python scripts/project_facts.py --check
+          temporary=$(mktemp -d)
+          export CF_DATA_DIR="$temporary/data" CF_DOWNLOAD_DIR="$temporary/downloads"
+          export CF_LIBRARY_DIR="$temporary/library" CF_STRM_DIR="$temporary/strm"
+          export CF_PLUGIN_DIR="$temporary/plugins" CF_CONFIG_FILE="$temporary/missing.yaml"
+          export CF_DB_URL="sqlite:///$temporary/app.db" CF_SCHEDULER_ENABLED=false
+          export CF_HOST=127.0.0.1 CF_PORT=16060 CF_DEBUG=false
+          export CF_SMOKE_PASSWORD=$(python -c 'import secrets; print(secrets.token_urlsafe(32))')
+          echo "::add-mask::$CF_SMOKE_PASSWORD"
+          export CF_SUPERUSER=smoke_admin CF_SUPERUSER_PASSWORD="$CF_SMOKE_PASSWORD"
+          export CF_SMOKE_URL=http://127.0.0.1:16060 CF_BASE_URL=http://127.0.0.1:16060
+          export CF_SMOKE_VERSION=$(python -c "import runpy; print(runpy.run_path('app/core/version.py')['APP_VERSION'])")
+          python -m app.main > "$temporary/server.log" 2>&1 &
+          server=$!
+          trap 'kill "$server" 2>/dev/null || true' EXIT
+          python scripts/container_smoke.py
           python scripts/verify_docs.py
           python scripts/verify_yaml.py
   build:
