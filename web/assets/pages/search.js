@@ -308,9 +308,6 @@ async function pageSearch() {
   keyword.addEventListener("keydown", (event) => {
     if (event.key === "Enter") doSearch();
   });
-  if (searchState.items.length) renderResults();
-  loadHot();
-
   const labeled = (text, node, flex) =>
     el("div", { style: flex ? "flex:" + flex : null }, [
       el("label", { class: "dim tiny", text: text }),
@@ -342,6 +339,12 @@ async function pageSearch() {
     "并发查询所有已启用的索引器与盘搜服务",
     [iconButton("刷新热榜", "refresh", () => loadHot())]
   );
+  renderResults();
+  loadHot();
+  if (searchState.autoSearch) {
+    searchState.autoSearch = false;
+    doSearch(searchState.keyword);
+  }
 }
 return pageSearch;
 }

@@ -1383,6 +1383,7 @@ import { createSettingsPage } from './pages/settings.js';
       };
       searchState.keyword = title;
       searchState.items = [];
+      searchState.autoSearch = true;
       go("search");
     };
 

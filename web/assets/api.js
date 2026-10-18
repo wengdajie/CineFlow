@@ -90,20 +90,22 @@ function apiStream(path, options, onEvent) {
       for (let i = 0; i < lines.length; i += 1) {
         const line = lines[i].trim();
         if (!line) continue;
+        let event;
         try {
-          onEvent(JSON.parse(line));
+          event = JSON.parse(line);
         } catch (err) {
           // 单行坏了不该让整条流中断
-          console.warn("流式响应解析失败", line);
+          console.warn("流式响应格式无效");
+          continue;
         }
+        onEvent(event);
       }
     }
     if (buffer.trim()) {
-      try {
-        onEvent(JSON.parse(buffer));
-      } catch (err) {
-        console.warn("流式响应尾行解析失败", buffer);
-      }
+      let event;
+      try { event = JSON.parse(buffer); }
+      catch (err) { throw new Error("流式响应格式无效"); }
+      onEvent(event);
     }
   })();
 

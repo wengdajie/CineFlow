@@ -240,13 +240,14 @@ async def _search_one(
         outcome.message = search_breaker.skip_reason(provider.site_name)
         return [], outcome
     async with semaphore:
+        budget_started = time.perf_counter()
         # 预算制：SEARCH_TIMEOUT 是【整个站点】的上限，而不是每个关键词各给一份。
         # 一个卡死的站点以前 = len(keywords) × SEARCH_TIMEOUT（带季集时 3×25=75s），
         # 而 asyncio.gather 要等最慢的一个 → 整个聚合搜索被单一废站拖死。
         budget = float(max(settings.SEARCH_TIMEOUT, 1))
-        for keyword in keywords:
-            remaining = budget - (time.perf_counter() - started)
-            if remaining < _MIN_KEYWORD_TIMEOUT:
+        for attempt, keyword in enumerate(keywords):
+            remaining = budget - (time.perf_counter() - budget_started)
+            if remaining <= 0 or (attempt and remaining < _MIN_KEYWORD_TIMEOUT):
                 # 预算耗尽：剩下的关键词不再尝试，否则等于继续拖块整体进度。
                 # 注意：只有真的花完了时间才会走到这里；
                 # 【站点很快返回空、需要试下一个关键词】这个正常路径不受影响。
@@ -517,8 +518,14 @@ async def _prepare_search(
     extra_keywords: list[str] | None,
     rule: FilterRule | None,
     rule_group_id: int | None,
+    *,
+    alias_timeout: float | None = None,
 ) -> tuple[list[str], FilterRule, RuleGroup | None]:
-    aliases = await _expand_aliases(title, media_type, extra_keywords)
+    try:
+        expansion = _expand_aliases(title, media_type, extra_keywords)
+        aliases = await expansion if alias_timeout is None else await asyncio.wait_for(expansion, alias_timeout)
+    except asyncio.TimeoutError:
+        aliases = []
     keywords = build_keywords(
         title,
         media_type=media_type,
@@ -669,11 +676,8 @@ async def search_stream(
     单站最多 ``SEARCH_MAX_PER_SITE``，全局最多 ``SEARCH_MAX_RESULTS * 2``。
     """
     started = time.perf_counter()
-    keywords, effective_rule, group = await _prepare_search(
-        title, media_type, season, episode, extra_keywords, rule, rule_group_id
-    )
     active_providers = providers if providers is not None else site_service.search_providers()
-    if not keywords or not active_providers:
+    if not title.strip() or not active_providers:
         if not active_providers:
             logger.warning("没有可用的搜索站点，请先在站点管理中添加")
         yield {
@@ -682,7 +686,7 @@ async def search_stream(
             "items": [],
             "sites": [],
             "elapsed_ms": 0,
-            "message": "" if keywords else "关键词为空",
+            "message": "" if title.strip() else "关键词为空",
         }
         return
 
@@ -692,6 +696,11 @@ async def search_stream(
         "total_sites": len(active_providers),
         "sites": [provider.site_name for provider in active_providers],
     }
+
+    keywords, effective_rule, group = await _prepare_search(
+        title, media_type, season, episode, extra_keywords, rule, rule_group_id,
+        alias_timeout=2.0,
+    )
 
     semaphore = asyncio.Semaphore(max(settings.SEARCH_CONCURRENCY, 1))
     tasks = [
