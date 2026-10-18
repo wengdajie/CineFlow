@@ -339,7 +339,8 @@ h1, h2, h3, h4 { margin: 0; font-weight: 650; letter-spacing: -0.01em; }
 .topbar-actions { display: flex; gap: var(--sp-2); flex-wrap: wrap; align-items: center; }
 
 /* ---------------- 卡片与网格 ---------------- */
-.grid { display: grid; gap: var(--sp-4); }
+.grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-4); }
+.grid > * { min-width: 0; }
 .grid.cols-4 { grid-template-columns: repeat(auto-fit, minmax(212px, 1fr)); }
 .grid.cols-3 { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
 .grid.cols-2 { grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); }
@@ -1454,3 +1455,10 @@ select.input.sm {
   /* 窄屏一列占满视口宽度，配合横向滚动逐天翻看 */
   .cal-col { flex-basis: 84vw; }
 }
+
+/* 同一流程的低频入口放在页内导航；保留原有 hash 链接。 */
+.page-tabs { display: flex; gap: 8px; overflow-x: auto; margin: 0 0 18px; padding: 4px 0 8px; }
+.page-tab { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; padding: 8px 12px; border-radius: 8px; color: var(--text-2); text-decoration: none; }
+.page-tab.active { color: var(--text); background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--border); }
+.page-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 640px) { .page-tabs { max-width: 100%; } }

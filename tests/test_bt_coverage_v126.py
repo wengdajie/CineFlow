@@ -609,7 +609,7 @@ class Test站点诊断口径:
 
         M55 的僵尸站点、M58 的 AppKey 入口都是同一类错。
         """
-        js = pathlib.Path("web/assets/app.js").read_text(encoding="utf-8")
+        js = "\n".join(p.read_text(encoding="utf-8") for p in pathlib.Path("web/assets").rglob("*.js"))
         code = "\n".join(line.split("//")[0] for line in js.splitlines())
         # 断言展示文案本身，而不是子串 "filtered:" ——
         # 后者会被 ORDER 里的 `filtered: 3` 满足，删掉 SITE_STATUS 那行仍绿
@@ -618,7 +618,7 @@ class Test站点诊断口径:
 
     def test_filtered在站点排序里靠前(self):
         """掉到末尾用户根本翻不到 —— 它是需要采取行动的状态。"""
-        js = pathlib.Path("web/assets/app.js").read_text(encoding="utf-8")
+        js = "\n".join(p.read_text(encoding="utf-8") for p in pathlib.Path("web/assets").rglob("*.js"))
         code = "\n".join(line.split("//")[0] for line in js.splitlines())
         assert "filtered: 3" in code
         assert "empty: 4" in code
