@@ -322,6 +322,16 @@ class PanSaveRequest(BaseModel):
     task_id: int | None = Field(default=None, description="关联的下载任务，转存成功后推进其状态")
 
 
+class PanDownloadRequest(BaseModel):
+    """将网盘中选定的文件或目录下载到本地。"""
+
+    site_id: int
+    path: str = Field(min_length=1)
+    file_id: str | None = None
+    is_dir: bool = False
+    save_path: str | None = None
+
+
 class PanMkdirRequest(BaseModel):
     """创建网盘目录。"""
 

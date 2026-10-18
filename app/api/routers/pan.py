@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Query
 from app.api.deps import CurrentUser, OperatorUser
 from app.schemas.models import (
     PanCookieImportRequest,
+    PanDownloadRequest,
     PanLoginCompleteRequest,
     PanLoginStartRequest,
     PanMkdirRequest,
@@ -117,6 +118,26 @@ async def mkdir(payload: PanMkdirRequest, user: OperatorUser) -> dict[str, Any]:
     if not result.get("success"):
         raise HTTPException(status_code=400, detail=result.get("message", "创建失败"))
     return result
+
+
+@router.post("/download", summary="通过 aria2 下载网盘文件或目录到本地")
+async def download_files(payload: PanDownloadRequest, user: OperatorUser) -> dict[str, Any]:
+    from pathlib import PurePosixPath
+    from urllib.parse import quote
+
+    from app.services.download import add_download
+
+    storage = pan_service.get_storage(payload.site_id)
+    if not storage:
+        raise HTTPException(status_code=404, detail="网盘不存在或未启用")
+    task = await add_download({
+        "title": PurePosixPath(payload.path).name, "kind": "pan", "site": storage.site_name,
+        "link": f"pan://{payload.site_id}/{quote(payload.path.lstrip('/'), safe='/')}",
+        "pan_saved": {"success": True, "storage": storage.site_name, "site_id": payload.site_id,
+                      "saved_path": payload.path, "file_id": payload.file_id, "is_dir": payload.is_dir},
+    }, downloader_name="aria2", save_path=payload.save_path)
+    return {"success": task.status == "downloading", "task_id": task.id,
+            "status": task.status, "message": task.error or "已提交 aria2 下载，可在下载任务页查看进度"}
 
 
 @router.delete("/files", summary="删除网盘文件或目录")

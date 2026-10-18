@@ -4789,6 +4789,19 @@ import { createSettingsPage } from './pages/settings.js';
                   title: "操作",
                   render: (row) =>
                     el("div", { class: "row tight" }, [
+                      canDo("operator") && current.provider !== "local_dir"
+                        ? iconButton("下载到本地", "download", async () => {
+                            try {
+                              const result = await api("/pan/download", {
+                                method: "POST",
+                                body: { site_id: current.site_id, path: row.path, file_id: row.file_id || null, is_dir: row.is_dir },
+                              });
+                              toast(result.message, result.success ? "ok" : "err");
+                            } catch (error) {
+                              toast(error.message, "err");
+                            }
+                          }, "sm ghost")
+                        : null,
                       row.is_dir
                         ? null
                         : iconButton("直链", "link", async () => {

@@ -79,11 +79,16 @@ class Aria2Downloader(BaseDownloader):
         paused: bool = False,
         cookie: str | None = None,
         user_agent: str | None = None,
+        filename: str | None = None,
     ) -> str | None:
         options: dict[str, Any] = {}
         target_path = save_path or self.default_save_path()
         if target_path:
             options["dir"] = target_path
+        if filename:
+            from app.utils.strings import safe_filename
+
+            options["out"] = safe_filename(filename)
         # aria2 的 header 选项是**列表**，Cookie 与 UA 要并存而不是互相覆盖。
         headers: list[str] = []
         if cookie:

@@ -2063,7 +2063,8 @@ _dls = pathlib.Path("app/services/download.py").read_text(encoding="utf-8")
 check("存在网盘落地本地的实现", "async def _land_pan_to_local(" in _dls)
 check("落地被真正接进 add_download", "landed = await _land_pan_to_local(" in _dls)
 check("落地时把 UA 一起投给下载器",
-      "url, save_path=save_path, user_agent=user_agent" in _dls)
+      '"user_agent": item.get("user_agent")' in _dls
+      and 'await candidate.add(item["url"], **options)' in _dls)
 check("没有下载器时算跳过而不是失败", '{"skipped": True}' in _dls)
 check("落地失败保持 transferred 但写明原因", "云端确实存下了" in _dls)
 

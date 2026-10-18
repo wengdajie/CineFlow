@@ -764,6 +764,10 @@ class BaiduPanStorage(BasePanStorage):
                 message=f"已转存 {len(unique)} 个文件",
                 saved_path=dest,
                 file_count=len(unique),
+                saved_files=[
+                    str(item["to"]) for item in (result.get("extra") or {}).get("list", [])
+                    if isinstance(item, dict) and item.get("to")
+                ],
             )
         return SaveResult(success=False, message=self._transfer_error(errno, result))
 

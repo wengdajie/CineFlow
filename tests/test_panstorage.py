@@ -381,7 +381,7 @@ def test_list_files_unknown_site(monkeypatch):
 
 
 def test_transfer_pending_end_to_end(monkeypatch, client):
-    """端到端：盘搜命中 → 登记 pending → 批量转存 → 任务变 TRANSFERRED。"""
+    """待处理任务转存后立即提交 aria2，同步完成前不能标记为入库。"""
     from app.db.models import DownloadTask
     from app.db.session import session_scope
     from app.schemas.enums import ResourceKind, TaskStatus
@@ -400,6 +400,14 @@ def test_transfer_pending_end_to_end(monkeypatch, client):
 
     quark = _FakeStorage("quark")
     monkeypatch.setattr(pan_service, "storages", lambda **kwargs: [quark])
+    from app.services import download as download_service
+
+    async def land(*args):
+        class Downloader:
+            site_name = "test aria2"
+        return {"success": True, "downloader": Downloader(), "external_id": "gid-1", "external_ids": ["gid-1"]}
+
+    monkeypatch.setattr(download_service, "_land_pan_to_local", land)
 
     stats = run(pan_service.transfer_pending(limit=10, notify=False))
     assert stats["saved"] >= 1
@@ -407,7 +415,7 @@ def test_transfer_pending_end_to_end(monkeypatch, client):
 
     with session_scope() as session:
         refreshed = session.get(DownloadTask, task_id)
-        assert refreshed.status == TaskStatus.TRANSFERRED.value
+        assert refreshed.status == TaskStatus.DOWNLOADING.value
         assert refreshed.meta["pan_storage"] == "quark-站点"
         assert refreshed.meta["saved_path"] == "/影视"
 
@@ -438,14 +446,16 @@ def test_transfer_pending_without_storage(monkeypatch, client):
 
 
 def test_add_download_auto_saves_pan_resource(monkeypatch, client):
-    """M2-7 验收：网盘资源入库时自动转存，任务直接为已入库状态。"""
+    """仅云端转存成功但没有 aria2，任务应待处理，不能显示已入库。"""
     from app.db.models import DownloadTask
     from app.db.session import session_scope
     from app.schemas.enums import ResourceKind, TaskStatus
     from app.services import download as download_service
+    from app.services import download_routing
 
     quark = _FakeStorage("quark")
     monkeypatch.setattr(pan_service, "storages", lambda **kwargs: [quark])
+    monkeypatch.setattr(download_routing, "candidates_for", lambda *args: [])
 
     result = run(
         download_service.add_download(
@@ -464,7 +474,8 @@ def test_add_download_auto_saves_pan_resource(monkeypatch, client):
 
     with session_scope() as session:
         task = session.get(DownloadTask, result.id)
-        assert task.status == TaskStatus.TRANSFERRED.value
+        assert task.status == TaskStatus.PENDING.value
+        assert "aria2" in task.error
         assert task.meta["pan_storage"] == "quark-站点"
         assert task.meta["saved_path"] == "/影视"
 

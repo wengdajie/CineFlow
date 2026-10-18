@@ -249,18 +249,23 @@ async def save_share(
         with session_scope() as session:
             task = session.get(DownloadTask, task_id)
             if task:
-                task.status = TaskStatus.TRANSFERRED.value
-                task.progress = 1.0
+                task.status = TaskStatus.PENDING.value
+                task.progress = 0.0
                 task.error = None
-                task.completed_at = utcnow()
+                task.completed_at = None
                 meta = dict(task.meta or {})
                 meta.update(
                     {
                         "pan_storage": storage.site_name,
                         "saved_path": result.saved_path,
+                        "pan_storage_id": payload.get("site_id"),
+                        "saved_files": result.saved_files,
                     }
                 )
                 task.meta = meta
+        from app.services.download import queue_saved_pan_task
+
+        await queue_saved_pan_task(task_id, payload)
     elif task_id and not result.success:
         with session_scope() as session:
             task = session.get(DownloadTask, task_id)
@@ -308,12 +313,14 @@ async def transfer_pending(
                 "link": task.link,
                 "password": (task.meta or {}).get("password"),
                 "save_path": task.save_path,
+                "meta": task.meta or {},
             }
             for task in session.execute(
                 select(DownloadTask)
                 .where(
                     DownloadTask.kind == ResourceKind.PAN.value,
                     DownloadTask.status == TaskStatus.PENDING.value,
+                    DownloadTask.external_id.is_(None),
                 )
                 .order_by(DownloadTask.created_at.asc())
                 .limit(max(limit, 1))
@@ -329,12 +336,19 @@ async def transfer_pending(
         return stats
 
     for task in tasks:
-        result = await save_share(
-            task["link"],
-            site_id=site_id,
-            password=task.get("password"),
-            task_id=task["id"],
-        )
+        meta = task["meta"]
+        if meta.get("pan_storage_id") and meta.get("saved_path"):
+            from app.services.download import queue_saved_pan_task
+
+            result = await queue_saved_pan_task(task["id"], {
+                "success": True, "site_id": meta["pan_storage_id"],
+                "storage": meta.get("pan_storage"), "saved_path": meta["saved_path"],
+                "saved_files": meta.get("saved_files") or [],
+            })
+        else:
+            result = await save_share(
+                task["link"], site_id=site_id, password=task.get("password"), task_id=task["id"],
+            )
         ok = bool(result.get("success"))
         stats["saved" if ok else "failed"] += 1
         stats["details"].append(

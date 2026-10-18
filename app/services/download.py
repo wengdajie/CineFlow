@@ -25,7 +25,7 @@ from app.db.models import DownloadTask, Subscribe
 from app.db.session import session_scope
 from app.providers.base import Resource
 from app.schemas.enums import EventType, NotifyLevel, ResourceKind, TaskStatus
-from app.services import download_routing
+from app.services import download_routing, pan_download
 from app.services import notify as notify_service
 from app.services import sites as site_service
 from app.utils.strings import format_size, safe_filename, truncate
@@ -195,6 +195,7 @@ async def _dispatch_download(
     status = TaskStatus.PENDING.value
     error: str | None = None
     pan_saved: dict[str, Any] | None = None
+    pan_landed: dict[str, Any] = {}
 
     if kind in (ResourceKind.TORRENT.value, ResourceKind.MAGNET.value):
         # 多下载器时按策略排序，投递失败自动换下一个（CF_DOWNLOADER_FAILOVER）。
@@ -269,10 +270,10 @@ async def _dispatch_download(
         # 网盘分享：先转存进自己的网盘，再换直链投给 aria2 落到本地。
         status = TaskStatus.PENDING.value
         error = None
-        pan_result = await _try_auto_save_pan(link, resource)
+        target_path = str(Path(target_path) / ("pan-" + sha256(link.encode()).hexdigest()[:12]))
+        pan_result = resource.get("pan_saved") or await _try_auto_save_pan(link, resource)
         if pan_result is not None:
             if pan_result.get("success"):
-                status = TaskStatus.TRANSFERRED.value
                 pan_saved = pan_result
                 # 「转存成功」只是把文件挪进了自己的云端，用户要的是**本地文件**。
                 # 这一段以前根本不存在：_ROUTES 的注释、pan_pending_hint() 都在讲
@@ -281,8 +282,9 @@ async def _dispatch_download(
                 landed = await _land_pan_to_local(
                     pan_result, target_path, downloader_name
                 )
+                pan_landed = landed
                 if landed.get("skipped"):
-                    pass  # 没有 aria2：保持 transferred，云端已有文件，不算失败
+                    error = "云端已转存，等待可用的 aria2 下载器下载到本地"
                 elif landed.get("success"):
                     downloader = landed.get("downloader")
                     external_id = landed.get("external_id")
@@ -327,6 +329,10 @@ async def _dispatch_download(
                     {
                         "pan_storage": pan_saved.get("storage"),
                         "saved_path": pan_saved.get("saved_path"),
+                        "pan_storage_id": pan_saved.get("site_id"),
+                        "saved_files": pan_saved.get("saved_files") or [],
+                        "pan_download_ids": pan_landed.get("external_ids") or [],
+                        "pan_local_dir": target_path,
                     }
                     if pan_saved
                     else {}
@@ -391,8 +397,6 @@ async def _land_pan_to_local(
     LinkSwift / 百度网盘直链助手都专门设这个头）。以前没有传 UA 的通道，
     403 发生在 aria2 内部，本项目日志里完全看不到。
     """
-    from app.services import pan_storage as pan_service
-
     saved_path = str(pan_result.get("saved_path") or "").strip()
     if not saved_path:
         # 转存报成功却没给路径，就没法换直链。说清楚是哪一步缺东西，
@@ -409,39 +413,72 @@ async def _land_pan_to_local(
         return {"success": False, "message": "转存结果缺少网盘站点 ID，无法换取直链"}
 
     try:
-        resolved = await pan_service.resolve_download_url(int(site_id), saved_path)
-    except Exception as exc:  # pragma: no cover - 换直链异常不该打断任务登记
-        logger.warning("换取网盘直链异常：%s", exc)
-        return {"success": False, "message": f"换取直链异常：{exc}"}
-
-    if not resolved.get("success"):
-        return {
-            "success": False,
-            "message": str(resolved.get("message") or "换取直链失败"),
-        }
-
-    url = str(resolved.get("url") or "")
-    user_agent = resolved.get("user_agent") or None
+        files = await pan_download.resolve_files(pan_result)
+    except (ValueError, OSError) as exc:
+        return {"success": False, "message": str(exc)}
+    except Exception as exc:
+        logger.warning("网盘文件解析失败：%s", type(exc).__name__)
+        return {"success": False, "message": "网盘文件解析失败，请检查连接或重新登录后重试"}
     attempts: list[str] = []
     for candidate in candidates:
-        try:
-            external_id = await candidate.add(
-                url, save_path=save_path, user_agent=user_agent
-            )
-        except Exception as exc:
-            attempts.append(f"{candidate.site_name}: {exc}"[:120])
-            continue
-        if external_id:
+        ids: list[str] = []
+        for item in files:
+            relative = Path(item["relative"])
+            options = {"save_path": str(Path(save_path) / relative.parent), "user_agent": item.get("user_agent") or None}
+            if getattr(candidate, "name", None) == "aria2":
+                options["filename"] = Path(item["path"]).name
+            try:
+                external_id = await candidate.add(item["url"], **options)
+            except Exception:
+                external_id = None
+            if not external_id:
+                attempts.append(f"{candidate.site_name}: 文件投递被拒绝或超时")
+                break
+            ids.append(external_id)
+        if len(ids) == len(files):
             return {
                 "success": True,
                 "downloader": candidate,
-                "external_id": external_id,
+                "external_id": ids[0],
+                "external_ids": ids,
             }
-        attempts.append(f"{candidate.site_name}: 拒绝或超时")
+        for gid in ids:
+            await candidate.remove(gid, delete_files=False)
     return {
         "success": False,
         "message": "直链投递失败 → " + "；".join(attempts),
     }
+
+
+async def queue_saved_pan_task(task_id: int, result: dict[str, Any]) -> dict[str, Any]:
+    """为已转存的待下载任务补投直链，重试时不再次转存分享。"""
+    with session_scope() as session:
+        task = session.get(DownloadTask, task_id)
+        if not task or task.external_id:
+            return {"success": False, "message": "任务不存在或已提交下载器"}
+        save_path = (task.meta or {}).get("pan_local_dir") or str(Path(task.save_path or settings.DOWNLOAD_DIR) / f"pan-task-{task_id}")
+        claimed = session.execute(update(DownloadTask).where(
+            DownloadTask.id == task_id, DownloadTask.status == TaskStatus.PENDING.value,
+            DownloadTask.external_id.is_(None),
+        ).values(status=TaskStatus.SUBMITTING.value, error="云端已保存，正在提交本地下载")).rowcount
+        if not claimed:
+            return {"success": False, "message": "任务已在提交，请勿重复操作"}
+    landed = await _land_pan_to_local(result, save_path, "aria2")
+    with session_scope() as session:
+        task = session.get(DownloadTask, task_id)
+        task.save_path = save_path
+        task.status = TaskStatus.DOWNLOADING.value if landed.get("success") else TaskStatus.PENDING.value
+        task.progress = 0.0
+        task.completed_at = None
+        task.error = None if landed.get("success") else landed.get("message") or "云端已转存，等待可用的 aria2 下载器"
+        task.external_id = landed.get("external_id")
+        task.downloader = landed["downloader"].site_name if landed.get("success") else None
+        task.meta = {**(task.meta or {}), "pan_storage": result.get("storage"),
+                     "pan_storage_id": result.get("site_id"), "saved_path": result.get("saved_path"),
+                     "saved_files": result.get("saved_files") or [],
+                     "pan_local_dir": save_path,
+                     "pan_download_ids": landed.get("external_ids") or []}
+    return landed
 
 
 async def _try_auto_save_pan(
@@ -500,6 +537,8 @@ async def sync_tasks() -> dict[str, int]:
                 "downloader": task.downloader,
                 "title": task.title,
                 "kind": task.kind,
+                "pan_download_ids": (task.meta or {}).get("pan_download_ids") or [],
+                "save_path": task.save_path,
             }
             for task in pending
             if task.external_id
@@ -512,7 +551,10 @@ async def sync_tasks() -> dict[str, int]:
         if not downloader:
             continue
 
-        state = await downloader.get(snapshot["external_id"])
+        state = (
+            await pan_download.combined_state(downloader, snapshot["pan_download_ids"], snapshot["save_path"])
+            if snapshot["pan_download_ids"] else await downloader.get(snapshot["external_id"])
+        )
         stats["checked"] += 1
         if not state:
             continue
@@ -602,11 +644,13 @@ async def remove_task(task_id: int, *, delete_files: bool = False) -> bool:
             return False
         external_id = task.external_id
         downloader_name = task.downloader
+        external_ids = (task.meta or {}).get("pan_download_ids") or [external_id]
 
     if external_id:
         downloader = site_service.default_downloader(downloader_name)
         if downloader:
-            await downloader.remove(external_id, delete_files=delete_files)
+            for gid in external_ids:
+                await downloader.remove(gid, delete_files=delete_files)
 
     with session_scope() as session:
         task = session.get(DownloadTask, task_id)
@@ -622,16 +666,14 @@ async def control_task(task_id: int, action: str) -> bool:
         if not task or not task.external_id:
             return False
         external_id, downloader_name = task.external_id, task.downloader
+        external_ids = (task.meta or {}).get("pan_download_ids") or [external_id]
 
     downloader = site_service.default_downloader(downloader_name)
     if not downloader:
         return False
 
-    ok = (
-        await downloader.pause(external_id)
-        if action == "pause"
-        else await downloader.resume(external_id)
-    )
+    method = downloader.pause if action == "pause" else downloader.resume
+    ok = all([await method(gid) for gid in external_ids])
     if ok:
         with session_scope() as session:
             task = session.get(DownloadTask, task_id)

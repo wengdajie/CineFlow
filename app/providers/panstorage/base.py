@@ -87,6 +87,7 @@ class SaveResult:
     #: 转存后在网盘中的落地路径
     saved_path: str | None = None
     file_count: int = 0
+    saved_files: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -94,6 +95,7 @@ class SaveResult:
             "message": self.message,
             "saved_path": self.saved_path,
             "file_count": self.file_count,
+            **({"saved_files": self.saved_files} if self.saved_files else {}),
         }
 
 

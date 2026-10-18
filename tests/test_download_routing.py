@@ -13,6 +13,7 @@ yt-dlp 根本下不了磁力，任务却被标成"正在下载"，用户得等�
 """
 
 import asyncio
+from pathlib import Path
 
 import pytest
 from sqlalchemy import select
@@ -327,7 +328,7 @@ def test_pan_landing_sends_direct_link_with_required_ua(monkeypatch):
     assert call["user_agent"] == "netdisk;P2SP;3.0.20.11", (
         f"直链的 UA 没带上，大文件会 403：{call}"
     )
-    assert call["save_path"] == "K:/media/movies"
+    assert Path(call["save_path"]) == Path("K:/media/movies")
 
 
 def test_pan_landing_without_downloader_is_skipped_not_failed(monkeypatch):
@@ -447,12 +448,8 @@ def test_add_download_pan_actually_calls_landing(monkeypatch, client):
     assert calls[0]["pan_result"]["saved_path"] == "/来自CineFlow/片子.mkv"
 
 
-def test_add_download_pan_landing_failure_keeps_transferred_but_reports(monkeypatch, client):
-    """落地失败时：状态保持 transferred（云端确实存下了），但 error 要写清原因。
-
-    既不能报成整体失败（会让人以为转存也没成），也不能装作没事
-    （用户等不到本地文件却看不到任何提示）。
-    """
+def test_pan_landing_failure_waits_for_retry_without_claiming_local_completion(monkeypatch, client):
+    """云端转存成功、本地下载失败，必须保持待处理并保留转存位置。"""
 
     async def fake_save(link, resource):
         return {"success": True, "storage": "假百度", "site_id": 7, "saved_path": "/x.mkv"}
@@ -474,7 +471,9 @@ def test_add_download_pan_landing_failure_keeps_transferred_but_reports(monkeypa
         )
     )
     assert task is not None
-    assert task.status == TaskStatus.TRANSFERRED.value, "云端已转存，不该报整体失败"
+    assert task.status == TaskStatus.PENDING.value
+    assert task.meta["pan_storage_id"] == 7
+    assert task.meta["saved_path"] == "/x.mkv"
     assert task.error and "假 aria2" in task.error, f"落地失败的原因没落到界面上：{task.error}"
 
 
