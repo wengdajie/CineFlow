@@ -1,7 +1,7 @@
-"""网盘管理服务：容量、目录浏览、转存待处理任务。
+"""网盘管理服务：容量、目录浏览、分享读取与显式转存。
 
 与「盘搜」的分工：盘搜负责**找到**分享链接（写进 ``download_tasks``，
-kind=pan、status=pending），本服务负责**把它转存进自己的网盘**并推进任务状态。
+kind=pan、status=pending），本服务按任务原操作意图解析原文件或执行显式转存。
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.config import settings
 from app.core.logger import get_logger
+from app.core.pan_links import PAN_LABELS, pan_family
 from app.db.base import utcnow
 from app.db.models import DownloadTask, PanSaveRecord, SiteConfig
 from app.db.session import session_scope
@@ -59,26 +60,42 @@ def _pick_for_share(share_url: str) -> BasePanStorage | None:
     """为某个分享链接挑选合适的网盘。
 
     优先选**同家网盘**（夸克分享优先给夸克），因为同家转存最可靠；
-    没有同家则退回任意支持转存的网盘（如 AList 离线下载）。
+    没有同家时仅允许明确配置的 AList 离线下载，不改用其他原生网盘。
     """
     candidates = [item for item in storages() if item.supports_save]
     if not candidates:
         return None
-    lowered = str(share_url or "").lower()
-    hints = {
-        "quark": ("pan.quark.cn",),
-        "alipan": ("alipan.com", "aliyundrive.com"),
-        "baidu": ("pan.baidu.com",),
-        # 键必须是 provider 的 name：115 的 Provider 叫 "pan115" 而不是 "115"，
-        # 写错的话 115 分享永远匹配不到 115 网盘，会被兜底分给别的盘
-        "pan115": ("115.com", "115cdn.com"),
-        "xunlei": ("pan.xunlei.com",),
-    }
+    family = pan_family(share_url)
     for item in candidates:
-        for domains in hints.get(item.name, ()):
-            if domains in lowered:
-                return item
-    return candidates[0]
+        if item.name == family:
+            return item
+    return next((item for item in candidates if item.name == "alist"), None)
+
+
+async def prepare_share_download(share_url: str, password: str | None = None) -> dict[str, Any]:
+    """下载只解析对应平台的分享原文件，不触发转存。"""
+    family = pan_family(share_url)
+    label = PAN_LABELS.get(family, "该网盘")
+    candidates = [item for item in storages() if item.name == family and getattr(item, "supports_share_download", False)]
+    if not candidates:
+        return {"success": False, "origin": "share", "message": f"请先配置并登录{label}账号；下载不会改用其他网盘，也不会自动转存"}
+    storage = candidates[0]
+    try:
+        files = await storage.share_downloads(share_url, password=password)
+        files = [item for item in files if not item.is_dir]
+        if not files or len(files) > 200:
+            raise ValueError("分享为空或超过 200 个文件，请选择较小的分享目录")
+        if any(not item.download_url for item in files):
+            raise ValueError("分享中有文件未取得原文件下载地址，未提交部分下载")
+        return {"success": True, "origin": "share", "storage": storage.site_name,
+                "site_id": storage.config.get("id"), "saved_path": "/",
+                "download_files": [{"url": item.download_url, "path": item.path,
+                                    "relative": item.path.lstrip("/"),
+                                    "user_agent": storage.direct_link_user_agent,
+                                    "headers": storage.download_headers(item.download_url)} for item in files]}
+    except Exception as exc:
+        message = str(exc) if isinstance(exc, ValueError) else f"请求异常（{type(exc).__name__}）"
+        return {"success": False, "origin": "share", "message": f"{label}下载解析失败：{message}"}
 
 
 def _unwrap(result: Any) -> tuple[bool, str]:
@@ -298,12 +315,12 @@ async def save_share(
 
 
 async def transfer_pending(
-    *, limit: int = 20, site_id: int | None = None, notify: bool = True
+    *, limit: int = 20, site_id: int | None = None, notify: bool = True, task_id: int | None = None
 ) -> dict[str, Any]:
-    """批量转存所有待处理的网盘任务。
+    """按原操作意图重试待处理网盘任务。
 
     这是「网盘管理」页与定时任务共用的入口：把盘搜命中后登记为
-    ``pending`` 的网盘资源逐个转存进自己的网盘。
+    ``pending`` 的网盘资源逐个重试，直接下载不会执行转存。
     """
     with session_scope() as session:
         tasks = [
@@ -321,6 +338,7 @@ async def transfer_pending(
                     DownloadTask.kind == ResourceKind.PAN.value,
                     DownloadTask.status == TaskStatus.PENDING.value,
                     DownloadTask.external_id.is_(None),
+                    DownloadTask.id == task_id if task_id is not None else True,
                 )
                 .order_by(DownloadTask.created_at.asc())
                 .limit(max(limit, 1))
@@ -337,7 +355,18 @@ async def transfer_pending(
 
     for task in tasks:
         meta = task["meta"]
-        if meta.get("pan_storage_id") and meta.get("saved_path"):
+        if meta.get("pan_origin") == "share" or (not meta.get("pan_origin") and not meta.get("saved_path")):
+            from app.services.download import queue_saved_pan_task
+
+            result = await prepare_share_download(task["link"], task.get("password"))
+            if result.get("success"):
+                result = await queue_saved_pan_task(task["id"], result)
+            else:
+                with session_scope() as session:
+                    record = session.get(DownloadTask, task["id"])
+                    if record and record.status == TaskStatus.PENDING.value and not record.external_id:
+                        record.error = result.get("message")
+        elif meta.get("pan_storage_id") and meta.get("saved_path"):
             from app.services.download import queue_saved_pan_task
 
             result = await queue_saved_pan_task(task["id"], {
@@ -361,7 +390,7 @@ async def transfer_pending(
         )
 
     logger.info(
-        "网盘转存巡检：待处理 %d、成功 %d、失败 %d",
+        "网盘任务重试：待处理 %d、成功 %d、失败 %d",
         stats["pending"],
         stats["saved"],
         stats["failed"],
@@ -372,7 +401,7 @@ async def transfer_pending(
             f"· {item['title']}" for item in stats["details"] if item["success"]
         ][:10]
         await notify_service.send(
-            f"已自动转存 {stats['saved']} 个网盘资源",
+            f"已处理 {stats['saved']} 个网盘任务",
             "\n".join(lines),
             level=NotifyLevel.SUCCESS.value,
             event=EventType.PAN_SAVED.value,
@@ -563,6 +592,7 @@ async def resolve_download_url(
         "success": True,
         "url": url,
         "user_agent": storage.direct_link_user_agent or None,
+        "headers": storage.download_headers(url) if hasattr(storage, "download_headers") else {},
     }
 
 

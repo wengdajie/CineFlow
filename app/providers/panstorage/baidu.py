@@ -39,6 +39,7 @@ from __future__ import annotations
 import json
 import re
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -121,6 +122,7 @@ class BaiduPanStorage(BasePanStorage):
     supports_move = True
     supports_search = True
     supports_keepalive = True
+    supports_share_download = True
 
     def __init__(self, config: dict[str, Any] | None = None) -> None:
         super().__init__(config)
@@ -142,6 +144,15 @@ class BaiduPanStorage(BasePanStorage):
             "User-Agent": ua,
             "Referer": "https://pan.baidu.com/disk/home",
         }
+
+    def download_headers(self, url: str) -> dict[str, str]:
+        parsed = urlsplit(url)
+        host = (parsed.hostname or "").lower()
+        headers = {"Referer": "https://pan.baidu.com/"}
+        if parsed.scheme == "https" and any(host == domain or host.endswith("." + domain)
+                                             for domain in ("baidu.com", "baidupcs.com")):
+            headers["Cookie"] = getattr(self, "_share_download_cookie", self.cookie)
+        return headers
 
     async def _call(
         self,
@@ -591,7 +602,52 @@ class BaiduPanStorage(BasePanStorage):
             "fs_ids": fs_ids,
             "headers": headers,
             "bdstoken": token,
+            "sign": self._pick(text, r'"sign"\s*:\s*"([^"]+)"'),
+            "timestamp": self._pick(text, r'"timestamp"\s*:\s*"?(\d+)'),
         }, ""
+
+    async def share_downloads(self, share_url: str, *, password: str | None = None) -> list[PanFile]:
+        context, error = await self._share_context(share_url, password)
+        if error:
+            raise ValueError(error.replace("转存", "读取分享"))
+        if not context.get("sign") or not context.get("timestamp"):
+            raise ValueError("百度分享未返回直接下载授权，请在官方页面下载，或明确转存后从盘内下载")
+        self._share_download_cookie = context["headers"].get("Cookie", self.cookie)
+        files, queue, seen = [], [("/", 0)], {"/"}
+        while queue:
+            directory, depth = queue.pop(0)
+            items = await self._share_list_dir(context, directory)
+            if getattr(self, "_share_read_incomplete", False):
+                raise ValueError("百度分享目录未完整读取，未提交部分下载")
+            for raw in items:
+                name = str(raw.get("server_filename") or raw.get("filename") or "")
+                if not name or "/" in name or "\\" in name or name in (".", ".."):
+                    raise ValueError("百度返回了无效文件名")
+                path = self.join_path(directory, name)
+                if _as_int(raw.get("isdir"), 0):
+                    if depth >= 8 or path in seen or len(seen) >= 200:
+                        raise ValueError("百度分享目录过深、过多或重复")
+                    seen.add(path)
+                    queue.append((path, depth + 1))
+                else:
+                    if len(files) >= 200:
+                        raise ValueError("分享超过 200 个文件，请选择较小的分享")
+                    files.append(PanFile(name, path, file_id=str(raw.get("fs_id") or ""), size=_as_int(raw.get("size"), 0)))
+        if not files:
+            return []
+        payload = await fetch_json(f"{API_BASE}/api/sharedownload", method="POST",
+                                   params={"sign": context["sign"], "timestamp": context["timestamp"],
+                                           "bdstoken": context["bdstoken"], "web": 1, "clienttype": 0},
+                                   data={"encrypt": 0, "product": "share", "uk": context["uk"],
+                                         "primaryid": context["shareid"], "fid_list": json.dumps([int(f.file_id) for f in files]),
+                                         "extra": json.dumps({"sekey": context.get("sekey") or ""})},
+                                   headers={**context["headers"], "User-Agent": self.direct_link_user_agent})
+        if not isinstance(payload, dict) or payload.get("errno") != 0:
+            raise ValueError("百度未授权直接下载该分享，请检查登录状态、下载权限及分享有效性；未执行转存")
+        links = {str(raw.get("fs_id")): raw.get("dlink") for raw in payload.get("list", [])}
+        for item in files:
+            item.download_url = links.get(item.file_id)
+        return files
 
     async def list_share(
         self, share_url: str, *, password: str | None = None
@@ -665,6 +721,7 @@ class BaiduPanStorage(BasePanStorage):
     ) -> list[dict[str, Any]]:
         """列分享内某一层目录，翻页到底。"""
         collected: list[dict[str, Any]] = []
+        self._share_read_incomplete = False
         page = 1
         while page <= _SHARE_MAX_PAGES:
             params = {
@@ -692,19 +749,26 @@ class BaiduPanStorage(BasePanStorage):
                 timeout=self.config.get("timeout"),
             )
             if not isinstance(payload, dict):
+                self._share_read_incomplete = True
                 break
             if _as_int(payload.get("errno"), 0) != 0:
+                self._share_read_incomplete = True
                 logger.info(
                     "百度分享列举 %s 返回 errno=%s", directory, payload.get("errno")
                 )
                 break
-            batch = payload.get("list") or []
-            if not isinstance(batch, list) or not batch:
+            batch = payload.get("list")
+            if not isinstance(batch, list):
+                self._share_read_incomplete = True
+                break
+            if not batch:
                 break
             collected.extend(item for item in batch if isinstance(item, dict))
             if len(batch) < _SHARE_PAGE_SIZE:
                 break
             page += 1
+        if page > _SHARE_MAX_PAGES:
+            self._share_read_incomplete = True
         return collected
 
     async def save_share_files(

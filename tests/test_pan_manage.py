@@ -22,7 +22,7 @@ def run(coro):
 def test_capabilities_shape():
     """能力位字典的键必须齐全，前端依赖这些键渲染按钮。"""
     caps = LocalDirStorage({}).capabilities()
-    assert set(caps) == {"save", "delete", "rename", "move", "search", "keepalive"}
+    assert set(caps) == {"save", "share_download", "delete", "rename", "move", "search", "keepalive"}
     assert all(isinstance(v, bool) for v in caps.values())
 
 

@@ -450,9 +450,11 @@ for func in ("storages", "get_storage", "_pick_for_share", "overview", "list_fil
              "save_share", "transfer_pending", "delete_file", "make_dir",
              "resolve_download_url", "list_save_records", "test_storage"):
     check(f"网盘服务函数 {func}", f"def {func}" in pan_service_src)
-check("网盘选盘按分享域名匹配同家网盘", "pan.quark.cn" in pan_service_src)
+check("网盘选盘按分享域名匹配同家网盘", "pan_family(share_url)" in pan_service_src
+      and "pan.quark.cn" in pathlib.Path("app/core/pan_links.py").read_text(encoding="utf-8"))
 download_src = pathlib.Path("app/services/download.py").read_text(encoding="utf-8")
-check("盘搜命中后自动转存", "_try_auto_save_pan" in download_src)
+check("下载默认解析分享，显式模式才转存", "prepare_share_download" in download_src
+      and 'resource.get("pan_mode") == "save_then_download"' in download_src)
 check("自动转存受 PAN_AUTO_SAVE 控制", "PAN_AUTO_SAVE" in download_src)
 for key in ("PAN_AUTO_SAVE", "PAN_TRANSFER_INTERVAL_MINUTES", "PAN_TRANSFER_BATCH"):
     check(f"配置项 {key} 存在", hasattr(settings, key))
@@ -2037,8 +2039,8 @@ _a2 = pathlib.Path("app/providers/downloader/aria2.py").read_text(encoding="utf-
 check("aria2 写 user-agent 选项（--user-agent 才真正生效）",
       'options["user-agent"] = user_agent' in _a2)
 check("aria2 的 header 是列表，Cookie 与 UA 并存",
-      'headers.append(f"Cookie: {cookie}")' in _a2
-      and 'headers.append(f"User-Agent: {user_agent}")' in _a2)
+      'header_values.append(f"Cookie: {cookie}")' in _a2
+      and 'header_values.append(f"User-Agent: {user_agent}")' in _a2)
 # 每个下载器签名都要对齐（不用 **kwargs 兜，约定 9）
 for _mod in ("qbittorrent", "transmission", "xunlei", "ytdlp"):
     _src = pathlib.Path(f"app/providers/downloader/{_mod}.py").read_text(encoding="utf-8")

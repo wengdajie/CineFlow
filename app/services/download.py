@@ -2,9 +2,8 @@
 
 网盘类资源不进入 BT 下载器：
 
-- 若已配置**网盘存储**（AList / 夸克），则**自动转存**进自己的网盘；
-- 否则登记为 ``pending`` 任务（保留分享链接与提取码），
-  可稍后在「网盘管理」页一键转存，或交给 ``pan_transfer`` 插件投递外部服务。
+- 默认读取对应平台的分享原文件，或用户选中的盘内文件，交给 aria2。
+- 只有明确选择 ``save_then_download`` 才转存；失败保留原操作意图供重试。
 """
 
 from __future__ import annotations
@@ -267,11 +266,18 @@ async def _dispatch_download(
             error = download_routing.hint_of(kind)
             status = TaskStatus.FAILED.value
     else:
-        # 网盘分享：先转存进自己的网盘，再换直链投给 aria2 落到本地。
+        # 默认读取分享原文件；只有明确选择 save_then_download 才写入网盘。
         status = TaskStatus.PENDING.value
         error = None
         target_path = str(Path(target_path) / ("pan-" + sha256(link.encode()).hexdigest()[:12]))
-        pan_result = resource.get("pan_saved") or await _try_auto_save_pan(link, resource)
+        from app.services import pan_storage as pan_service
+
+        if resource.get("pan_saved"):
+            pan_result = resource["pan_saved"]
+        elif resource.get("pan_mode") == "save_then_download":
+            pan_result = await _try_auto_save_pan(link, resource)
+        else:
+            pan_result = await pan_service.prepare_share_download(link, resource.get("password"))
         if pan_result is not None:
             if pan_result.get("success"):
                 pan_saved = pan_result
@@ -284,7 +290,7 @@ async def _dispatch_download(
                 )
                 pan_landed = landed
                 if landed.get("skipped"):
-                    error = "云端已转存，等待可用的 aria2 下载器下载到本地"
+                    error = "等待可用的 aria2 下载器下载到本地"
                 elif landed.get("success"):
                     downloader = landed.get("downloader")
                     external_id = landed.get("external_id")
@@ -324,6 +330,7 @@ async def _dispatch_download(
                 "resolution": meta.get("resolution"),
                 "quality": meta.get("quality"),
                 "pan_type": (resource.get("extra") or {}).get("pan_type"),
+                "pan_origin": "share" if kind == ResourceKind.PAN.value and not resource.get("pan_saved") and resource.get("pan_mode") != "save_then_download" else "storage",
                 "video_format": video_format or None,
                 **(
                     {
@@ -361,12 +368,14 @@ async def _dispatch_download(
     ):
         body = f"{format_size(resource.get('size'))} · {resource.get('site')}"
         if kind == ResourceKind.PAN.value:
-            if pan_saved:
+            if pan_saved and pan_saved.get("origin") == "share":
+                body += "\n分享原文件正在下载到本地，未执行转存"
+            elif pan_saved:
                 body += f"\n已自动转存到 {pan_saved.get('storage')}"
                 if pan_saved.get("saved_path"):
                     body += f"：{pan_saved['saved_path']}"
             else:
-                body += "\n网盘资源，请在「网盘管理」页转存"
+                body += "\n网盘下载尚未启动，请查看任务中的账号或下载权限提示"
         await notify_service.send(
             f"开始下载：{truncate(title, 60)}",
             body,
@@ -382,35 +391,25 @@ async def _land_pan_to_local(
     save_path: str,
     downloader_name: str | None,
 ) -> dict[str, Any]:
-    """转存成功后，把云端文件换成直链投给 aria2，真正落到本地。
+    """展开分享或盘内选中的原文件，连同平台请求头交给 aria2。
 
-    这是「网盘资源下载」链路缺失的最后一段。返回的字典有三种形态，
-    调用方必须能区分（ADR-82）：
-
-    * ``{"skipped": True}`` —— 没有能收直链的下载器。**不是失败**：
-      文件已经在自己的云端了，只是没有本地副本。
-    * ``{"success": True, ...}`` —— 已投递，带 ``downloader``/``external_id``。
-    * ``{"success": False, "message": ...}`` —— 试过但没成，原因要能落到界面上。
-
-    直链必须连**请求它要用的 UA** 一起交给下载器：百度 CDN 直链换掉
-    ``netdisk`` 系 UA 后，小文件能过、超过 ~50MB 直接 403（两个主流油猴脚本
-    LinkSwift / 百度网盘直链助手都专门设这个头）。以前没有传 UA 的通道，
-    403 发生在 aria2 内部，本项目日志里完全看不到。
+    全部文件成功投递才返回 success；中途失败撤回已排队文件并保留源数据。
+    缺下载器返回 skipped，调用方保留待处理状态。
     """
     saved_path = str(pan_result.get("saved_path") or "").strip()
     if not saved_path:
         # 转存报成功却没给路径，就没法换直链。说清楚是哪一步缺东西，
         # 而不是笼统报"下载失败"。
-        return {"success": False, "message": "转存成功但未返回落地路径，无法换取直链"}
+        return {"success": False, "message": "网盘未返回落地路径，无法换取直链"}
 
     candidates = download_routing.candidates_for(ResourceKind.PAN.value, downloader_name)
     if not candidates:
-        logger.info("网盘资源已转存到 %s，但没有能收直链的下载器，跳过本地落地", saved_path)
+        logger.info("网盘任务缺少可用的 aria2，保留待处理状态")
         return {"skipped": True}
 
     site_id = pan_result.get("site_id") or pan_result.get("storage_id")
     if not site_id:
-        return {"success": False, "message": "转存结果缺少网盘站点 ID，无法换取直链"}
+        return {"success": False, "message": "缺少网盘站点 ID，无法换取直链"}
 
     try:
         files = await pan_download.resolve_files(pan_result)
@@ -427,6 +426,7 @@ async def _land_pan_to_local(
             options = {"save_path": str(Path(save_path) / relative.parent), "user_agent": item.get("user_agent") or None}
             if getattr(candidate, "name", None) == "aria2":
                 options["filename"] = Path(item["path"]).name
+                options["headers"] = item.get("headers") or {}
             try:
                 external_id = await candidate.add(item["url"], **options)
             except Exception:
@@ -460,7 +460,7 @@ async def queue_saved_pan_task(task_id: int, result: dict[str, Any]) -> dict[str
         claimed = session.execute(update(DownloadTask).where(
             DownloadTask.id == task_id, DownloadTask.status == TaskStatus.PENDING.value,
             DownloadTask.external_id.is_(None),
-        ).values(status=TaskStatus.SUBMITTING.value, error="云端已保存，正在提交本地下载")).rowcount
+        ).values(status=TaskStatus.SUBMITTING.value, error="正在提交本地下载")).rowcount
         if not claimed:
             return {"success": False, "message": "任务已在提交，请勿重复操作"}
     landed = await _land_pan_to_local(result, save_path, "aria2")
@@ -470,10 +470,11 @@ async def queue_saved_pan_task(task_id: int, result: dict[str, Any]) -> dict[str
         task.status = TaskStatus.DOWNLOADING.value if landed.get("success") else TaskStatus.PENDING.value
         task.progress = 0.0
         task.completed_at = None
-        task.error = None if landed.get("success") else landed.get("message") or "云端已转存，等待可用的 aria2 下载器"
+        task.error = None if landed.get("success") else landed.get("message") or "等待可用的 aria2 下载器"
         task.external_id = landed.get("external_id")
         task.downloader = landed["downloader"].site_name if landed.get("success") else None
         task.meta = {**(task.meta or {}), "pan_storage": result.get("storage"),
+                     "pan_origin": "share" if result.get("origin") == "share" else "storage",
                      "pan_storage_id": result.get("site_id"), "saved_path": result.get("saved_path"),
                      "saved_files": result.get("saved_files") or [],
                      "pan_local_dir": save_path,

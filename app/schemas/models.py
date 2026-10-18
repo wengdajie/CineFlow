@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -240,6 +240,7 @@ class DownloadRequest(BaseModel):
     subscribe_id: int | None = None
     save_path: str | None = None
     downloader: str | None = None
+    pan_mode: Literal["download", "save_then_download"] = "download"
     meta: dict[str, Any] = Field(default_factory=dict)
 
 

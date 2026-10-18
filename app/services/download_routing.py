@@ -55,8 +55,7 @@ _ROUTES: dict[str, dict[str, Any]] = {
     },
     ResourceKind.PAN.value: {
         "label": "网盘分享",
-        # 网盘分享要下到本地，链路是「转存进自己的盘 → 换临时直链 → 投 aria2」，
-        # 所以既要网盘账号也要 aria2。只想留在云端的话用「转存」按钮即可。
+        # 读取分享原文件或用户选中的盘内文件，换取带平台请求头的直链交给 aria2。
         "providers": ("aria2",),
         "hint": "网盘资源下到本地需要 aria2：设置 → 下载器 → 添加 aria2；只想留在云端请用「转存」",
         "needs_pan_account": True,
@@ -91,16 +90,16 @@ def candidates_for(kind: str, prefer: str | None = None) -> list[BaseDownloader]
     return [
         item
         for item in site_service.downloader_candidates(prefer)
-        if item.accepts(probe)
+        if item.accepts(probe) and (target != ResourceKind.PAN.value or item.name == "aria2")
     ]
 
 
 def has_pan_account() -> bool:
-    """是否配了可用来转存的网盘账号。"""
+    """是否配置了支持分享读取或显式转存的网盘账号。"""
     try:
         from app.services import pan_storage
 
-        return any(item.supports_save for item in pan_storage.storages())
+        return any(item.supports_save or getattr(item, "supports_share_download", False) for item in pan_storage.storages())
     except Exception:  # pragma: no cover - 网盘模块异常不该影响下载判断
         return False
 
@@ -153,8 +152,8 @@ def check(kind: str, prefer: str | None = None) -> tuple[bool, str]:
         return False, hint_of(kind)
     if route.get("needs_pan_account") and not has_pan_account():
         return False, (
-            "网盘资源下到本地需要先转存进自己的网盘："
-            "请到「网盘管理」登录夸克 / 115 / AList 等账号"
+            "网盘原文件下载需要对应平台的账号授权："
+            "请配置百度 / 夸克 / 阿里云盘 / 115 等账号"
         )
     # 配了 ≠ 连得上。全部候选都被巡检判定为 error 时，投出去必然失败，
     # 不如提前说清是哪个下载器连不上（示例配置指向 127.0.0.1 的情况极常见）。
@@ -176,7 +175,7 @@ def pan_pending_hint() -> str:
     """
     parts = []
     if not has_pan_account():
-        parts.append("「转存」需要到「网盘管理」登录夸克 / 115 / AList 等账号")
+        parts.append("「下载」需要配置对应网盘账号，阿里云盘可从站点管理添加预设")
     if not candidates_for(ResourceKind.PAN.value):
         parts.append("「下载到本地」需要到设置 → 下载器添加 aria2")
     if not parts:

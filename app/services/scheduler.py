@@ -123,7 +123,7 @@ def builtin_specs() -> list[JobSpec]:
         JobSpec(
             key="pan_transfer",
             job_id=JOB_PAN_TRANSFER,
-            name="网盘待转存队列",
+            name="网盘待处理队列",
             description="把命中网盘资源但尚未转存的任务批量转存到已配置的网盘",
             trigger="interval",
             minutes=settings.PAN_TRANSFER_INTERVAL_MINUTES or 20,

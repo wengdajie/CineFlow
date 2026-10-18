@@ -42,7 +42,7 @@ async def list_files(
     return result
 
 
-@router.get("/pending", summary="待转存的网盘任务")
+@router.get("/pending", summary="待处理的网盘任务")
 async def pending(user: CurrentUser, limit: int = Query(50, ge=1, le=500)) -> dict[str, Any]:
     """盘搜命中但尚未转存的任务队列。"""
     from sqlalchemy import select
@@ -102,14 +102,15 @@ async def save_share(payload: PanSaveRequest, user: OperatorUser) -> dict[str, A
     return result
 
 
-@router.post("/transfer", summary="批量转存待处理任务")
+@router.post("/transfer", summary="按原操作意图重试网盘任务")
 async def transfer_pending(
     user: OperatorUser,
     limit: int = Query(20, ge=1, le=200),
     site_id: int | None = None,
+    task_id: int | None = Query(None, gt=0),
 ) -> dict[str, Any]:
-    """把待转存队列里的网盘资源批量转存进网盘。"""
-    return {"success": True, **(await pan_service.transfer_pending(limit=limit, site_id=site_id))}
+    """直接下载只重新解析原文件；显式转存任务保留原操作。"""
+    return {"success": True, **(await pan_service.transfer_pending(limit=limit, site_id=site_id, task_id=task_id))}
 
 
 @router.post("/mkdir", summary="创建网盘目录")

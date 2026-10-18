@@ -2359,7 +2359,7 @@ import { createSettingsPage } from './pages/settings.js';
     const content = el("div", { class: "grid" }, [
       el("div", { class: "grid cols-4" }, [
         statCard("下载中", counts.downloading, "实时同步下载器", "download"),
-        statCard("等待中", counts.pending, "含网盘待转存", "clock"),
+        statCard("等待中", counts.pending, "含网盘待处理任务", "clock"),
         statCard("已完成", counts.done, "含已入库", "check"),
         statCard("任务总数", items.length, "最多展示 300 条", "box"),
       ]),
@@ -2863,6 +2863,7 @@ import { createSettingsPage } from './pages/settings.js';
         { key: "name", label: "站点名称", value: row.name },
         { key: "url", label: "地址 URL", value: row.url || "" },
         { key: "api_key", label: "API Key / Token（留空不改）" },
+        ...(row.provider === "alipan" ? [{ key: "password", label: "Refresh Token（留空不改）", type: "password" }] : []),
         { key: "cookie", label: "Cookie（留空不改）", type: "textarea" },
         { key: "priority", label: "优先级", type: "number", value: row.priority },
         { key: "timeout", label: "超时（秒）", type: "number", value: row.timeout },
@@ -2877,6 +2878,7 @@ import { createSettingsPage } from './pages/settings.js';
           options: parseOptions(values.options),
         };
         if (values.api_key) payload.api_key = values.api_key;
+        if (values.password) payload.password = values.password;
         if (values.cookie) payload.cookie = values.cookie;
         await api("/sites/" + row.id, { method: "PATCH", body: payload });
         toast("站点已更新", "ok");
@@ -4906,12 +4908,12 @@ import { createSettingsPage } from './pages/settings.js';
     const pendingItems = pending.items || [];
     const pendingCard = el("div", { class: "card flush" }, [
       el("div", { class: "card-head" }, [
-        el("h3", {}, [icon("inbox", "sm"), el("span", { text: "待转存队列（" + pendingItems.length + "）" })]),
+        el("h3", {}, [icon("inbox", "sm"), el("span", { text: "网盘待处理队列（" + pendingItems.length + "）" })]),
         pendingItems.length
-          ? iconButton("一键全部转存", "cloud", async () => {
+          ? iconButton("重试全部任务", "refresh", async () => {
               try {
                 const result = await api("/pan/transfer?limit=50", { method: "POST" });
-                toast("转存完成：成功 " + result.saved + " · 失败 " + result.failed, result.failed ? "err" : "ok");
+                toast("重试完成：成功 " + result.saved + " · 失败 " + result.failed, result.failed ? "err" : "ok");
                 pageStorage();
               } catch (error) {
                 toast(error.message, "err");
@@ -4936,6 +4938,13 @@ import { createSettingsPage } from './pages/settings.js';
             title: "操作",
             render: (row) =>
               el("div", { class: "row tight" }, [
+                iconButton("重试任务", "refresh", async () => {
+                  try {
+                    const result = await api("/pan/transfer?task_id=" + row.id, { method: "POST" });
+                    toast(result.failed ? (result.details?.[0]?.message || "重试未成功") : "已重新提交", result.failed ? "err" : "ok");
+                    pageStorage();
+                  } catch (error) { toast(error.message, "err"); }
+                }, "sm"),
                 iconButton("转存", "cloud", async () => {
                   try {
                     const result = await api("/pan/save", {
@@ -4956,7 +4965,7 @@ import { createSettingsPage } from './pages/settings.js';
           },
         ],
         pendingItems,
-        "没有待转存的网盘资源"
+        "没有待处理的网盘资源"
       ),
     ]);
 
@@ -5032,7 +5041,7 @@ import { createSettingsPage } from './pages/settings.js';
       el("div", { class: "grid" }, [cards, browser, pendingCard, recordCard].filter(Boolean)),
       "网盘管理",
       list.length
-        ? "已启用 " + list.length + " 个网盘 · 待转存 " + pendingItems.length + " 条"
+        ? "已启用 " + list.length + " 个网盘 · 待处理 " + pendingItems.length + " 条"
         : "尚未启用网盘存储",
       [
         saveButton,

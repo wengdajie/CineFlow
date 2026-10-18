@@ -46,6 +46,7 @@ async def add_download(payload: DownloadRequest, user: OperatorUser) -> dict[str
         "password": payload.password,
         "page_url": payload.page_url,
         "meta": payload.meta or None,
+        "pan_mode": payload.pan_mode,
     }
     task = await download_service.add_download(
         resource,

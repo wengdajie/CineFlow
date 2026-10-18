@@ -19,7 +19,9 @@ from __future__ import annotations
 import asyncio
 import re
 from typing import Any
+from urllib.parse import urlsplit
 
+from app.core.config import settings
 from app.core.logger import get_logger
 from app.providers.panstorage.base import (
     BasePanStorage,
@@ -54,6 +56,15 @@ class QuarkStorage(BasePanStorage):
     supports_strict_list = True
     name = "quark"
     display_name = "夸克网盘"
+    supports_share_download = True
+    direct_link_user_agent = settings.USER_AGENT
+
+    def download_headers(self, url: str) -> dict[str, str]:
+        host = (urlsplit(url).hostname or "").lower()
+        headers = {"Referer": "https://pan.quark.cn/"}
+        if urlsplit(url).scheme == "https" and any(host == domain or host.endswith("." + domain) for domain in ("quark.cn", "uc.cn")):
+            headers["Cookie"] = self.cookie
+        return headers
 
     # 夸克开放了完整的文件管理接口，能力位全开
     supports_rename = True
@@ -72,6 +83,7 @@ class QuarkStorage(BasePanStorage):
             "Cookie": self.cookie,
             "Content-Type": "application/json",
             "Referer": "https://pan.quark.cn/",
+            "User-Agent": self.direct_link_user_agent,
         }
 
     async def _call(
@@ -213,13 +225,20 @@ class QuarkStorage(BasePanStorage):
                     "_size": _SHARE_PAGE_SIZE,
                 },
             )
-            batch = ((detail or {}).get("data") or {}).get("list") or []
-            if not isinstance(batch, list) or not batch:
+            batch = ((detail or {}).get("data") or {}).get("list")
+            if detail is None:
+                self._share_incomplete = True
+            if not isinstance(batch, list):
+                self._share_incomplete = True
+                break
+            if not batch:
                 break
             collected.extend(item for item in batch if isinstance(item, dict))
             if len(batch) < _SHARE_PAGE_SIZE:
                 break  # 不满一页说明已经是最后一页
             page += 1
+        if page > _SHARE_MAX_PAGES:
+            self._share_incomplete = True
         return collected
 
     async def list_share(
@@ -240,6 +259,7 @@ class QuarkStorage(BasePanStorage):
         没有上限时一次巡检能把自己卡死在别人的网盘结构里。
         截断时如实记日志，而不是假装列全了（ADR-82）。
         """
+        self._share_incomplete = False
         share_id = self.parse_share_id(share_url)
         if not share_id or not self.cookie:
             return []
@@ -284,6 +304,8 @@ class QuarkStorage(BasePanStorage):
                     if depth + 1 <= _SHARE_MAX_DEPTH and child_fid not in seen_dirs:
                         seen_dirs.add(child_fid)
                         queue.append((child_fid, path, depth + 1))
+                    else:
+                        self._share_incomplete = True
                     continue
                 files.append(
                     PanFile(
@@ -308,11 +330,29 @@ class QuarkStorage(BasePanStorage):
                 break
 
         if truncated:
+            self._share_incomplete = True
             logger.warning(
                 "夸克分享 %s 文件数超过 %d，只列出了前一部分（增量判断可能不完整）",
                 share_id,
                 _SHARE_MAX_FILES,
             )
+        return files
+
+    async def share_downloads(self, share_url: str, *, password: str | None = None) -> list[PanFile]:
+        # 只读取可下载原文件；平台不授权直接读取时，交给用户明确选择转存。
+        files = await self.list_share(share_url, password=password)
+        if getattr(self, "_share_incomplete", False):
+            raise ValueError("夸克分享未完整列出，请选择较小的分享")
+        files = [item for item in files if not item.is_dir]
+        if not files or len(files) > 200:
+            raise ValueError("夸克分享为空、已失效或超过 200 个文件")
+        for item in files:
+            payload = await self._call("/file/download", method="POST", body={"fids": [item.file_id]})
+            entries = (payload or {}).get("data") or []
+            item.download_url = next((entry.get("download_url") for entry in entries
+                                      if str(entry.get("fid")) == item.file_id), None)
+            if not item.download_url:
+                raise ValueError("夸克未授权直接下载该分享；请在官方页面下载，或明确转存后从网盘文件列表下载")
         return files
 
     async def save_share_files(

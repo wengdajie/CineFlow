@@ -240,7 +240,7 @@ class TestAddDownloadRouting:
         assert task is not None
         assert task.status == TaskStatus.PENDING.value
         assert task.error, "pending 却没有任何说明，界面上就是一片空白"
-        assert "网盘管理" in task.error
+        assert "账号" in task.error
 
 
 class TestRoutingEndpoint:
@@ -439,6 +439,7 @@ def test_add_download_pan_actually_calls_landing(monkeypatch, client):
                 "title": "某电影 (2020)",
                 "link": "https://pan.baidu.com/s/1abcdefg",
                 "kind": ResourceKind.PAN.value,
+                "pan_mode": "save_then_download",
             },
             notify=False,
         )
@@ -466,6 +467,7 @@ def test_pan_landing_failure_waits_for_retry_without_claiming_local_completion(m
                 "title": "某电影 (2020)",
                 "link": "https://pan.baidu.com/s/1abcdefg",
                 "kind": ResourceKind.PAN.value,
+                "pan_mode": "save_then_download",
             },
             notify=False,
         )

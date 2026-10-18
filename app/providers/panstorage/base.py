@@ -111,6 +111,7 @@ class BasePanStorage(BaseProvider):
 
     #: 该网盘是否支持从分享链接转存
     supports_save: bool = True
+    supports_share_download: bool = False
     #: 该网盘是否支持删除
     supports_delete: bool = True
     #: 该网盘是否支持重命名
@@ -131,6 +132,7 @@ class BasePanStorage(BaseProvider):
         """
         return {
             "save": self.supports_save,
+            "share_download": self.supports_share_download,
             "delete": self.supports_delete,
             "rename": self.supports_rename,
             "move": self.supports_move,
@@ -174,6 +176,10 @@ class BasePanStorage(BaseProvider):
         """
         return []
 
+    async def share_downloads(self, share_url: str, *, password: str | None = None) -> list[PanFile]:
+        """解析分享内可下载的原文件；不得调用转存或文件写入接口。"""
+        raise ValueError(f"{self.site_name} 暂不支持直接下载分享，请使用官方页面，或明确转存后从盘内下载")
+
     async def save_share_files(
         self,
         share_url: str,
@@ -214,6 +220,10 @@ class BasePanStorage(BaseProvider):
     #: 时小文件能过、超过 ~50MB 直接 403 —— 把这个知识留在 Provider 里，
     #: 下载链路只管照着传，才不会每加一个网盘就漏一次。
     direct_link_user_agent: str | None = None
+
+    def download_headers(self, url: str) -> dict[str, str]:
+        """只返回下载该 CDN 原文件所需的请求头，不返回 API 的鉴权头。"""
+        return {}
 
     # ---------------- 文件管理（v1.7.0 新增，参考 T3FAP 网盘插件能力矩阵） ----------------
     async def rename(

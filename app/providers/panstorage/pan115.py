@@ -24,8 +24,11 @@
 
 from __future__ import annotations
 
+import json
 import re
+import time
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 from app.core.logger import get_logger
 from app.providers.panstorage.base import (
@@ -37,12 +40,13 @@ from app.providers.panstorage.base import (
 )
 from app.providers.registry import register
 from app.utils.http import fetch_json
+from app.utils.pan115_rsa import decrypt, encrypt
 
 logger = get_logger(__name__)
 
 WEB_API = "https://webapi.115.com"
 #: 分享链接形如 https://115.com/s/xxxxx?password=1234
-SHARE_RE = re.compile(r"115\.com/s/([0-9a-zA-Z_-]+)")
+SHARE_RE = re.compile(r"115(?:cdn)?\.com/s/([0-9a-zA-Z_-]+)")
 
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -57,6 +61,61 @@ class Pan115Storage(BasePanStorage):
     supports_strict_list = True
     name = "pan115"
     display_name = "115 网盘"
+    supports_share_download = True
+    direct_link_user_agent = "Mozilla/5.0 115Browser/27.0.5.7"
+
+    async def _download_info(self, body: dict[str, str], *, share: bool) -> dict[str, Any]:
+        endpoint = "share" if share else "chrome"
+        payload = await fetch_json(f"https://proapi.115.com/app/{endpoint}/downurl", method="POST",
+                                   params={"t": int(time.time())},
+                                   data={"data": encrypt(json.dumps(body)).decode("ascii")},
+                                   headers={**self._headers(), "User-Agent": self.direct_link_user_agent})
+        if not isinstance(payload, dict) or not payload.get("state") or not payload.get("data"):
+            raise ValueError("115 未返回下载地址，请检查登录状态和文件下载权限")
+        try:
+            data = json.loads(decrypt(payload["data"]))
+        except (ValueError, TypeError, IndexError) as exc:
+            raise ValueError("115 下载地址响应格式无效") from exc
+        return data
+
+    async def share_downloads(self, share_url: str, *, password: str | None = None) -> list[PanFile]:
+        match = SHARE_RE.search(share_url)
+        if not match or not self.cookie:
+            raise ValueError("请配置 115 账号并提供有效分享链接")
+        code = match[1]
+        password = password or parse_qs(urlsplit(share_url).query).get("password", [""])[0]
+        files, queue, seen = [], [("0", "", 0)], {"0"}
+        while queue:
+            cid, prefix, depth = queue.pop(0)
+            for page in range(50):
+                payload = await self._call("/share/snap", params={"share_code": code, "receive_code": password,
+                                            "cid": cid, "limit": 100, "offset": page * 100, "format": "json"})
+                batch = ((payload or {}).get("data") or {}).get("list")
+                if not isinstance(batch, list):
+                    raise ValueError("115 分享读取失败，请检查账号、提取码和分享有效性")
+                for raw in batch:
+                    name = str(raw.get("n") or "")
+                    if not name or "/" in name or "\\" in name or name in (".", ".."):
+                        raise ValueError("115 返回了无效文件名")
+                    path = prefix + "/" + name
+                    fid = str(raw.get("fid") or "")
+                    if not fid:
+                        child = str(raw.get("cid") or "")
+                        if not child or child in seen or depth >= 8 or len(seen) >= 200:
+                            raise ValueError("115 分享目录过深、过多或重复")
+                        seen.add(child)
+                        queue.append((child, path, depth + 1))
+                        continue
+                    if len(files) >= 200:
+                        raise ValueError("分享超过 200 个文件，请选择较小的分享")
+                    data = await self._download_info({"share_code": code, "receive_code": password, "file_id": fid}, share=True)
+                    url = (data.get("url") or {}).get("url")
+                    files.append(PanFile(name, path, file_id=fid, size=int(raw.get("s") or 0), download_url=url))
+                if len(batch) < 100:
+                    break
+            else:
+                raise ValueError("115 分享目录未完整列出，未提交部分下载")
+        return files
 
     # 115 web 接口支持完整文件管理
     supports_rename = True
@@ -315,11 +374,9 @@ class Pan115Storage(BasePanStorage):
             pickcode = str(items[0].get("pick_code") or "")
         if not pickcode:
             return None
-        payload = await self._call("/files/download", params={"pickcode": pickcode})
-        info = (payload or {}).get("file_url") or (payload or {}).get("data")
-        if isinstance(info, dict):
-            return str(info.get("url") or "") or None
-        return str(info or "") or None
+        payload = await self._download_info({"pickcode": pickcode}, share=False)
+        info = next(iter(payload.values()), {})
+        return (info.get("url") or {}).get("url") if isinstance(info, dict) else None
 
     async def keep_alive(self) -> tuple[bool, str]:
         """轻量调用 index_info 刷新登录态。"""

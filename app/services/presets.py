@@ -14,6 +14,18 @@ from app.schemas.enums import ProviderKind
 #: 站点预设清单
 SITE_PRESETS: list[dict[str, Any]] = [
     {
+        "id": "alipan",
+        "name": "阿里云盘",
+        "kind": ProviderKind.PANSTORAGE.value,
+        "provider": "alipan",
+        "url": "https://www.alipan.com",
+        "priority": 50,
+        "description": "阿里云盘原文件下载到 aria2。填写本人 Web 账号 refresh_token（密码字段）或 access_token（API Key 字段），下载不会自动转存。",
+        "requires": [],
+        "options": {},
+        "verified": False,
+    },
+    {
         "id": "mukaku",
         "name": "Mukaku 影视站",
         "kind": ProviderKind.INDEXER.value,

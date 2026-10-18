@@ -392,7 +392,7 @@ def test_transfer_pending_end_to_end(monkeypatch, client):
             kind=ResourceKind.PAN.value,
             link="https://pan.quark.cn/s/pending1",
             status=TaskStatus.PENDING.value,
-            meta={"password": "8888"},
+            meta={"password": "8888", "pan_origin": "storage"},
         )
         session.add(task)
         session.flush()
@@ -461,6 +461,7 @@ def test_add_download_auto_saves_pan_resource(monkeypatch, client):
         download_service.add_download(
             {
                 "title": "自动转存测试 2026 1080p",
+                "pan_mode": "save_then_download",
                 "kind": ResourceKind.PAN.value,
                 "link": "https://pan.quark.cn/s/auto1",
                 "password": "1111",

@@ -15,6 +15,16 @@ async def resolve_files(result: dict[str, Any]) -> list[dict[str, Any]]:
     """只展开本次选中的文件或目录，不把网盘根目录当成分享内容。"""
     from app.services import pan_storage
 
+    if result.get("download_files"):
+        files = result["download_files"]
+        for item in files:
+            relative = PurePosixPath(item["relative"])
+            if relative.is_absolute() or not relative.parts or any(part == ".." or "\\" in part or ":" in part for part in relative.parts):
+                raise ValueError("网盘返回了无效文件路径")
+            if urlsplit(item["url"]).scheme not in ("http", "https"):
+                raise ValueError("分享未返回 HTTP 原文件直链")
+        return files
+
     site_id = int(result.get("site_id") or result.get("storage_id") or 0)
     storage = pan_storage.get_storage(site_id)
     if not storage:

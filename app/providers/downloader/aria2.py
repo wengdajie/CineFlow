@@ -80,6 +80,7 @@ class Aria2Downloader(BaseDownloader):
         cookie: str | None = None,
         user_agent: str | None = None,
         filename: str | None = None,
+        headers: dict[str, str] | None = None,
     ) -> str | None:
         options: dict[str, Any] = {}
         target_path = save_path or self.default_save_path()
@@ -90,17 +91,21 @@ class Aria2Downloader(BaseDownloader):
 
             options["out"] = safe_filename(filename)
         # aria2 的 header 选项是**列表**，Cookie 与 UA 要并存而不是互相覆盖。
-        headers: list[str] = []
+        header_values: list[str] = []
+        for key, value in (headers or {}).items():
+            if any(char in str(key) + str(value) for char in "\r\n"):
+                raise ValueError("下载请求头不能包含换行")
+            header_values.append(f"{key}: {value}")
         if cookie:
-            headers.append(f"Cookie: {cookie}")
+            header_values.append(f"Cookie: {cookie}")
         if user_agent:
             # 同时给 header 与 user-agent 两处：aria2 的 --user-agent 才是
             # 真正作用于 HTTP 请求的那个开关，光塞 header 在部分版本上会被
             # 内建 UA 覆盖掉；两处都给才稳。
-            headers.append(f"User-Agent: {user_agent}")
+            header_values.append(f"User-Agent: {user_agent}")
             options["user-agent"] = user_agent
-        if headers:
-            options["header"] = headers
+        if header_values:
+            options["header"] = header_values
         if paused:
             options["pause"] = "true"
 
