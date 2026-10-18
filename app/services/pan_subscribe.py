@@ -163,7 +163,20 @@ def _storage_for(record: PanSubscribe):
     return pan_storage._pick_for_share(record.share_url)
 
 
+_inflight: set[int] = set()
+
+
 async def check_one(subscribe_id: int, *, notify: bool = True) -> dict[str, Any]:
+    if subscribe_id in _inflight:
+        return {"success": True, "skipped": True, "saved": 0, "message": "该分享订阅正在巡检"}
+    _inflight.add(subscribe_id)
+    try:
+        return await _check_one(subscribe_id, notify=notify)
+    finally:
+        _inflight.discard(subscribe_id)
+
+
+async def _check_one(subscribe_id: int, *, notify: bool = True) -> dict[str, Any]:
     """巡检单条分享追更订阅，只转存新增文件。"""
     with session_scope() as session:
         record = session.get(PanSubscribe, subscribe_id)

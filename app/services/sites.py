@@ -147,14 +147,15 @@ def healthy_downloaders() -> list[BaseDownloader]:
 
 
 def default_downloader(prefer: str | None = None) -> BaseDownloader | None:
-    """取默认下载器（可按名字优先，否则按当前策略挑）。"""
+    """未指定时按策略选择；指定时严格匹配实例名称，避免操作其他实例。"""
     items = healthy_downloaders()
     if not items:
         return None
     if prefer:
         for item in items:
-            if item.site_name == prefer or item.name == prefer:
+            if item.site_name == prefer:
                 return item
+        return None
     return items[0]
 
 

@@ -36,7 +36,7 @@ def run(coro):
 def _patch(monkeypatch: pytest.MonkeyPatch, handler: Any) -> None:
     """把 baidu 模块与 utils.http 里创建的客户端都接到 MockTransport 上。"""
 
-    def factory(timeout=None, headers=None, follow_redirects=True):
+    def factory(timeout=None, headers=None, follow_redirects=True, verify=True):
         return httpx.AsyncClient(
             transport=httpx.MockTransport(handler),
             headers=headers or {},

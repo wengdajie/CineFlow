@@ -32,7 +32,7 @@ class TorrentState:
         return self.status in (
             TaskStatus.COMPLETED.value,
             TaskStatus.TRANSFERRED.value,
-        ) or self.progress >= 1.0
+        )
 
 
 class BaseDownloader(BaseProvider):

@@ -17,6 +17,7 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.core.config import settings
+from app.core.exceptions import ProviderError
 from app.core.logger import get_logger
 from app.core.meta import parse
 from app.db.base import utcnow
@@ -88,32 +89,26 @@ async def add_download(
     video_format: str | None = None,
 ) -> DownloadTask | None:
     """先持久化自动任务占位，再执行外部投递；中断状态保留供人工核对。"""
-    if subscribe_id is None or not resource.get("link"):
-        return await _dispatch_download(
-            resource,
-            subscribe_id=subscribe_id,
-            downloader_name=downloader_name,
-            save_path=save_path,
-            notify=notify,
-            video_format=video_format,
-        )
-    link = str(resource["link"])
-    if _existing_task(link, subscribe_id):
+    link = str(resource.get("link") or "")
+    if not link:
+        return None
+    if subscribe_id is not None and _existing_task(link, subscribe_id):
         return None
     kind = str(resource.get("kind") or ResourceKind.TORRENT.value)
     key = sha256(
         f"{subscribe_id}:{Resource(title='', link=link, kind=kind).unique_key}".encode()
-    ).hexdigest()
+    ).hexdigest() if subscribe_id is not None else None
     try:
         with session_scope() as session:
-            session.execute(
-                update(DownloadTask)
-                .where(
-                    DownloadTask.dispatch_key == key,
-                    DownloadTask.status.in_([TaskStatus.FAILED.value, TaskStatus.CANCELED.value]),
+            if key is not None:
+                session.execute(
+                    update(DownloadTask)
+                    .where(
+                        DownloadTask.dispatch_key == key,
+                        DownloadTask.status.in_([TaskStatus.FAILED.value, TaskStatus.CANCELED.value]),
+                    )
+                    .values(dispatch_key=None)
                 )
-                .values(dispatch_key=None)
-            )
             claim = DownloadTask(
                 title=str(resource.get("title") or "")[:500],
                 link=link,
@@ -346,16 +341,18 @@ async def _dispatch_download(
                 ),
             },
         }
-        if reserved_id is None:
-            task = DownloadTask(**values)
-            session.add(task)
-        else:
-            task = session.get(DownloadTask, reserved_id)
+        task = DownloadTask() if reserved_id is None else session.get(DownloadTask, reserved_id)
+        if task is not None:
             for key, value in values.items():
                 setattr(task, key, value)
-        session.flush()
-        task_id = task.id
-        session.expunge(task)
+            session.add(task)
+            session.flush()
+            task_id = task.id
+            session.expunge(task)
+
+    if task is None:
+        await _withdraw_submitted(downloader, pan_landed.get("external_ids") or [external_id])
+        return None
 
     logger.info(
         "已登记下载任务 #%s [%s] %s", task_id, status, truncate(title, 80)
@@ -450,6 +447,16 @@ async def _land_pan_to_local(
     }
 
 
+async def _withdraw_submitted(downloader: Any, ids: list[str]) -> bool:
+    if downloader is None:
+        return True
+    results = await asyncio.gather(*(downloader.remove(gid, delete_files=False) for gid in ids if gid), return_exceptions=True)
+    ok = all(not isinstance(result, BaseException) and bool(result) for result in results)
+    if not ok:
+        logger.error("任务已移除，但下载器未确认撤回，请人工核对")
+    return ok
+
+
 async def queue_saved_pan_task(task_id: int, result: dict[str, Any]) -> dict[str, Any]:
     """为已转存的待下载任务补投直链，重试时不再次转存分享。"""
     with session_scope() as session:
@@ -466,19 +473,23 @@ async def queue_saved_pan_task(task_id: int, result: dict[str, Any]) -> dict[str
     landed = await _land_pan_to_local(result, save_path, "aria2")
     with session_scope() as session:
         task = session.get(DownloadTask, task_id)
-        task.save_path = save_path
-        task.status = TaskStatus.DOWNLOADING.value if landed.get("success") else TaskStatus.PENDING.value
-        task.progress = 0.0
-        task.completed_at = None
-        task.error = None if landed.get("success") else landed.get("message") or "等待可用的 aria2 下载器"
-        task.external_id = landed.get("external_id")
-        task.downloader = landed["downloader"].site_name if landed.get("success") else None
-        task.meta = {**(task.meta or {}), "pan_storage": result.get("storage"),
-                     "pan_origin": "share" if result.get("origin") == "share" else "storage",
-                     "pan_storage_id": result.get("site_id"), "saved_path": result.get("saved_path"),
-                     "saved_files": result.get("saved_files") or [],
-                     "pan_local_dir": save_path,
-                     "pan_download_ids": landed.get("external_ids") or []}
+        if task is not None:
+            task.save_path = save_path
+            task.status = TaskStatus.DOWNLOADING.value if landed.get("success") else TaskStatus.PENDING.value
+            task.progress = 0.0
+            task.completed_at = None
+            task.error = None if landed.get("success") else landed.get("message") or "等待可用的 aria2 下载器"
+            task.external_id = landed.get("external_id")
+            task.downloader = landed["downloader"].site_name if landed.get("success") else None
+            task.meta = {**(task.meta or {}), "pan_storage": result.get("storage"),
+                         "pan_origin": "share" if result.get("origin") == "share" else "storage",
+                         "pan_storage_id": result.get("site_id"), "saved_path": result.get("saved_path"),
+                         "saved_files": result.get("saved_files") or [],
+                         "pan_local_dir": save_path,
+                         "pan_download_ids": landed.get("external_ids") or []}
+    if task is None:
+        ok = await _withdraw_submitted(landed.get("downloader"), landed.get("external_ids") or [landed.get("external_id")])
+        return {"success": False, "message": "任务已移除，已撤回本次下载" if ok else "下载器未确认撤回，请人工核对"}
     return landed
 
 
@@ -548,8 +559,6 @@ async def sync_tasks() -> dict[str, int]:
     for snapshot in snapshots:
         downloader = downloaders.get(snapshot["downloader"] or "")
         if not downloader:
-            downloader = next(iter(downloaders.values()), None)
-        if not downloader:
             continue
 
         state = (
@@ -563,6 +572,8 @@ async def sync_tasks() -> dict[str, int]:
         with session_scope() as session:
             task = session.get(DownloadTask, snapshot["id"])
             if not task:
+                continue
+            if task.status in (TaskStatus.TRANSFERRED.value, TaskStatus.CANCELED.value) or task.external_id != snapshot["external_id"]:
                 continue
             task.progress = round(state.progress, 4)
             task.speed = state.speed
@@ -648,10 +659,12 @@ async def remove_task(task_id: int, *, delete_files: bool = False) -> bool:
         external_ids = (task.meta or {}).get("pan_download_ids") or [external_id]
 
     if external_id:
-        downloader = site_service.default_downloader(downloader_name)
-        if downloader:
-            for gid in external_ids:
-                await downloader.remove(gid, delete_files=delete_files)
+        downloader = site_service.default_downloader(downloader_name) if downloader_name else None
+        if not downloader:
+            raise ProviderError("任务原下载器不存在或未启用，已保留任务记录，请恢复原下载器后重试")
+        results = [await downloader.remove(gid, delete_files=delete_files) for gid in external_ids]
+        if not all(results):
+            raise ProviderError("下载器未确认移除全部文件，已保留任务记录，请稍后重试")
 
     with session_scope() as session:
         task = session.get(DownloadTask, task_id)
@@ -664,7 +677,7 @@ async def control_task(task_id: int, action: str) -> bool:
     """暂停/恢复任务。"""
     with session_scope() as session:
         task = session.get(DownloadTask, task_id)
-        if not task or not task.external_id:
+        if not task or not task.external_id or not task.downloader:
             return False
         external_id, downloader_name = task.external_id, task.downloader
         external_ids = (task.meta or {}).get("pan_download_ids") or [external_id]

@@ -23,6 +23,12 @@ _STATUS_MAP = {
 }
 
 
+def _missing_gid(payload: Any, gid: str) -> bool:
+    error = payload.get("error") if isinstance(payload, dict) else None
+    return (isinstance(error, dict) and error.get("code") == 1
+            and str(error.get("message") or "").lower() == f"gid {gid} is not found".lower())
+
+
 @register
 class Aria2Downloader(BaseDownloader):
     """aria2。"""
@@ -62,9 +68,18 @@ class Aria2Downloader(BaseDownloader):
             method="POST",
             json_body=payload,
             timeout=self.config.get("timeout"),
+            allow_http_error=True,
         )
         if not result:
             return None
+        if method == "aria2.removeDownloadResult" and params:
+            gid = str(params[0])
+            if _missing_gid(result, gid):
+                probe = await fetch_json(self.base_url, method="POST",
+                                         json_body={**payload, "id": uuid.uuid4().hex, "method": "aria2.tellStatus"},
+                                         timeout=self.config.get("timeout"), allow_http_error=True)
+                if _missing_gid(probe, gid):
+                    return "OK"
         if "error" in result:
             logger.warning("aria2 调用失败 %s: %s", method, result["error"])
             return None

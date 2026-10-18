@@ -41,7 +41,7 @@ from app.core.logger import get_logger
 from app.db.base import utcnow
 from app.db.models import VideoSubscribe
 from app.db.session import session_scope
-from app.schemas.enums import EventType, NotifyLevel, ResourceKind, SubscribeStatus
+from app.schemas.enums import EventType, NotifyLevel, ResourceKind, SubscribeStatus, TaskStatus
 from app.utils.strings import truncate
 
 logger = get_logger(__name__)
@@ -189,7 +189,20 @@ def _snapshot(record: VideoSubscribe) -> dict[str, Any]:
     }
 
 
+_inflight: set[int] = set()
+
+
 async def check_one(subscribe_id: int, *, notify: bool = True) -> dict[str, Any]:
+    if subscribe_id in _inflight:
+        return {"success": True, "skipped": True, "downloaded": 0, "message": "该视频订阅正在巡检"}
+    _inflight.add(subscribe_id)
+    try:
+        return await _check_one(subscribe_id, notify=notify)
+    finally:
+        _inflight.discard(subscribe_id)
+
+
+async def _check_one(subscribe_id: int, *, notify: bool = True) -> dict[str, Any]:
     """巡检一条视频订阅，只下载新增投稿。"""
     with session_scope() as session:
         record = session.get(VideoSubscribe, subscribe_id)
@@ -258,7 +271,7 @@ async def check_one(subscribe_id: int, *, notify: bool = True) -> dict[str, Any]
         # 无论成败都记下 ID：失败也别在下一轮反复重试同一个视频，
         # 否则一个永久失效的视频会把每轮的配额吃光，新投稿永远排不上。
         downloaded_ids.append(str(entry["id"]))
-        if task is None:
+        if task is None or getattr(task, "status", None) == TaskStatus.FAILED.value:
             failures.append(str(entry["id"]))
 
     ok_count = len(downloaded_ids) - len(failures)

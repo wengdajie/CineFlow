@@ -310,8 +310,8 @@ def test_default_downloader_respects_prefer(monkeypatch, fake_downloaders):
     monkeypatch.setattr(settings, "DOWNLOADER_STRATEGY", "priority")
     assert sites.default_downloader().site_name == "qb-b"
     assert sites.default_downloader(prefer="tr-c").site_name == "tr-c"
-    # 指定的名字不存在时退回策略首选，而不是返回 None
-    assert sites.default_downloader(prefer="不存在").site_name == "qb-b"
+    # 已有任务指定的实例不存在时不能误操作另一个实例。
+    assert sites.default_downloader(prefer="不存在") is None
 
 
 def test_default_downloader_without_any(monkeypatch):

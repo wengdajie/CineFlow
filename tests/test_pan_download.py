@@ -168,7 +168,7 @@ def test_all_files_are_paused_resumed_and_removed(monkeypatch, client):
 
     monkeypatch.setattr(download.site_service, "default_downloader", lambda *args: Controls())
     with session_scope() as session:
-        task = DownloadTask(title="multi", kind="pan", link="pan://test/control", status="downloading", external_id="gid-1",
+        task = DownloadTask(title="multi", kind="pan", link="pan://test/control", status="downloading", external_id="gid-1", downloader="Test aria2",
                             meta={"pan_download_ids": ["gid-1", "gid-2"]})
         session.add(task)
         session.flush()
