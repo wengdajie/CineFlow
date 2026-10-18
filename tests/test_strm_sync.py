@@ -182,6 +182,7 @@ def test_remote_paths_cannot_escape_output_directory(fake_pan, pan_site, tmp_pat
     assert result["truncated"] is True and result["created"] == 2
     assert not (tmp_path / "escape.strm").exists()
     assert strm_sync._output_path("/剧集2/other.mkv", "/剧集", tmp_path) is None
+    assert strm_sync._output_path("/剧集", "/剧集", tmp_path) is None
 
 
 @pytest.mark.parametrize(("module", "class_name", "method"), [

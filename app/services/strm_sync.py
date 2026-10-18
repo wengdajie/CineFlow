@@ -68,6 +68,8 @@ def _output_path(source: str, base: str, root: Path) -> Path | None:
         )
     except ValueError:
         return None
+    if not relative.parts:
+        return None
     target = root / str(relative)
     return target if target.resolve().is_relative_to(root.resolve()) else None
 
