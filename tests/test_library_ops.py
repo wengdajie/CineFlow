@@ -465,13 +465,13 @@ def test_sibling_dir_with_shared_prefix_is_outside(lib_tree):
         sibling.rmdir()
 
 
-def test_is_within_requires_separator_boundary():
+def test_is_within_requires_separator_boundary(tmp_path):
     """直接钉住比对函数本身，免得将来有人"优化"掉 os.sep。"""
-    root = Path(r"K:\media")
-    assert library_service._is_within(Path(r"K:\media"), root) is True
-    assert library_service._is_within(Path(r"K:\media\movies"), root) is True
-    assert library_service._is_within(Path(r"K:\mediaX"), root) is False
-    assert library_service._is_within(Path(r"K:\mediaX\a.mkv"), root) is False
+    root = tmp_path / "media"
+    assert library_service._is_within(root, root) is True
+    assert library_service._is_within(root / "movies", root) is True
+    assert library_service._is_within(tmp_path / "mediaX", root) is False
+    assert library_service._is_within(tmp_path / "mediaX" / "a.mkv", root) is False
 
 
 def test_download_dir_sibling_prefix_is_outside():

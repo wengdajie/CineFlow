@@ -238,6 +238,11 @@ class TestProbeGuards:
 class TestYdlOptions:
     """参数构造：画质上限、限速、无 ffmpeg 降级。"""
 
+    @pytest.fixture(autouse=True)
+    def available_ffmpeg(self, monkeypatch):
+        # 名义参数用例显式提供 ffmpeg；无 ffmpeg 用例会覆盖此探测结果。
+        monkeypatch.setattr(mod.shutil, "which", lambda _name: "/fixture/ffmpeg")
+
     def test_默认限制1080并优先合并流(self):
         options = _dl()._ydl_options("/tmp/dl")
         assert "bestvideo[height<=1080]" in options["format"]
