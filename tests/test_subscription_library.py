@@ -20,7 +20,7 @@ def test_subscription_releases_share_one_library_folder(client, tmp_path, monkey
         session.flush()
         subscription_id = subscription.id
         for episode, prefix in [(1, "OtherGroup"), (7, "7月新番")]:
-            source = tmp_path / f"[{prefix}] Wrong Show S01E{episode:02d}.mkv"
+            source = tmp_path / f"[{prefix}] Wrong Show {2000+episode} S02E{episode:02d}.mkv"
             source.write_bytes(b"media" * 200)
             session.add(DownloadTask(
                 title=f"[{prefix}] Wrong Show S01E{episode:02d}",

@@ -12,7 +12,7 @@ from sqlalchemy import select
 from app.core.config import settings
 from app.core.exceptions import ConfigError, NotFoundError
 from app.core.logger import get_logger
-from app.core.meta import parse
+from app.core.meta import MetaInfo, parse
 from app.core.organizer import (
     is_media_file,
     is_subtitle_file,
@@ -76,7 +76,6 @@ async def transfer_completed_tasks() -> dict[str, int]:
                 "id": task.id,
                 "title": subscriptions[task.subscribe_id].title if task.subscribe_id in subscriptions else task.title,
                 "season": subscriptions[task.subscribe_id].season if task.subscribe_id in subscriptions else task.season,
-                "year": subscriptions[task.subscribe_id].year if task.subscribe_id in subscriptions else None,
                 "media_type": task.media_type,
                 "subscribe_id": task.subscribe_id,
                 "content_path": (task.meta or {}).get("content_path") or task.save_path,
@@ -114,12 +113,12 @@ async def transfer_completed_tasks() -> dict[str, int]:
             continue
 
         info = parse(snapshot["title"])
-        if snapshot["subscribe_id"] in subscriptions:
-            info.title = snapshot["title"]
-            info.year = snapshot["year"] or info.year
+        subscription = subscriptions.get(snapshot["subscribe_id"])
+        identity = MetaInfo(title=subscription.title, year=subscription.year,
+                            media_type=subscription.media_type, season=subscription.season) if subscription else None
         season = snapshot["season"] if snapshot["season"] is not None else info.season
         results = transfer_directory(
-            source, title=info.title or None, season=season, year=info.year
+            source, title=info.title or None, season=season, year=info.year, identity=identity
         )
         if not results and source.is_file():
             # 下载器给的"主文件"可能不是正片。实测 aria2 按 torrent 内文件序返回，
@@ -134,7 +133,7 @@ async def transfer_completed_tasks() -> dict[str, int]:
                 parent,
             )
             results = transfer_directory(
-                parent, title=info.title or None, season=season, year=info.year
+                parent, title=info.title or None, season=season, year=info.year, identity=identity
             )
         if not results:
             logger.warning(

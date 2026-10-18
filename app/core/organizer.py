@@ -261,6 +261,7 @@ def transfer_directory(
     title: str | None = None,
     season: int | None = None,
     year: int | None = None,
+    identity: MetaInfo | None = None,
     overwrite: bool = False,
     dry_run: bool = False,
 ) -> list[TransferResult]:
@@ -289,6 +290,14 @@ def transfer_directory(
         # 只在文件名自己没解析出年份时才用外部年份，不覆盖更具体的信息
         if year is not None and info.year is None:
             info.year = year
+        if identity is not None:
+            # 订阅定义影视身份；发布标题只负责集号、画质等文件级信息。
+            info.title = safe_filename(identity.title)
+            info.cn_title = info.title
+            info.en_title = info.title
+            info.media_type = identity.media_type
+            info.season = identity.season
+            info.year = identity.year
         results.append(
             transfer_file(
                 path,
