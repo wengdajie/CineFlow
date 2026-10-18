@@ -189,9 +189,8 @@ def create_superuser() -> None:
             )
         )
     logger.warning(
-        "已创建默认管理员 %s，请尽快修改密码（默认口令：%s）",
+        "已创建默认管理员 %s，请登录后修改初始密码",
         settings.SUPERUSER,
-        settings.SUPERUSER_PASSWORD,
     )
 
 

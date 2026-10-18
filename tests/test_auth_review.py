@@ -146,3 +146,25 @@ def test_sensitive_request_urls_are_redacted_in_all_log_outputs():
     finally:
         LOG_BUFFER.clear()
         LOG_BUFFER.extend(previous)
+
+
+def test_initial_admin_password_is_never_logged(monkeypatch, client, caplog):
+    from app.db.init_db import create_superuser
+    from app.db.models import User
+    from app.db.session import session_scope
+
+    username = "review-bootstrap-admin"
+    password = "review-bootstrap-private-password"
+    monkeypatch.setattr(settings, "SUPERUSER", username)
+    monkeypatch.setattr(settings, "SUPERUSER_PASSWORD", password)
+    try:
+        caplog.clear()
+        create_superuser()
+        with session_scope() as session:
+            user = session.query(User).filter(User.username == username).one()
+            assert security.verify_password(password, user.password_hash)
+        assert username in caplog.text
+        assert password not in caplog.text
+    finally:
+        with session_scope() as session:
+            session.query(User).filter(User.username == username).delete()

@@ -93,7 +93,7 @@ jobs:
           fi
           export CF_SMOKE_PASSWORD=$(python -c 'import secrets; print(secrets.token_urlsafe(32))')
           echo "::add-mask::$CF_SMOKE_PASSWORD"
-          docker run -d --name cineflow-smoke -p 127.0.0.1::6060 \
+          docker run -d --name cineflow-smoke -p 127.0.0.1:16062:6060 \
             -e PUID=1000 -e PGID=1000 -e CF_SCHEDULER_ENABLED=false \
             -e CF_SUPERUSER="$CF_SMOKE_USERNAME" -e CF_SUPERUSER_PASSWORD="$CF_SMOKE_PASSWORD" cineflow:smoke
           export CF_SMOKE_URL="http://$(docker port cineflow-smoke 6060/tcp)"
@@ -107,7 +107,9 @@ jobs:
 
       - name: 容器失败日志
         if: failure()
-        run: docker logs --tail 80 cineflow-smoke 2>&1 || true
+        run: |
+          docker port cineflow-smoke || true
+          docker logs --tail 80 cineflow-smoke 2>&1 || true
 
       - name: 清理隔离容器
         if: always()
