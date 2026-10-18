@@ -12,6 +12,7 @@ from typing import Any
 from app.core.config import settings
 from app.core.filters import FilterRule, filter_and_rank
 from app.core.logger import get_logger
+from app.core.rules import RuleGroup
 from app.db.models import ResourceRecord, SearchHistory
 from app.db.session import session_scope
 from app.providers.base import Resource, SearchProvider
@@ -508,6 +509,47 @@ async def search(
     return results
 
 
+async def _prepare_search(
+    title: str,
+    media_type: str | None,
+    season: int | None,
+    episode: int | None,
+    extra_keywords: list[str] | None,
+    rule: FilterRule | None,
+    rule_group_id: int | None,
+) -> tuple[list[str], FilterRule, RuleGroup | None]:
+    aliases = await _expand_aliases(title, media_type, extra_keywords)
+    keywords = build_keywords(
+        title,
+        media_type=media_type,
+        season=season,
+        episode=episode,
+        extra=list(extra_keywords or []) + aliases,
+    )
+    effective_rule = rule or FilterRule()
+    if not effective_rule.title_keywords:
+        effective_rule.title_keywords = _title_variants(title, aliases=aliases or None)
+    group = None
+    try:
+        from app.services import rule_groups
+
+        group = rule_groups.load_group(rule_group_id)
+    except Exception as exc:
+        logger.warning("加载过滤规则组失败，本次仅按评分排序: %s", exc)
+    return keywords, effective_rule, group
+
+
+def _rank_resources(
+    resources: list[Resource], rule: FilterRule, group: RuleGroup | None
+) -> list[dict[str, Any]]:
+    ranked = filter_and_rank([resource.to_dict() for resource in resources], rule, group)
+    for item in ranked:
+        info = item.pop("_meta", None)
+        if info is not None:
+            item["meta"] = info.to_dict()
+    return ranked
+
+
 async def search_detailed(
     title: str,
     *,
@@ -522,13 +564,8 @@ async def search_detailed(
 ) -> tuple[list[dict[str, Any]], list[SiteOutcome]]:
     """同 ``search``，但额外返回每个站点的诊断结果。"""
     started = time.perf_counter()
-    aliases = await _expand_aliases(title, media_type, extra_keywords)
-    keywords = build_keywords(
-        title,
-        media_type=media_type,
-        season=season,
-        episode=episode,
-        extra=list(extra_keywords or []) + aliases,
+    keywords, effective_rule, group = await _prepare_search(
+        title, media_type, season, episode, extra_keywords, rule, rule_group_id
     )
     if not keywords:
         return [], []
@@ -553,41 +590,26 @@ async def search_detailed(
     grouped = await asyncio.gather(*tasks, return_exceptions=True)
 
     pairs: list[tuple[list[Resource], SiteOutcome]] = []
-    for provider, group in zip(active_providers, grouped, strict=False):
-        if isinstance(group, Exception):
+    for provider, site_result in zip(active_providers, grouped, strict=False):
+        if isinstance(site_result, Exception):
             # gather 里逃出来的异常也要有名有姓，不能只当作"这个站没结果"
             pairs.append((
                 [],
                 SiteOutcome(
                     site=provider.site_name,
                     status="error",
-                    message=f"{type(group).__name__}: {group}"[:200],
+                    message=f"{type(site_result).__name__}: {site_result}"[:200],
                 ),
             ))
             continue
-        pairs.append(group)
+        pairs.append(site_result)
 
     collected = apply_site_quota(pairs, settings.SEARCH_MAX_PER_SITE)
     collected = dedupe(collected)[: settings.SEARCH_MAX_RESULTS * 2]
     outcomes = [outcome for _, outcome in pairs]
 
     # 标题相关性过滤：避免站点返回大量无关结果
-    effective_rule = rule or FilterRule()
-    if not effective_rule.title_keywords:
-        # 别名必须一起进白名单：否则国际站命中的英文标题会被判
-        # 「与订阅名称不匹配」而整站丢掉（实测 74 → 0）
-        effective_rule.title_keywords = _title_variants(title, aliases=aliases or None)
-
-    payload = [resource.to_dict() for resource in collected]
-    # 规则组（有序偏好）在硬过滤与评分之后生效，只影响排序/兜底剔除
-    group = None
-    try:
-        from app.services import rule_groups as rule_group_service
-
-        group = rule_group_service.load_group(rule_group_id)
-    except Exception as exc:  # pragma: no cover - 规则组不可用时退回纯评分
-        logger.warning("加载过滤规则组失败，本次仅按评分排序: %s", exc)
-    ranked = filter_and_rank(payload, effective_rule, group)
+    ranked = _rank_resources(collected, effective_rule, group)
     ranked = enforce_site_share(ranked, settings.SEARCH_MAX_RESULTS)
 
     # 更新各站点的实际保留数：kept 在 apply_site_quota 里设的是配额裁剪后、
@@ -595,11 +617,6 @@ async def search_detailed(
     # 不改的话前端会显示「命中 68 条」但实际零条，属于 ADR-82 的
     #「失败与无结果不可区分」—— 两者都是零条，但原因不同。
     recount_kept(ranked, outcomes, title)
-
-    for item in ranked:
-        info = item.pop("_meta", None)
-        if info is not None:
-            item["meta"] = info.to_dict()
 
     elapsed = int((time.perf_counter() - started) * 1000)
     healthy = sum(1 for outcome in outcomes if outcome.status == "ok")
@@ -652,13 +669,8 @@ async def search_stream(
     单站最多 ``SEARCH_MAX_PER_SITE``，全局最多 ``SEARCH_MAX_RESULTS * 2``。
     """
     started = time.perf_counter()
-    aliases = await _expand_aliases(title, media_type, extra_keywords)
-    keywords = build_keywords(
-        title,
-        media_type=media_type,
-        season=season,
-        episode=episode,
-        extra=list(extra_keywords or []) + aliases,
+    keywords, effective_rule, group = await _prepare_search(
+        title, media_type, season, episode, extra_keywords, rule, rule_group_id
     )
     active_providers = providers if providers is not None else site_service.search_providers()
     if not keywords or not active_providers:
@@ -680,18 +692,6 @@ async def search_stream(
         "total_sites": len(active_providers),
         "sites": [provider.site_name for provider in active_providers],
     }
-
-    effective_rule = rule or FilterRule()
-    if not effective_rule.title_keywords:
-        effective_rule.title_keywords = _title_variants(title, aliases=aliases or None)
-
-    group = None
-    try:
-        from app.services import rule_groups as rule_group_service
-
-        group = rule_group_service.load_group(rule_group_id)
-    except Exception as exc:  # pragma: no cover - 规则组不可用时退回纯评分
-        logger.warning("加载过滤规则组失败，本次仅按评分排序: %s", exc)
 
     semaphore = asyncio.Semaphore(max(settings.SEARCH_CONCURRENCY, 1))
     tasks = [
@@ -745,25 +745,12 @@ async def search_stream(
 
             items: list[dict[str, Any]] = []
             if fresh and len(ranked_all) < global_cap:
-                payload = [resource.to_dict() for resource in fresh]
-                items = filter_and_rank(payload, effective_rule, group)
+                items = _rank_resources(fresh, effective_rule, group)
                 room = global_cap - len(ranked_all)
-                if len(items) > room:
-                    items = items[:room]
-                for item in items:
-                    info = item.pop("_meta", None)
-                    if info is not None:
-                        item["meta"] = info.to_dict()
+                items = items[:room]
                 ranked_all.extend(items)
 
-            # 流式路径同样要把 kept 修正成「过滤后」的条数。
-            # 这里不能复用 recount_kept()：那个函数按站点名统计全量结果，
-            # 而流式是一站一站往外推，此刻只有本站这一批（items）。
-            # 但**口径必须一致**，否则同一次搜索流式与非流式给出的诊断会互相矛盾。
-            outcome.kept = len(items)
-            if outcome.status == "ok" and outcome.raw > 0 and not items:
-                outcome.status = "filtered"
-                outcome.message = f"返回 {outcome.raw} 条，但与「{title}」都不匹配（已全部过滤）"
+            recount_kept(items, [outcome], title)
 
             yield {
                 "type": "site",

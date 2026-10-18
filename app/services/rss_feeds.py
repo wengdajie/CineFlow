@@ -42,6 +42,7 @@ from app.core.filters import FilterRule, filter_and_rank
 from app.core.logger import get_logger
 from app.core.meta import parse
 from app.core.rss_dialects import RssEntry, detect_dialect, parse_feed
+from app.core.selection import pick_missing
 from app.db.base import utcnow
 from app.db.models import RssFeed
 from app.db.session import session_scope
@@ -364,7 +365,6 @@ async def check_feed(
         }
 
     from app.services import download as download_service
-    from app.services import radar as radar_service
 
     subscribes = _active_subscribes() if feed["aggregate"] else []
     index = {item["id"]: item for item in subscribes}
@@ -407,7 +407,8 @@ async def check_feed(
                     {"title": item["title"], "reason": "新条目均未通过订阅过滤规则"}
                 )
                 continue
-            for resource in radar_service._pick(ranked, missing, item):
+            selected, _ = pick_missing(ranked, missing, media_type=item["media_type"], best_version=item["best_version"])
+            for resource in selected:
                 resource["_subscribe_id"] = subscribe_id
                 resource["_subscribe"] = item["title"]
                 resource["_save_path"] = feed["save_path"] or item["save_path"]

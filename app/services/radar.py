@@ -27,6 +27,7 @@ from app.core.config import settings
 from app.core.filters import FilterRule, filter_and_rank
 from app.core.logger import get_logger
 from app.core.meta import parse
+from app.core.selection import pick_missing
 from app.db.base import utcnow
 from app.db.models import Subscribe
 from app.db.session import session_scope
@@ -215,7 +216,7 @@ async def run(
             continue
 
         summary["matched"] += 1
-        picked = _pick(ranked, missing, item)
+        picked, _ = pick_missing(ranked, missing, media_type=item["media_type"], best_version=item["best_version"])
         for resource in picked:
             info = resource.pop("_meta", None)
             if info is not None:
@@ -265,35 +266,3 @@ async def run(
             payload={"source": "radar", "count": len(summary["downloads"])},
         )
     return summary
-
-
-def _pick(
-    ranked: list[dict[str, Any]], missing: set[int], item: dict[str, Any]
-) -> list[dict[str, Any]]:
-    """从排序后的候选中挑出能补齐缺集的资源。"""
-    remaining = set(missing)
-    picked: list[dict[str, Any]] = []
-    for resource in ranked:
-        if not remaining:
-            break
-        info = resource.get("_meta")
-        episodes = set(getattr(info, "episodes", None) or [])
-        is_pack = bool(getattr(info, "is_season_pack", False))
-
-        if item["media_type"] == MediaType.MOVIE.value:
-            picked.append(resource)
-            break
-        if episodes:
-            useful = episodes & remaining
-            if not useful:
-                continue
-        elif is_pack:
-            useful = set(remaining)
-        else:
-            continue
-
-        picked.append(resource)
-        remaining -= useful
-        if item["best_version"]:
-            break
-    return picked

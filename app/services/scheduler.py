@@ -238,6 +238,60 @@ def _spec(key: str) -> JobSpec:
     return spec
 
 
+# 旧设置 API 只作为调度配置的兼容入口；不再写 runtime_config。
+SCHEDULE_CONFIG = {
+    "SUBSCRIBE_INTERVAL_MINUTES": ("subscribe", "minutes"),
+    "RADAR_INTERVAL_MINUTES": ("radar", "minutes"),
+    "DOWNLOAD_CHECK_INTERVAL_MINUTES": ("download", "minutes"),
+    "PAN_TRANSFER_INTERVAL_MINUTES": ("pan_transfer", "minutes"),
+    "PAN_SUBSCRIBE_INTERVAL_MINUTES": ("pan_subscribe", "minutes"),
+    "VIDEO_SUBSCRIBE_INTERVAL_MINUTES": ("video_subscribe", "minutes"),
+    "PAN_KEEPALIVE_INTERVAL_MINUTES": ("pan_keepalive", "minutes"),
+    "STRM_SYNC_INTERVAL_MINUTES": ("strm_sync", "minutes"),
+    "SITE_HEALTH_INTERVAL_MINUTES": ("site_health", "minutes"),
+    "ZHUIJU_SYNC_INTERVAL_MINUTES": ("zhuiju_sync", "minutes"),
+    "RSS_INTERVAL_MINUTES": ("rss", "minutes"),
+    "LIBRARY_SCAN_CRON": ("library", "cron"),
+}
+
+
+def save_config_aliases(values: dict[str, Any]) -> None:
+    prepared = {}
+    for key, value in values.items():
+        if key not in SCHEDULE_CONFIG:
+            continue
+        job, field = SCHEDULE_CONFIG[key]
+        payload = {"trigger": "cron" if field == "cron" else "interval", "enabled": bool(value)}
+        if value:
+            payload[field] = value
+        prepared[job] = normalize_schedule(job, payload)
+    if prepared:
+        settings_store.set_setting(settings_store.KEY_SCHEDULES, {**_overrides(), **prepared})
+
+
+def migrate_legacy_config() -> None:
+    raw = settings_store.get_setting("runtime_config", {}) or {}
+    legacy = {k: v for k, v in raw.items() if k in SCHEDULE_CONFIG}
+    if not legacy:
+        return
+    # 保留原始冲突值供排查；已有 schedules 优先，保持升级前真实执行行为。
+    settings_store.set_setting("legacy_schedule_config", legacy)
+    existing = _overrides()
+    for key, value in legacy.items():
+        if SCHEDULE_CONFIG[key][0] not in existing:
+            try:
+                save_config_aliases({key: value})
+            except (ValueError, TypeError):
+                logger.warning("忽略非法历史调度项 %s", key)
+    settings_store.set_setting("runtime_config", {k: v for k, v in raw.items() if k not in legacy})
+
+
+def config_value(key: str) -> Any:
+    job, field = SCHEDULE_CONFIG[key]
+    config = effective_schedule(job)
+    return config[field] if config["enabled"] else ("" if field == "cron" else 0)
+
+
 def _overrides() -> dict[str, Any]:
     raw = settings_store.get_setting(settings_store.KEY_SCHEDULES, {}) or {}
     return raw if isinstance(raw, dict) else {}
@@ -270,9 +324,7 @@ def normalize_schedule(key: str, payload: dict[str, Any]) -> dict[str, Any]:
     cron = str(payload.get("cron") or current["cron"]).strip()
 
     if trigger == "interval" and not MIN_INTERVAL_MINUTES <= minutes <= MAX_INTERVAL_MINUTES:
-        raise ValueError(
-            f"间隔需在 {MIN_INTERVAL_MINUTES}~{MAX_INTERVAL_MINUTES} 分钟之间"
-        )
+        raise ValueError(f"间隔需在 {MIN_INTERVAL_MINUTES}~{MAX_INTERVAL_MINUTES} 分钟之间")
     # cron 字段**只要用户提交了就校验**，不管当前 trigger 是不是 cron：
     # 否则非法表达式会被静默存下来，等用户哪天把 trigger 切成 cron 才炸，
     # 那时他早就忘了自己填过什么（真实踩坑：冒烟测试发现 interval 任务能存 "这不是 cron"）。
@@ -355,9 +407,7 @@ class SchedulerService:
         if config["trigger"] == "cron":
             trigger: Any = _parse_cron(config["cron"])
         else:
-            trigger = IntervalTrigger(
-                minutes=int(config["minutes"]), timezone=settings.TIMEZONE
-            )
+            trigger = IntervalTrigger(minutes=int(config["minutes"]), timezone=settings.TIMEZONE)
 
         func, kwargs = self._job_target(spec.key)
         self.scheduler.add_job(
@@ -391,9 +441,7 @@ class SchedulerService:
         self.scheduler.start()
         logger.info("调度器已启动，内置任务 %d 个：%s", len(registered), registered)
         for item in self.list_jobs():
-            logger.info(
-                "  · %-22s %s -> %s", item["id"], item["trigger"], item["next_run_time"]
-            )
+            logger.info("  · %-22s %s -> %s", item["id"], item["trigger"], item["next_run_time"])
 
     def refresh_builtin_jobs(self) -> list[str]:
         """按当前生效配置重建全部内置任务的触发器。
@@ -441,9 +489,7 @@ class SchedulerService:
         active = False
         if self.running:
             active = self._register(spec)
-        logger.info(
-            "任务 %s 规则已更新：%s（已生效=%s）", spec.job_id, config, active
-        )
+        logger.info("任务 %s 规则已更新：%s（已生效=%s）", spec.job_id, config, active)
         return {**self.describe_schedule(key), "applied": active}
 
     def reset_schedule(self, key: str) -> dict[str, Any]:

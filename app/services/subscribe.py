@@ -16,6 +16,7 @@ from typing import Any
 from sqlalchemy import select
 
 from app.core.logger import get_logger
+from app.core.selection import pick_missing
 from app.db.base import utcnow
 from app.db.models import MediaItem, Subscribe
 from app.db.session import session_scope
@@ -359,31 +360,8 @@ async def _process_subscribe_inner(subscribe_id: int) -> dict[str, Any]:
                 record.last_check_at = utcnow()
         return result
 
-    # 择优下载：优先季包，其次逐集补齐
-    remaining = set(missing)
-    picked: list[dict[str, Any]] = []
-    for resource in resources:
-        if not remaining:
-            break
-        info = resource.get("meta") or {}
-        episodes = set(info.get("episodes") or [])
-        is_pack = bool(info.get("is_season_pack"))
-
-        if episodes:
-            useful = episodes & remaining
-            if not useful:
-                continue
-        elif is_pack:
-            useful = set(remaining)
-        elif subscribe.media_type == MediaType.MOVIE.value:
-            useful = {1}
-        else:
-            continue
-
-        picked.append(resource)
-        remaining -= useful
-        if subscribe.best_version or subscribe.media_type == MediaType.MOVIE.value:
-            break
+    picked, remaining = pick_missing(resources, set(missing), media_type=subscribe.media_type,
+                          best_version=subscribe.best_version)
 
     for resource in picked:
         task = await download_service.add_download(

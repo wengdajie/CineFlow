@@ -261,6 +261,9 @@ def _assign(key: str, value: Any) -> None:
 
 def apply_overrides() -> dict[str, Any]:
     """启动时调用：把持久化的覆盖值套到 settings 单例上。"""
+    from app.services.scheduler import migrate_legacy_config
+
+    migrate_legacy_config()
     applied: dict[str, Any] = {}
     for key, raw in overrides().items():
         try:
@@ -298,11 +301,15 @@ def update(values: dict[str, Any]) -> dict[str, Any]:
     if not coerced:
         raise ValueError("没有需要保存的配置")
 
+    from app.services.scheduler import SCHEDULE_CONFIG, save_config_aliases
+
+    save_config_aliases(coerced)
     stored = overrides()
-    stored.update(coerced)
+    stored.update({k: v for k, v in coerced.items() if k not in SCHEDULE_CONFIG})
     settings_store.set_setting(KEY_RUNTIME, stored)
     for key, value in coerced.items():
-        _assign(key, value)
+        if key not in SCHEDULE_CONFIG:
+            _assign(key, value)
 
     if any(EDITABLE[key].reschedule for key in coerced):
         _reschedule()
@@ -316,8 +323,12 @@ def reset(keys: list[str] | None = None) -> list[str]:
     静态默认值来自进程启动时的快照，所以这里从一份「干净的 Settings」里取原值，
     而不是猜。
     """
+    from app.services.scheduler import SCHEDULE_CONFIG, _overrides
+
     stored = overrides()
-    targets = [key for key in (keys or list(stored)) if key in stored]
+    schedules = _overrides()
+    alias_keys = [k for k, (job, _) in SCHEDULE_CONFIG.items() if job in schedules]
+    targets = [key for key in (keys or [*stored, *alias_keys]) if key in stored or key in alias_keys]
     if not targets:
         return []
 
@@ -326,7 +337,11 @@ def reset(keys: list[str] | None = None) -> list[str]:
     pristine = Settings(**_yaml_source())
     for key in targets:
         stored.pop(key, None)
-        _assign(key, getattr(pristine, key))
+        if key in SCHEDULE_CONFIG:
+            schedules.pop(SCHEDULE_CONFIG[key][0], None)
+        else:
+            _assign(key, getattr(pristine, key))
+    settings_store.set_setting(settings_store.KEY_SCHEDULES, schedules)
     settings_store.set_setting(KEY_RUNTIME, stored)
     if any(EDITABLE[key].reschedule for key in targets):
         _reschedule()
@@ -349,7 +364,10 @@ def describe(key: str) -> dict[str, Any]:
     spec = EDITABLE.get(key)
     if spec is None:
         return {"editable": False}
+    from app.services.scheduler import SCHEDULE_CONFIG
+
     return {
+        "managed_by": "schedules" if key in SCHEDULE_CONFIG else None,
         "editable": True,
         "type": spec.type,
         "label": spec.label,
@@ -359,3 +377,9 @@ def describe(key: str) -> dict[str, Any]:
         "reschedule": spec.reschedule,
         "hint": spec.hint,
     }
+
+
+def value_for(key: str) -> Any:
+    from app.services.scheduler import SCHEDULE_CONFIG, config_value
+
+    return config_value(key) if key in SCHEDULE_CONFIG else getattr(settings, key)

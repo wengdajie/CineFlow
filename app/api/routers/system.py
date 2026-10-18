@@ -306,7 +306,7 @@ def effective_settings(user: CurrentUser) -> dict[str, Any]:
         for key in group["keys"]:
             if not hasattr(settings, key):
                 continue
-            raw = getattr(settings, key)
+            raw = config_store.value_for(key)
             value = str(raw) if isinstance(raw, Path) else raw
             display = value
             if isinstance(value, list):
