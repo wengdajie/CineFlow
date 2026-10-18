@@ -1,0 +1,22 @@
+# 只发送镜像构建必需的内容；本机账号、数据库、下载文件与验证环境不进入上下文。
+**
+!Dockerfile
+!.dockerignore
+!requirements.lock
+!app/
+!app/**
+!web/
+!web/**
+!plugins/
+!plugins/**
+!docs/
+!docs/**
+!config/
+!config/config.yaml.example
+!docker/
+!docker/entrypoint.sh
+**/__pycache__/
+**/*.py[cod]
+**/.env
+**/*.db
+**/*.log

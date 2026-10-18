@@ -49,7 +49,7 @@ services:
       TZ: Asia/Shanghai
       CF_SUPERUSER: admin
       CF_SUPERUSER_PASSWORD: cineflow           # ← 登录后立刻在界面里改密
-      CF_SECRET_KEY: CHANGE_ME_RANDOM_STRING    # ← 必改！openssl rand -hex 32
+      CF_SECRET_KEY: ""                        # 自动保存到 data/jwt-secret.txt
       CF_TMDB_API_KEY: ""                       # 可选，填了刮削更准
       CF_TRANSFER_MODE: link                    # ← 跨存储空间必须改 copy
       CF_SUBSCRIBE_INTERVAL_MINUTES: 30

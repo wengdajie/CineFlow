@@ -30,7 +30,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)](#-docker-部署推荐)
 [![Tests](https://img.shields.io/badge/tests-pytest-brightgreen)](docs/14-开发指南.md)
-[![Version](https://img.shields.io/badge/version-1.28.2-blue)](docs/08-变更日志.md)
+[![Version](https://img.shields.io/badge/version-1.29.0-blue)](docs/08-变更日志.md)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 </div>
@@ -67,8 +67,8 @@ CineFlow 是一个**从零实现**的 NAS 影视自动化项目，设计上参�
               ▼
    ┌───────────────────────────────┐
    │ ⬇ 投递 qBittorrent / TR / aria2 │
-   │   网盘资源 → 自动转存进自己的网盘  │
-   │   （AList / 夸克，带提取码）      │
+   │   网盘原文件 → aria2 下载到本地  │
+   │   （需要对应平台授权与下载权限）  │
    └──────────┬────────────────────┘
               ▼
    ┌───────────────────────────────┐
@@ -93,8 +93,8 @@ CineFlow 是一个**从零实现**的 NAS 影视自动化项目，设计上参�
         …
     你：下载 2
    Bot：✅ 已提交下载：沙丘2.2024.1080p.中字
-        任务 #37 · 状态 transferred
-        ☁️ 网盘资源已自动转存
+        任务 #37 · 状态 downloading
+        ☁️ 已提交对应网盘原文件下载
 ```
 
 ---
@@ -104,7 +104,7 @@ CineFlow 是一个**从零实现**的 NAS 影视自动化项目，设计上参�
 
 | 能力 | 一句话 |
 |---|---|
-| 🔍 **聚合搜索** | BT 索引器（Jackett/Prowlarr/torznab）+ 网盘盘搜 + 自定义站点 + B站/YouTube + 在线影视站（MacCMS），一次并发查全部；**每个站点都有保底名额**，不会被高分站挤掉 |
+| 🔍 **聚合搜索** | BT 索引器（Jackett/Prowlarr/torznab）+ 网盘盘搜 + 自定义站点 + B站/YouTube + 在线影视站（MacCMS），并发搜索、按站点增量显示结果，无需等待最慢站点；**每个站点都有保底名额** |
 | 🔥 **当前最热** | 豆瓣电影/电视剧/动漫/综艺 + **Bilibili 分区** + **YouTube 地区** + **新番放送日历**共七个榜，画板式封面墙，首屏 30 条下拉加载；B 站/YouTube 条目**直接选画质下载**，影视条目跳搜资源并**记住回来的位置** |
 | 🎯 **智能择优** | 硬过滤（枪版/做种不足/错剧）+ 加权打分（分辨率/字幕/季包/站点权重）+ 分层规则组 |
 | 🔁 **自动追新** | 定时巡检、多级关键词降级、缺集收敛、洗版替换、RSS 追新 |
@@ -112,7 +112,7 @@ CineFlow 是一个**从零实现**的 NAS 影视自动化项目，设计上参�
 | ⬆️ **更新检测** | 一键查上游有没有新版；**仓库还没发 Release 时退回读主干版本号与最新提交**，不谎称「已是最新」；源码部署可一键 `git pull --ff-only`（不 merge、不 reset，绝不动你的改动），容器部署如实给出 compose 命令 |
 | 📺 **追番日历** | Bangumi 放送表：这周**哪天更新第几话**，今天那一列高亮（热度榜答不了这个问题） |
 | 🎥 **视频追更** | 盯住 B 站 UP 主 / YouTube 频道 / 播放列表，有新投稿就自动下载（可限画质、限每轮条数） |
-| ☁️ **网盘管理** | 115/百度/夸克/AList/WebDAV，**扫码登录 + Cookie 保活**、转存、在线浏览、分享追更 |
+| ☁️ **网盘管理** | 百度/夸克/阿里云盘/115/AList/WebDAV 等，**扫码登录 + Cookie 保活**、在线浏览、分享追更；对应平台原文件可交给 aria2 下载，转存需显式选择 |
 | 📁 **整理入库** | 资源名解析 → 硬链接 → 规范命名 → 通知 Emby/Jellyfin/Plex 刷新（**不做刮削**，交给 Emby/TMM） |
 | 🎬 **免下载播放** | STRM 同步 + 302 直链，网盘里的片子不落地也能播 |
 | 🤖 **ChatOps** | 飞书 / 钉钉 / Telegram 发一句话完成搜索与下载 |
@@ -126,6 +126,10 @@ CineFlow 是一个**从零实现**的 NAS 影视自动化项目，设计上参�
 ---
 
 ## 本轮精简与升级
+
+**v1.29.0**：热榜点击后自动搜索，结果逐站显示；统一订阅的剧集目录；多网盘原文件下载交给 aria2，普通下载不再隐式转存。深度审查修复覆盖失败、任务竞态和凭据暴露等问题，Python 3.10 / 3.12 各 1853 项测试通过。外部网盘仍需有效账号及下载权限，本地 aria2 验证不代表全部平台实盘可用。
+
+详见 [搜索与多网盘说明](docs/18-搜索响应与多网盘下载修复.md)、[深度审查报告](docs/19-深度审查与本地验证.md) 和 [v1.29.0 发布与 Docker 使用](docs/20-v1.29.0发布与Docker使用.md)。
 
 本轮保留现有功能，修复 STRM 清理、播放凭据、洗版与并发投递的一致性，统一调度配置，拆分原生前端模块并收敛导航。
 升级前请阅读 [精简优化与升级说明](docs/16-精简优化与升级说明.md)，尤其是旧 STRM 播放链接的重写步骤。
@@ -142,7 +146,7 @@ README 只保留**声明 / 介绍 / 安装**三件事，其余全部在 [`docs/`
 | [`docs/03-升级路线图.md`](docs/03-升级路线图.md) | 里程碑任务表 + **逐条验收证据** |
 | [`docs/04-决策记录.md`](docs/04-决策记录.md) | ADR：为什么这么选，以及被否掉的方案 |
 | [`docs/05-ChatOps-机器人.md`](docs/05-ChatOps-机器人.md) | 三平台配置步骤、验签算法、指令表 |
-| [`docs/06-网盘管理.md`](docs/06-网盘管理.md) | 盘搜 vs 网盘、五种存储配置、**扫码登录与保活**、转存流程 |
+| [`docs/06-网盘管理.md`](docs/06-网盘管理.md) | 盘搜 vs 网盘、八种存储配置、**扫码登录与保活**、原文件下载与显式转存 |
 | [`docs/07-运维手册.md`](docs/07-运维手册.md) | **完整 Docker 安装（11 步 · 四平台）**、备份、排障、验证脚本 |
 | [`docs/08-变更日志.md`](docs/08-变更日志.md) | v1.0.0 → v1.10.0 逐版本记录 |
 | [`docs/09-竞品对标与差距分析.md`](docs/09-竞品对标与差距分析.md) | 对标 MoviePilot / T3FAP / quark-auto-save 等，**差距与不做的事** |
@@ -158,6 +162,8 @@ README 只保留**声明 / 介绍 / 安装**三件事，其余全部在 [`docs/`
 ### 🐳 Docker 部署（推荐）
 
 **无需下载源码**，直接拉取 GitHub Actions 自动构建的多架构镜像（amd64 / arm64）：
+
+镜像为 `ghcr.io/wengdajie/cineflow:latest`，本次版本标签为 `v1.29.0`。离线 Docker 包可在 [GitHub Releases](https://github.com/wengdajie/CineFlow/releases) 下载，包含两个架构及 SHA-256 校验文件；[Actions 构建](https://github.com/wengdajie/CineFlow/actions/workflows/build-image.yml) 也保留临时产物。
 
 ```bash
 # 通用版（群晖 / 威联通 / Linux / Windows）

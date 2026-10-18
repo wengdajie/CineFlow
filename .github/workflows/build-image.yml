@@ -15,6 +15,7 @@ name: build-image
 jobs:
   quality:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       matrix:
         python: ["3.10", "3.12"]
@@ -31,17 +32,21 @@ jobs:
       - name: Install locked dependencies
         run: python -m pip install --quiet -r requirements-dev.lock
       - name: Lint
-        run: python -m ruff check app plugins tests scripts/project_facts.py
+        run: python -m ruff check app plugins tests scripts/project_facts.py scripts/container_smoke.py
       - name: Frontend modules
         run: node scripts/check_frontend.mjs
       - name: Tests
         run: python -m pytest --disable-warnings
       - name: Documentation facts
-        run: python scripts/project_facts.py --check
+        run: |
+          python scripts/project_facts.py --check
+          python scripts/verify_docs.py
+          python scripts/verify_yaml.py
   build:
     needs: quality
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     permissions:
       contents: read
       packages: write        # 推 GHCR 必需
@@ -51,6 +56,46 @@ jobs:
       # QEMU 用于交叉编译 arm64（很多 NAS 是 ARM 架构）
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
+
+      - name: 构建待验证镜像
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: cineflow:smoke
+          cache-from: type=gha
+
+      - name: 容器启动、登录与持久化验证
+        env:
+          CF_SMOKE_USERNAME: smoke_admin
+        run: |
+          set -euo pipefail
+          export CF_SMOKE_VERSION=$(python -c "import runpy; print(runpy.run_path('app/core/version.py')['APP_VERSION'])")
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            test "${GITHUB_REF#refs/tags/v}" = "$CF_SMOKE_VERSION"
+          fi
+          export CF_SMOKE_PASSWORD=$(python -c 'import secrets; print(secrets.token_urlsafe(32))')
+          echo "::add-mask::$CF_SMOKE_PASSWORD"
+          docker run -d --name cineflow-smoke -p 127.0.0.1::6060 \
+            -e PUID=1000 -e PGID=1000 -e CF_SCHEDULER_ENABLED=false \
+            -e CF_SUPERUSER="$CF_SMOKE_USERNAME" -e CF_SUPERUSER_PASSWORD="$CF_SMOKE_PASSWORD" cineflow:smoke
+          export CF_SMOKE_URL="http://$(docker port cineflow-smoke 6060/tcp)"
+          python scripts/container_smoke.py
+          docker exec cineflow-smoke python -c "from pathlib import Path; assert Path('/proc/1/status').read_text().split('Uid:')[1].split()[0] == '1000'"
+          first=$(docker exec cineflow-smoke sha256sum /app/data/jwt-secret.txt | cut -d ' ' -f 1)
+          docker restart cineflow-smoke >/dev/null
+          python scripts/container_smoke.py
+          second=$(docker exec cineflow-smoke sha256sum /app/data/jwt-secret.txt | cut -d ' ' -f 1)
+          test "$first" = "$second"
+
+      - name: 容器失败日志
+        if: failure()
+        run: docker logs --tail 80 cineflow-smoke 2>&1 || true
+
+      - name: 清理隔离容器
+        if: always()
+        run: docker rm -fv cineflow-smoke >/dev/null 2>&1 || true
 
       - name: 登录 GHCR
         uses: docker/login-action@v3
@@ -71,6 +116,7 @@ jobs:
             type=sha,format=short
 
       - name: 构建并推送
+        id: publish
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -80,3 +126,70 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: 导出双架构离线镜像
+        env:
+          IMAGE_DIGEST: ${{ steps.publish.outputs.digest }}
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/cineflow"
+          version=$(python -c "import runpy; print(runpy.run_path('app/core/version.py')['APP_VERSION'])")
+          export CF_SMOKE_VERSION="$version"
+          export CF_SMOKE_PASSWORD=$(python -c 'import secrets; print(secrets.token_urlsafe(32))')
+          echo "::add-mask::$CF_SMOKE_PASSWORD"
+          trap 'docker rm -fv cineflow-package-smoke >/dev/null 2>&1 || true' EXIT
+          mkdir -p dist
+          docker buildx imagetools inspect "$image@$IMAGE_DIGEST"
+          for arch in amd64 arm64; do
+            docker pull --platform "linux/$arch" "$image@$IMAGE_DIGEST"
+            test "$(docker image inspect --format '{{.Architecture}}' "$image@$IMAGE_DIGEST")" = "$arch"
+            archive_tag="$image:$version-$arch"
+            docker tag "$image@$IMAGE_DIGEST" "$archive_tag"
+            docker run -d --platform "linux/$arch" --name cineflow-package-smoke -p 127.0.0.1::6060 \
+              -e PUID=1000 -e PGID=1000 -e CF_SCHEDULER_ENABLED=false \
+              -e CF_SUPERUSER=smoke_admin -e CF_SUPERUSER_PASSWORD="$CF_SMOKE_PASSWORD" "$archive_tag"
+            export CF_SMOKE_URL="http://$(docker port cineflow-package-smoke 6060/tcp)"
+            python scripts/container_smoke.py
+            docker rm -fv cineflow-package-smoke >/dev/null
+            docker save "$archive_tag" | gzip -1 > "dist/cineflow-$version-linux-$arch.tar.gz"
+          done
+          (cd dist && sha256sum *.tar.gz > SHA256SUMS)
+          printf 'Image: `%s@%s`\n' "$image" "$IMAGE_DIGEST" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 上传离线 Docker 包
+        uses: actions/upload-artifact@v4
+        with:
+          name: cineflow-docker-${{ github.sha }}
+          path: dist/
+          compression-level: 0
+          retention-days: 14
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: cineflow-docker-${{ github.sha }}
+          path: dist
+      - name: 发布版本与离线镜像附件
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+          else
+            image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/cineflow"
+            printf 'Docker image: `%s:%s`\n\n[变更与升级说明](https://github.com/%s/blob/%s/docs/08-变更日志.md)\n' \
+              "$image" "$GITHUB_REF_NAME" "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" > release-notes.md
+            gh release create "$GITHUB_REF_NAME" --verify-tag \
+              --title "CineFlow $GITHUB_REF_NAME" \
+              --generate-notes --notes-file release-notes.md dist/*
+          fi

@@ -15,7 +15,7 @@ FROM python:3.12-slim
 
 LABEL org.opencontainers.image.title="CineFlow" \
       org.opencontainers.image.description="NAS 自动化观影追剧平台：BT 站点 + 网盘搜索、自动追新、刮削入库" \
-      org.opencontainers.image.source="https://github.com/your-name/cineflow" \
+      org.opencontainers.image.source="https://github.com/wengdajie/CineFlow" \
       org.opencontainers.image.licenses="MIT"
 
 ENV PYTHONUNBUFFERED=1 \

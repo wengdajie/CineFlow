@@ -38,7 +38,7 @@ services:
       # 首次启动的管理员账号，登录后请立即改密
       CF_SUPERUSER: admin
       CF_SUPERUSER_PASSWORD: cineflow
-      # 请替换为随机字符串
+      # 留空自动生成持久化密钥，也可配置自己的随机字符串
       CF_SECRET_KEY: ""  # 自动生成并保存在 /app/data/jwt-secret.txt
       CF_TMDB_API_KEY: ""
       CF_TRANSFER_MODE: link

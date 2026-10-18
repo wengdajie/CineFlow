@@ -22,7 +22,7 @@ plugin_dir: "./plugins"     # 插件目录
 
 # ---------- 安全 ----------
 # 首次启动会用下面的账号创建管理员，请务必修改！
-secret_key: "please-change-this-to-a-random-string"
+secret_key: ""  # 自动生成并保存在 data_dir/jwt-secret.txt；也可配置自己的随机串
 superuser: "admin"
 superuser_password: "cineflow"
 token_expire_minutes: 10080        # 7 天
