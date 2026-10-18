@@ -12,6 +12,10 @@ name: build-image
     tags: ["v*"]
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   quality:
     runs-on: ubuntu-latest
@@ -158,11 +162,13 @@ jobs:
           trap 'docker rm -fv cineflow-package-smoke >/dev/null 2>&1 || true' EXIT
           mkdir -p dist
           docker buildx imagetools inspect "$image@$IMAGE_DIGEST"
+          docker buildx imagetools inspect --raw "$image@$IMAGE_DIGEST" > image-index.json
           for arch in amd64 arm64; do
-            docker pull --platform "linux/$arch" "$image@$IMAGE_DIGEST"
-            test "$(docker image inspect --format '{{.Architecture}}' "$image@$IMAGE_DIGEST")" = "$arch"
+            platform_digest=$(python -c 'import json,sys; print(next(item["digest"] for item in json.load(open("image-index.json"))["manifests"] if item.get("platform", {}).get("os") == "linux" and item["platform"].get("architecture") == sys.argv[1]))' "$arch")
+            docker pull --platform "linux/$arch" "$image@$platform_digest"
+            test "$(docker image inspect --format '{{.Architecture}}' "$image@$platform_digest")" = "$arch"
             archive_tag="$image:$version-$arch"
-            docker tag "$image@$IMAGE_DIGEST" "$archive_tag"
+            docker tag "$image@$platform_digest" "$archive_tag"
             docker run -d --platform "linux/$arch" --name cineflow-package-smoke -p 127.0.0.1::6060 \
               -e PUID=1000 -e PGID=1000 -e CF_SCHEDULER_ENABLED=false \
               -e CF_SUPERUSER=smoke_admin -e CF_SUPERUSER_PASSWORD="$CF_SMOKE_PASSWORD" "$archive_tag"
