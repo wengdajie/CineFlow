@@ -979,6 +979,7 @@ tbody tr:last-child td { border-bottom: 0; }
 }
 
 @media (max-width: 560px) {
+  .grid.cols-2, .grid.cols-3, .grid.cols-4 { grid-template-columns: minmax(0, 1fr); }
   .topbar { gap: var(--sp-3); }
   .topbar-actions { width: 100%; }
   .modal { padding: var(--sp-4); border-radius: var(--r-lg); }
