@@ -5,11 +5,12 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.api.deps import AdminUser, CurrentUser, DbSession
+from app.core.secrets import redact_options, redact_url, restore_options, restore_url
 from app.db.base import utcnow
-from app.db.models import SiteConfig
+from app.db.models import DownloadTask, SiteConfig
 from app.db.session import SessionLocal
 from app.providers.registry import list_providers
 from app.schemas.enums import ProviderKind
@@ -36,7 +37,9 @@ router = APIRouter(prefix="/sites", tags=["站点管理"])
 
 def _to_out(site: SiteConfig) -> SiteOut:
     data = SiteOut.model_validate(site)
-    data.has_credentials = bool(site.api_key or site.password or site.cookie)
+    data.options = redact_options(data.options)
+    data.url = redact_url(data.url)
+    data.has_credentials = bool(site.api_key or site.password or site.cookie or data.options != site.options or data.url != site.url)
     return data
 
 
@@ -275,8 +278,19 @@ def update_site(
     site = session.get(SiteConfig, site_id)
     if not site:
         raise HTTPException(status_code=404, detail="站点不存在")
+    old_name = site.name
+    if payload.name is not None and payload.name != old_name:
+        exists = session.execute(select(SiteConfig.id).where(SiteConfig.name == payload.name, SiteConfig.id != site_id)).first()
+        if exists:
+            raise HTTPException(status_code=409, detail="站点名称已存在")
     for key, value in payload.model_dump(exclude_unset=True).items():
+        if key == "options":
+            value = restore_options(value, site.options)
+        elif key == "url":
+            value = restore_url(value, site.url)
         setattr(site, key, value)
+    if site.kind == ProviderKind.DOWNLOADER.value and site.name != old_name:
+        session.execute(update(DownloadTask).where(DownloadTask.downloader == old_name).values(downloader=site.name))
     session.commit()
     session.refresh(site)
     return _to_out(site)

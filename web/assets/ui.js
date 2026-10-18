@@ -61,6 +61,17 @@ function icon(name, cls) {
   return svg;
 }
 
+function safeHref(value) {
+  const href = String(value || "").trim();
+  if (!href) return null;
+  try {
+    const parsed = new URL(href, globalThis.location?.href || "http://localhost/");
+    return ["http:", "https:"].includes(parsed.protocol) ? href : null;
+  } catch { return null; }
+}
+
+export { safeHref };
+
 const el = (tag, attrs, children) => {
   const node = document.createElement(tag);
   Object.entries(attrs || {}).forEach(([key, value]) => {
@@ -68,6 +79,10 @@ const el = (tag, attrs, children) => {
     if (key === "class") node.className = value;
     else if (key === "text") node.textContent = value;
     else if (key.startsWith("on")) node.addEventListener(key.slice(2), value);
+    else if (key === "href") {
+      const href = safeHref(value);
+      if (href) node.setAttribute(key, href);
+    }
     else node.setAttribute(key, value);
   });
   const list = Array.isArray(children) ? children : children ? [children] : [];

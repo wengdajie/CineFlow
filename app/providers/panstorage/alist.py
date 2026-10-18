@@ -70,6 +70,7 @@ class AListStorage(BasePanStorage):
             f"{self.base_url}/api/auth/login",
             method="POST",
             json_body={"username": username, "password": password},
+            verify=bool(self.option("verify_ssl", True)),
             timeout=self.config.get("timeout"),
         )
         token = ((payload or {}).get("data") or {}).get("token")
@@ -93,6 +94,7 @@ class AListStorage(BasePanStorage):
             method=method,
             json_body=body,
             headers=headers,
+            verify=bool(self.option("verify_ssl", True)),
             timeout=self.config.get("timeout"),
         )
         if not payload:

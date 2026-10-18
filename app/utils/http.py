@@ -9,6 +9,7 @@ import httpx
 
 from app.core.config import settings
 from app.core.logger import get_logger
+from app.core.secrets import redact_url
 
 logger = get_logger(__name__)
 
@@ -60,6 +61,7 @@ def async_client(
     timeout: float | None = None,
     headers: dict[str, str] | None = None,
     follow_redirects: bool = True,
+    verify: bool = True,
 ) -> httpx.AsyncClient:
     """创建异步客户端（含代理与默认头）。"""
     return httpx.AsyncClient(
@@ -67,7 +69,7 @@ def async_client(
         headers=build_headers(headers),
         follow_redirects=follow_redirects,
         proxy=settings.HTTP_PROXY or None,
-        verify=False,
+        verify=verify,
     )
 
 
@@ -195,7 +197,7 @@ async def fetch_text_result(
             return response.text
     except Exception as exc:
         message, status, kind = describe_http_error(exc)
-        logger.warning("HTTP 文本请求失败 %s: %s", url, message)
+        logger.warning("HTTP 文本请求失败 %s: %s", redact_url(url), message)
         raise FetchError(message, status=status, kind=kind) from exc
 
 
@@ -227,7 +229,7 @@ async def fetch_text(
                 return response.content.decode(encoding, errors="replace")
             return response.text
     except Exception as exc:
-        logger.warning("HTTP 文本请求失败 %s: %s", url, exc)
+        logger.warning("HTTP 文本请求失败 %s: %s", redact_url(url), describe_http_error(exc)[0])
         return None
 
 
@@ -240,15 +242,18 @@ async def fetch_json(
     json_body: Any = None,
     headers: dict[str, str] | None = None,
     timeout: float | None = None,
+    verify: bool = True,
+    allow_http_error: bool = False,
 ) -> Any | None:
     """请求并返回 JSON，失败返回 ``None``。"""
     try:
-        async with async_client(timeout=timeout, headers=headers) as client:
+        async with async_client(timeout=timeout, headers=headers, verify=verify) as client:
             response = await client.request(
                 method, url, params=params, data=data, json=json_body
             )
-            response.raise_for_status()
+            if not allow_http_error:
+                response.raise_for_status()
             return response.json()
     except Exception as exc:
-        logger.warning("HTTP JSON 请求失败 %s: %s", url, exc)
+        logger.warning("HTTP JSON 请求失败 %s: %s", redact_url(url), describe_http_error(exc)[0])
         return None

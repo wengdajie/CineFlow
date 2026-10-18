@@ -17,7 +17,7 @@ os.environ.update(
         "CF_STRM_DIR": str(TEST_ROOT / "strm"),
         "CF_PLUGIN_DIR": str(TEST_ROOT / "plugins"),
         "CF_SCHEDULER_ENABLED": "false",
-        "CF_SECRET_KEY": "test-secret",
+        "CF_SECRET_KEY": "test-only-signing-key-with-at-least-32-bytes",
         "CF_SUPERUSER": "admin",
         "CF_SUPERUSER_PASSWORD": "cineflow",
         "CF_MIN_FILE_SIZE_MB": "0",

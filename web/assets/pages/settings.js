@@ -601,13 +601,7 @@ async function pageSettings() {
             { key: "new_password", label: "新密码", type: "password", hint: "至少 6 位" },
           ],
           async (values) => {
-            await api(
-              "/auth/password?old_password=" +
-                encodeURIComponent(values.old_password) +
-                "&new_password=" +
-                encodeURIComponent(values.new_password),
-              { method: "POST" }
-            );
+            await api("/auth/password", { method: "POST", body: values });
             toast("密码已更新，请重新登录", "ok");
             setTimeout(() => logout(true), 800);
           },

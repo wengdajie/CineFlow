@@ -39,7 +39,7 @@ services:
       CF_SUPERUSER: admin
       CF_SUPERUSER_PASSWORD: cineflow
       # 请替换为随机字符串
-      CF_SECRET_KEY: please-change-this-to-a-random-string
+      CF_SECRET_KEY: ""  # 自动生成并保存在 /app/data/jwt-secret.txt
       CF_TMDB_API_KEY: ""
       CF_TRANSFER_MODE: link
       CF_SUBSCRIBE_INTERVAL_MINUTES: 30

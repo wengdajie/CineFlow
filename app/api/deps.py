@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from hmac import compare_digest
 from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException, status
@@ -31,8 +32,8 @@ def current_user(
 
     支持两种方式：JWT（Web 前端）与 ``X-API-Token``（脚本/插件调用）。
     """
-    if x_api_token and settings.API_TOKEN and x_api_token == settings.API_TOKEN:
-        user = session.query(User).filter(User.is_superuser.is_(True)).first()
+    if x_api_token and settings.API_TOKEN and compare_digest(x_api_token.encode(), settings.API_TOKEN.encode()):
+        user = session.query(User).filter(User.is_superuser.is_(True), User.is_active.is_(True)).first()
         if user:
             return user
 

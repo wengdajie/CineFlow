@@ -10,12 +10,18 @@ from logging.handlers import RotatingFileHandler
 from typing import Any
 
 from app.core.config import settings
+from app.core.secrets import redact_message
 
 _FORMAT = "%(asctime)s | %(levelname)-7s | %(name)-26s | %(message)s"
 _configured = False
 
 #: 最近日志环形缓冲，供 Web 控制台读取
 LOG_BUFFER: deque[dict[str, Any]] = deque(maxlen=1000)
+
+
+class SecretFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        return redact_message(super().format(record))
 
 
 class BufferHandler(logging.Handler):
@@ -28,7 +34,7 @@ class BufferHandler(logging.Handler):
                     "time": self.formatter.formatTime(record) if self.formatter else "",
                     "level": record.levelname,
                     "logger": record.name,
-                    "message": record.getMessage(),
+                    "message": redact_message(record.getMessage()),
                 }
             )
 
@@ -39,7 +45,7 @@ def setup_logging() -> None:
     if _configured:
         return
 
-    formatter = logging.Formatter(_FORMAT, datefmt="%Y-%m-%d %H:%M:%S")
+    formatter = SecretFormatter(_FORMAT, datefmt="%Y-%m-%d %H:%M:%S")
 
     stream = logging.StreamHandler(sys.stdout)
     stream.setFormatter(formatter)

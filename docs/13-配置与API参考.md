@@ -19,7 +19,7 @@ YAML 里的二级 key 会拍平成 `CF_<父>_<子>`，例如 `tmdb.api_key` → 
 |---|---|---|---|
 | 端口 | `CF_PORT` | `6060` | |
 | 管理员 | `CF_SUPERUSER` / `CF_SUPERUSER_PASSWORD` | `admin` / `cineflow` | 仅首次启动生效 |
-| 密钥 | `CF_SECRET_KEY` | — | **务必改成随机串** |
+| 密钥 | `CF_SECRET_KEY` | 自动生成 | 留空或使用内置公开占位串时，生成并持久化到 `CF_DATA_DIR/jwt-secret.txt`；自定义值应为随机串 |
 | 下载目录 | `CF_DOWNLOAD_DIR` | `/downloads` | 下载器落盘根目录 |
 | 媒体库目录 | `CF_LIBRARY_DIR` | `/library` | 整理入库根目录；`link` 模式下**必须与 `CF_DOWNLOAD_DIR` 同卷**，跨卷会静默降级为复制（ADR-96）|
 | 转移模式 | `CF_TRANSFER_MODE` | `link` | `link`/`copy`/`move`/`softlink`/`strm` |

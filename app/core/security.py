@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from jose import JWTError, jwt
+import jwt
+from jwt import InvalidTokenError
 
 from app.core.config import settings
 
@@ -17,9 +19,7 @@ _PBKDF2_ROUNDS = 180_000
 
 def hash_password(password: str) -> str:
     """PBKDF2-SHA256 口令散列（不依赖 bcrypt 的原生库）。"""
-    salt = hashlib.sha256(
-        f"{settings.SECRET_KEY}:{password}".encode()
-    ).hexdigest()[:16]
+    salt = secrets.token_hex(16)
     digest = hashlib.pbkdf2_hmac(
         "sha256", password.encode(), salt.encode(), _PBKDF2_ROUNDS
     ).hex()
@@ -28,16 +28,18 @@ def hash_password(password: str) -> str:
 
 def verify_password(password: str, hashed: str) -> bool:
     """校验口令。"""
+    if not isinstance(hashed, str):
+        return False
     try:
         algorithm, rounds, salt, digest = hashed.split("$")
-    except ValueError:
+        if algorithm != "pbkdf2_sha256" or int(rounds) <= 0:
+            return False
+        candidate = hashlib.pbkdf2_hmac(
+            "sha256", password.encode(), salt.encode(), int(rounds)
+        ).hex()
+        return hmac.compare_digest(candidate, digest)
+    except (ValueError, TypeError, OverflowError):
         return False
-    if algorithm != "pbkdf2_sha256":
-        return False
-    candidate = hashlib.pbkdf2_hmac(
-        "sha256", password.encode(), salt.encode(), int(rounds)
-    ).hex()
-    return hmac.compare_digest(candidate, digest)
 
 
 def create_access_token(
@@ -56,6 +58,6 @@ def create_access_token(
 def decode_access_token(token: str) -> dict[str, Any] | None:
     """解析 JWT，失败返回 ``None``。"""
     try:
-        return jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM])
-    except JWTError:
+        return jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM], options={"require": ["exp", "sub"]})
+    except InvalidTokenError:
         return None

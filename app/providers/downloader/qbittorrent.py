@@ -71,7 +71,7 @@ class QbittorrentDownloader(BaseDownloader):
             timeout=httpx.Timeout(self.config.get("timeout") or 20),
             headers=build_headers({"Referer": self.base_url}),
             follow_redirects=True,
-            verify=False,
+            verify=bool(self.option("verify_ssl", True)),
         )
         username = self.config.get("username") or ""
         password = self.config.get("password") or ""

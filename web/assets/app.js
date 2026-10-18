@@ -1,5 +1,6 @@
 import { ICONS, icon, el, fmtSize, fmtSpeed, fmtDuration, fmtCompact, baseName, fmtTime, pad2, fmtRelative, toast, STATUS_MAP, statusTag, typeLabel, typeIcon, kindLabel, SITE_STATUS, loading, emptyBox, table, segment, modal, panelModal, iconButton, statCard, heatCell, rankCell } from './ui.js';
 import { THEME_KEY, store, ROLE_LABEL, canDo } from './state.js';
+import { safeHref } from './ui.js';
 import { API, createApi } from './api.js';
 import { createSearchPage } from './pages/search.js';
 import { createSettingsPage } from './pages/settings.js';
@@ -748,7 +749,10 @@ import { createSettingsPage } from './pages/settings.js';
     if (!nodes.length) nodes.push(downloadButton(row, onDone));
     if (row.page_url) {
       nodes.push(
-        iconButton("详情页", "link", () => window.open(row.page_url, "_blank", "noopener"), "sm ghost")
+        iconButton("详情页", "link", () => {
+          const href = safeHref(row.page_url);
+          if (href) window.open(href, "_blank", "noopener");
+        }, "sm ghost")
       );
     }
     return el("div", { class: "row tight" }, nodes);
@@ -2758,12 +2762,14 @@ import { createSettingsPage } from './pages/settings.js';
   const KIND_LABELS = {
     indexer: "BT 索引器",
     pan: "网盘搜索",
+    panstorage: "网盘存储",
     mediaserver: "媒体服务器",
     notifier: "通知渠道",
     metadata: "元数据",
   };
 
   const KIND_ICONS = {
+    panstorage: "cloud",
     indexer: "search",
     pan: "cloud",
     mediaserver: "server",

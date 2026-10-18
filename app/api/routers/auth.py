@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Body, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 
 from app.api.deps import CurrentUser, DbSession, role_of
@@ -67,8 +67,8 @@ def me(user: CurrentUser) -> dict:
 def change_password(
     user: CurrentUser,
     session: DbSession,
-    old_password: str,
-    new_password: str,
+    old_password: Annotated[str, Body()],
+    new_password: Annotated[str, Body()],
 ) -> Message:
     if not verify_password(old_password, user.password_hash):
         raise HTTPException(status_code=400, detail="原密码不正确")

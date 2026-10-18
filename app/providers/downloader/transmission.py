@@ -70,7 +70,7 @@ class TransmissionDownloader(BaseDownloader):
             try:
                 async with httpx.AsyncClient(
                     timeout=httpx.Timeout(self.config.get("timeout") or 20),
-                    verify=False,
+                    verify=bool(self.option("verify_ssl", True)),
                 ) as client:
                     response = await client.post(
                         self.base_url, json=payload, headers=headers, auth=auth

@@ -118,7 +118,7 @@ class XunleiDownloader(BaseDownloader):
             timeout=httpx.Timeout(self.config.get("timeout") or 20),
             headers=build_headers(),
             follow_redirects=True,
-            verify=False,
+            verify=bool(self.option("verify_ssl", True)),
         )
 
     async def _pan_auth(self, client: httpx.AsyncClient) -> str:

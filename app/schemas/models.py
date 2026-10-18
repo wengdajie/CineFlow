@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.schemas.enums import MediaType, ProviderKind, SubscribeStatus, UserRole
 
@@ -169,6 +169,13 @@ class SiteUpdate(BaseModel):
     priority: int | None = None
     timeout: int | None = None
     options: dict[str, Any] | None = None
+
+    @field_validator("name", "url", "enabled", "priority", "timeout", "options", mode="before")
+    @classmethod
+    def required_when_provided(cls, value: Any) -> Any:
+        if value is None:
+            raise ValueError("该字段不能为 null，保持原值请省略字段")
+        return value
 
 
 class DiscoverProbe(BaseModel):

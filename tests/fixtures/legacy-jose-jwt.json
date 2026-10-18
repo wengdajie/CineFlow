@@ -1,0 +1,1 @@
+{"key": "review-only-legacy-signing-key-at-least-32-bytes", "payload": {"sub": "legacy-review-user", "exp": 4102444800, "role": "viewer"}, "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJsZWdhY3ktcmV2aWV3LXVzZXIiLCJleHAiOjQxMDI0NDQ4MDAsInJvbGUiOiJ2aWV3ZXIifQ.KaN-W25xzyIY_7Q9rpZ8eMh5Q5lqUMonjJSR_3F1_V4"}

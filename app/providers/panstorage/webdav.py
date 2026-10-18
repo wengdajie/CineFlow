@@ -93,7 +93,7 @@ class WebDavStorage(BasePanStorage):
         merged = {"Content-Type": 'application/xml; charset="utf-8"'}
         merged.update(headers or {})
         try:
-            async with async_client(timeout=30) as client:
+            async with async_client(timeout=30, verify=bool(self.option("verify_ssl", True))) as client:
                 response = await client.request(
                     method,
                     self._url_for(path),

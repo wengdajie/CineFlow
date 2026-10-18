@@ -9,6 +9,8 @@
 from __future__ import annotations
 
 import os
+import secrets
+import time
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -19,6 +21,27 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG_FILE = ROOT_DIR / "config" / "config.yaml"
+
+
+def _persistent_signing_key(directory: Path) -> str:
+    """首次启动生成本机密钥；重启复用，损坏时拒绝回退到公开密钥。"""
+    path = directory / "jwt-secret.txt"
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        for _ in range(10):
+            value = path.read_text(encoding="utf-8").strip()
+            if value:
+                if len(value.encode()) < 32:
+                    raise ValueError("本地 JWT 密钥文件无效，请恢复 data/jwt-secret.txt") from None
+                return value
+            time.sleep(0.05)
+        raise ValueError("本地 JWT 密钥文件为空，请恢复 data/jwt-secret.txt") from None
+    else:
+        value = secrets.token_urlsafe(48)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(value)
+        return value
 
 
 def _yaml_source() -> dict[str, Any]:
@@ -311,6 +334,8 @@ class Settings(BaseSettings):
             self.DATA_DIR / "cache",
         ):
             Path(directory).mkdir(parents=True, exist_ok=True)
+        if self.SECRET_KEY in ("", "cineflow-dev-secret-change-me", "please-change-this-to-a-random-string", "CHANGE_ME_RANDOM_STRING"):
+            object.__setattr__(self, "SECRET_KEY", _persistent_signing_key(Path(self.DATA_DIR)))
         if not self.DB_URL:
             db_path = Path(self.DATA_DIR) / "cineflow.db"
             object.__setattr__(self, "DB_URL", f"sqlite:///{db_path.as_posix()}")

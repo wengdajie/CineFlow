@@ -181,7 +181,7 @@ services:
       TZ: Asia/Shanghai
       CF_SUPERUSER: admin
       CF_SUPERUSER_PASSWORD: cineflow          # ← 登录后立刻改
-      CF_SECRET_KEY: CHANGE_ME_RANDOM_STRING   # ← 必改，见下方生成命令
+      CF_SECRET_KEY: ""   # 留空自动生成并保存在 data/jwt-secret.txt
       CF_TRANSFER_MODE: link                   # 跨存储空间就改 copy
       CF_SUBSCRIBE_INTERVAL_MINUTES: 30
     volumes:
@@ -502,7 +502,7 @@ docker compose -f docker-compose.fnos.yml up -d   # 切回官方镜像
 - [ ] `curl http://127.0.0.1:6060/api/health` → `status=ok` 且 **`scheduler=true`**
 - [ ] 浏览器能开 `http://<NAS内网IP>:6060`
 - [ ] **已修改默认密码** `admin/cineflow`
-- [ ] **`CF_SECRET_KEY` 已换成随机串**（不是 `CHANGE_ME_...`）
+- [ ] **`CF_SECRET_KEY` 留空自动生成，或已配置自己的随机串**；备份应包含 `data/jwt-secret.txt`
 - [ ] `PUID/PGID` 与 `id -u`/`id -g` 一致，fnOS 文件管理器里能正常删除新文件
 - [ ] `stat -c %d` 确认 downloads 与 media 同一存储空间（用 link 模式时）
 - [ ] 下载器地址用的是**服务名**（`http://qbittorrent:8080`），不是 `127.0.0.1`

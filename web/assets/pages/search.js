@@ -257,11 +257,11 @@ async function pageSearch() {
                       title: "作品",
                       render: (row) => {
                         const link = el("a", {
-                          href: "javascript:void(0)",
+                          href: "#search",
                           class: "truncate",
                           title: "点击搜索 " + row.title,
                           text: row.title,
-                          onclick: () => doSearch(row.title),
+                          onclick: (event) => { event.preventDefault(); doSearch(row.title); },
                         });
                         return el("div", {}, [
                           link,
