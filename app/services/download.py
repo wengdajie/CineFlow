@@ -21,14 +21,14 @@ from app.core.config import settings
 from app.core.logger import get_logger
 from app.core.meta import parse
 from app.db.base import utcnow
-from app.db.models import DownloadTask
+from app.db.models import DownloadTask, Subscribe
 from app.db.session import session_scope
 from app.providers.base import Resource
 from app.schemas.enums import EventType, NotifyLevel, ResourceKind, TaskStatus
 from app.services import download_routing
 from app.services import notify as notify_service
 from app.services import sites as site_service
-from app.utils.strings import format_size, truncate
+from app.utils.strings import format_size, safe_filename, truncate
 
 logger = get_logger(__name__)
 
@@ -176,6 +176,19 @@ async def _dispatch_download(
     target_path = _resolve_save_path(
         media_type, meta.get("title") or title, meta.get("season"), save_path
     )
+    if subscribe_id:
+        with session_scope() as session:
+            subscription = session.get(Subscribe, subscribe_id)
+            if subscription:
+                media_type = subscription.media_type
+                meta = {**meta, "media_type": media_type, "season": subscription.season}
+                custom = save_path or subscription.save_path
+                target = Path(_resolve_save_path(media_type, subscription.title, subscription.season, custom))
+                if not custom:
+                    target /= safe_filename(subscription.title)
+                    if media_type in ("tv", "anime"):
+                        target /= f"Season {subscription.season:02d}"
+                target_path = str(target)
 
     external_id: str | None = None
     downloader = None

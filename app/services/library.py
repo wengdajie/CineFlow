@@ -19,7 +19,7 @@ from app.core.organizer import (
     iter_media_files,
     transfer_directory,
 )
-from app.db.models import DownloadTask, LibraryFile, MediaItem, TransferRecord
+from app.db.models import DownloadTask, LibraryFile, MediaItem, Subscribe, TransferRecord
 from app.db.session import session_scope
 from app.schemas.enums import EventType, MediaType, NotifyLevel, TaskStatus
 from app.services import notify as notify_service
@@ -65,11 +65,18 @@ async def transfer_completed_tasks() -> dict[str, int]:
                 )
             ).scalars()
         )
+        subscriptions = {
+            item.id: item
+            for item in session.execute(
+                select(Subscribe).where(Subscribe.id.in_({t.subscribe_id for t in tasks if t.subscribe_id}))
+            ).scalars()
+        }
         snapshots = [
             {
                 "id": task.id,
-                "title": task.title,
-                "season": task.season,
+                "title": subscriptions[task.subscribe_id].title if task.subscribe_id in subscriptions else task.title,
+                "season": subscriptions[task.subscribe_id].season if task.subscribe_id in subscriptions else task.season,
+                "year": subscriptions[task.subscribe_id].year if task.subscribe_id in subscriptions else None,
                 "media_type": task.media_type,
                 "subscribe_id": task.subscribe_id,
                 "content_path": (task.meta or {}).get("content_path") or task.save_path,
@@ -107,6 +114,9 @@ async def transfer_completed_tasks() -> dict[str, int]:
             continue
 
         info = parse(snapshot["title"])
+        if snapshot["subscribe_id"] in subscriptions:
+            info.title = snapshot["title"]
+            info.year = snapshot["year"] or info.year
         season = snapshot["season"] if snapshot["season"] is not None else info.season
         results = transfer_directory(
             source, title=info.title or None, season=season, year=info.year
