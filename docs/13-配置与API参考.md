@@ -107,7 +107,7 @@ curl -X POST -H "X-API-Token: your-token" \
      http://127.0.0.1:6060/api/v1/subscribes/run-all
 ```
 
-主要端点分组（共 181 个端点）：
+主要端点分组（当前数量见 [项目事实](project-facts.md)）：
 
 | 前缀 | 用途 |
 |---|---|
@@ -161,9 +161,9 @@ cineflow/
 │   ├── schemas/       enums models
 │   ├── utils/         http strings
 │   └── main.py        应用入口（lifespan / CORS / 静态资源）
-├── web/               index.html + assets/(app.js style.css)  ← 零依赖前端
+├── web/               index.html + assets/(app.js api.js state.js ui.js pages/ style.css)  ← 零依赖前端
 ├── plugins/           auto_cleanup pan_transfer daily_digest  ← 示例插件
-├── tests/             59 个测试文件（含 test_library_ops.py：本地文件操作与越界防护；
+├── tests/             行为回归测试（含 test_library_ops.py：本地文件操作与越界防护；
 │                       test_baidu_openapi_storage.py：僵尸站点不变式）
 ├── scripts/           smoke_test / ui_check / demo_pipeline 验证脚本
 ├── docs/              16 篇维护文档（现状/架构/路线图/决策/运维/站点接入/变更日志/竞品对标…）
@@ -175,3 +175,14 @@ cineflow/
 ```
 
 ---
+
+
+## 调度与播放链接兼容
+
+周期类配置仍可通过旧设置 API 提交，但只写入 `schedules`；设置页显示当前生效值并链接到定时任务页。升级时已有 `schedules` 优先，冲突旧值归档在 `legacy_schedule_config`，不再双写。
+
+- `GET /api/v1/strm/play/{record_id}?token=...`：校验记录专属播放凭据后 302 换链；无凭据或错误凭据返回 404。
+- `POST /api/v1/strm/rewrite`：操作员及以上重写已有 proxy STRM，无需扫描网盘。
+- `POST /api/v1/strm/rewrite?rotate=true`：轮换凭据并重写链接，旧链接随即失效。
+
+中断的自动下载占位显示为 `submitting`（投递待确认），不自动重发。核对下载器后可通过原有删除任务接口移除占位，再执行重试。

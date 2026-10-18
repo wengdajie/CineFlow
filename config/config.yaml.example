@@ -79,14 +79,6 @@ metadata_cache_ttl: 43200          # 元数据缓存秒数（12 小时）
 # ---------- 网络 ----------
 http_proxy: ""                     # 例如 http://127.0.0.1:7890
 
-# ---------- 刮削（NFO + 图片）----------
-# 入库后自动写 NFO，媒体服务器不用自己猜（对国产剧/冷门片提升明显）
-scrape_enabled: true
-scrape_images: true
-scrape_overwrite: false            # 默认不覆盖：手工修过的 NFO 不能被冲掉
-scrape_cron: "30 4 * * *"          # 定时补刮历史缺 NFO 的文件
-scrape_batch: 200                  # 单次最多处理多少个文件
-
 # ---------- 分类归档（可选）----------
 # 开启后在媒体库下再分「电影/电视剧/动漫/纪录片/综艺/儿童」二级目录。
 # 判定不出来的**不归档**（宁可不分类也不要归错，归错要手动挪回成百文件）。
@@ -124,10 +116,6 @@ site_auto_disable: false           # 连续失败自动停用站点（默认关�
 # priority / least_tasks / round_robin
 downloader_strategy: "priority"
 downloader_failover: true          # 投递失败自动换下一个下载器
-
-# ---------- 榜单自动订阅（v1.5.0）----------
-ranking_interval_minutes: 720
-ranking_max_per_run: 5             # 单次最多新建多少订阅（硬上限）
 
 # ---------- RSS 追新（v1.18.0）----------
 # 「RSS 追新」页里贴的 RSS 地址由这组参数控制巡检节奏。

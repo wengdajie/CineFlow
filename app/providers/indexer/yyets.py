@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from app.core.logger import get_logger
@@ -112,7 +112,7 @@ class YyetsProvider(SearchProvider):
                     published = None
                     if stamp.isdigit():
                         try:
-                            published = datetime.fromtimestamp(int(stamp), tz=UTC)
+                            published = datetime.fromtimestamp(int(stamp), tz=timezone.utc)
                         except (OSError, ValueError, OverflowError):
                             published = None
                     for item in entry.get("files") or []:

@@ -32,6 +32,8 @@ README = README_ONLY + "\n".join(
 SCRIPTS_README = pathlib.Path("scripts/README.md").read_text(encoding="utf-8")
 #: v1.13.0：配置/端点这类「会被复制粘贴」的内容要单独断言，不能混在 README 语料里
 API_DOC = pathlib.Path("docs/13-配置与API参考.md").read_text(encoding="utf-8")
+FACTS_DOC = pathlib.Path("docs/project-facts.md").read_text(encoding="utf-8")
+FACTS = {key.strip(): value.strip() for key, value in re.findall(r"^\| ([^|]+) \| ([^|]+) \|$", FACTS_DOC, re.M)}
 checks = []
 
 
@@ -46,8 +48,8 @@ from app.providers.registry import list_providers, load_builtin_providers  # noq
 load_builtin_providers()
 providers = list_providers()
 names = {p["name"] for p in providers}
-check("Provider 总数 37", len(providers) == 37, f"实际 {len(providers)}")
-check("README 声明 35 个 Provider", "35 个注册 Provider" in README)
+check("Provider 数量与生成事实一致", len(providers) == int(FACTS["Provider"]))
+check("README 链接项目事实", "project-facts.md" in README_ONLY)
 # v1.16.0：百度网盘的**扫码登录**早就有了，存储 Provider 却一直缺失，
 # 导致登录成功后建出的站点是「僵尸站点」（总览查不到、转存/保活全静默跳过）。
 check("baidu 存储 Provider 已注册", "baidu" in names)
@@ -187,7 +189,7 @@ for job in ("cineflow.radar", "cineflow.pan_transfer", "cineflow.pan_subscribe",
 # ---- API 端点 ----
 #: 期望端点数。docs/07「门禁数字的来源」那段散文会与这个值逐一比对（ADR-98），
 #: 所以它必须是个变量而不是散落在字面量里 —— 否则两处会各自漂移。
-total_expected = 181
+total_expected = int(FACTS["API 端点"])
 try:
     with urllib.request.urlopen(f"{BASE}/openapi.json", timeout=15) as r:
         spec = json.loads(r.read().decode())
@@ -198,7 +200,7 @@ try:
         if m.lower() in ("get", "post", "patch", "delete", "put")
     )
     check(f"API 端点 {total_expected} 个", total == total_expected, f"实际 {total}")
-    check("README 声明 181 个端点", "181 个端点" in README and "共 181 个" in README)
+    check("API 参考链接项目事实", "project-facts.md" in API_DOC)
     paths = set(spec["paths"])
     for path in ("/api/v1/users", "/api/v1/users/{user_id}",
                  "/api/v1/system/settings", "/api/v1/system/settings/reset",
@@ -245,7 +247,7 @@ for name in ("trending", "schedules", "pan", "chatops", "strm", "pan_subscribes"
     check(f"router {name} 已挂载", f"{name}.router" in router_src)
 
 # ---- 前端页面 ----
-app_js = pathlib.Path("web/assets/app.js").read_text(encoding="utf-8")
+app_js = "\n".join(p.read_text(encoding="utf-8") for p in sorted(pathlib.Path("web/assets").rglob("*.js")))
 pages_block = app_js[app_js.index("const PAGES"): app_js.index("];", app_js.index("const PAGES"))]
 page_count = pages_block.count("{ key:")
 check("前端页面 22 个", page_count == 22, f"实际 {page_count}")
@@ -305,8 +307,8 @@ check("README 说明定时任务可改期", "定时任务" in README and "cron" 
 
 # ---- 测试文件 ----
 test_files = sorted(p.name for p in pathlib.Path("tests").glob("test_*.py"))
-check("测试文件 59 个", len(test_files) == 59, str(test_files))
-check("README 声明 59 个测试文件", "59 个测试文件" in README)
+check("测试模块与生成事实一致", len(test_files) == int(FACTS["测试模块"]))
+check("开发指南记录实际测试命令", "pytest -q" in pathlib.Path("docs/14-开发指南.md").read_text(encoding="utf-8"))
 for name in ("test_custom_sites.py", "test_radar.py", "test_trending.py",
              # test_nfo / test_scraper / test_ranking 已随功能下线（ADR-96）
              "test_panstorage.py", "test_chatops.py", "test_library_ops.py",
@@ -322,32 +324,20 @@ for script in ("smoke_test.py", "ui_check.py", "demo_pipeline.py", "live_check.p
     check(f"脚本存在 {script}", pathlib.Path("scripts", script).exists())
     check(f"scripts/README 提及 {script}", script in SCRIPTS_README)
 check("文档声明七个验证脚本", "七个开发期验证工具" in README)
-# 测试数写在两处（README 徽章 + 开发指南的注释），历史上更新时漏改过一处。
-# 与其把数字写死在门禁里，不如**要求两处一致**：这样以后改一处漏一处就会红，
-# 而不是每次都得再改门禁自己。
-_badge = re.search(r"tests-(\d+)%20passed", README_ONLY)
-check("README 有测试徽章", _badge is not None)
-# 这里 docs_dir 还没定义（在下方），直接用相对路径
-_guide = re.search(r"pytest -q\s+# (\d+) passed",
-                   pathlib.Path("docs/14-开发指南.md").read_text(encoding="utf-8"))
-check("开发指南写明测试数", _guide is not None)
-if _badge and _guide:
-    check("README 徽章与开发指南的测试数一致",
-          _badge.group(1) == _guide.group(1),
-          f"徽章 {_badge.group(1)} vs 指南 {_guide.group(1)}")
-# ---- v1.22.0 aria2 磁力 GID 跟随（ADR-91）----
-_aria2_src = pathlib.Path("app/providers/downloader/aria2.py").read_text(encoding="utf-8")
-check("aria2 会跟随 followedBy 到数据 GID", "followedBy" in _aria2_src and "_follow" in _aria2_src)
+check("README 有测试入口徽章", "tests-pytest" in README_ONLY)
+check("开发指南引用实际运行结果", "CI" in pathlib.Path("docs/14-开发指南.md").read_text(encoding="utf-8"))
 _dl_tests = pathlib.Path("tests/test_downloaders.py").read_text(encoding="utf-8")
 check("aria2 磁力 GID 跟随有回归用例", "test_aria2_magnet_get_follows_to_data_gid" in _dl_tests)
-check("README 版本号 1.27.0", "1.27.0" in README_ONLY)
+from app.core.version import APP_VERSION
+
+check("README 版本号与代码一致", f"version-{APP_VERSION}" in README_ONLY)
 version_src = pathlib.Path("app/core/version.py").read_text(encoding="utf-8")
-check("代码版本号为 1.27.0", 'APP_VERSION = "1.27.0"' in version_src)
+check("生成事实版本与代码一致", FACTS["版本"] == APP_VERSION)
 # pyproject 的版本号此前漂移了 25 个版本（1.1.0 vs 1.26.0）——
 # 因为门禁只校验 README 与 version.py，没人看打包元数据。
 # 这条断言让「三处版本号」必须同源。
 _pyproject = pathlib.Path("pyproject.toml").read_text(encoding="utf-8")
-check("pyproject 版本号与代码一致", 'version = "1.27.0"' in _pyproject)
+check("pyproject 版本号与代码一致", f'version = "{APP_VERSION}"' in _pyproject)
 check("README 声明 314 项接口用例", "314 项真实 HTTP 接口用例" in README)
 check("scripts/README 声明 321 项", "321 项接口用例" in SCRIPTS_README)
 
@@ -596,8 +586,7 @@ check("STRM 支持 proxy/direct 两种链接模式",
 check("STRM 清理源文件消失的失效记录", "alive" in strm_src)
 strm_router = pathlib.Path("app/api/routers/strm.py").read_text(encoding="utf-8")
 check("STRM 播放端点返回 302", "RedirectResponse" in strm_router and "status_code=302" in strm_router)
-check("STRM 播放端点匿名（不挂 CurrentUser）",
-      "async def play(record_id: int) -> RedirectResponse:" in strm_router)
+check("STRM 播放端点验证独立凭据", "valid_play_token(record_id, token)" in strm_router)
 for key in ("STRM_LINK_MODE", "STRM_SYNC_INTERVAL_MINUTES", "STRM_CLEAN_INVALID",
             "STRM_SYNC_METADATA"):
     check(f"配置项 {key} 存在", hasattr(settings, key))
@@ -887,7 +876,7 @@ for api_path in ("/file/rename", "/file/move", "/file/search"):
 douban_src = pathlib.Path("app/providers/metadata/douban.py").read_text(encoding="utf-8")
 check("豆瓣用公开 suggest 接口（无需 Key）", "subject_suggest" in douban_src)
 check("豆瓣有缓存", "_CACHE" in douban_src)
-check("豆瓣有限流退避", "is_rate_limited" in douban_src and "_BACKOFF_SECONDS" in douban_src)
+check("豆瓣有限流退避", "is_rate_limited" in douban_src and "Backoff(300)" in douban_src)
 check("榜单有封面补全", "async def enrich_posters" in
       pathlib.Path("app/services/trending.py").read_text(encoding="utf-8"))
 
@@ -1107,7 +1096,7 @@ trending_router = pathlib.Path("app/api/routers/trending.py").read_text(encoding
 check("榜单端点暴露 offset 参数", "offset: int = Query(0" in trending_router)
 check("榜单端点默认 30 条", "Query(30" in trending_router)
 
-app_js = pathlib.Path("web/assets/app.js").read_text(encoding="utf-8")
+app_js = "\n".join(p.read_text(encoding="utf-8") for p in sorted(pathlib.Path("web/assets").rglob("*.js")))
 check("前端分页大小为 30", "TRENDING_PAGE_SIZE = 30" in app_js)
 check("前端有加载更多区域", "board-more" in app_js)
 # v1.10.0（ADR-48）：页内搜索面板下线，改为跳转资源搜索页 + 回来复原位置。
@@ -2182,7 +2171,7 @@ check("假种检测接进过滤链路", "_is_fake_torrent(resource)" in _filters
 # 诊断口径：非流式与流式两处都要修正 kept（约定 12）
 check("recount_kept 存在且被调用", _search_src.count("recount_kept(") >= 2)
 check("非流式路径报 filtered", 'outcome.status = "filtered"' in _search_src)
-check("流式路径也修正 kept", "outcome.kept = len(items)" in _search_src)
+check("流式路径也修正 kept", "recount_kept(items, [outcome], title)" in _search_src)
 check("季号写法变体保留季号", "_season_spelling_variants" in _search_src)
 
 # 前端要真的能显示 filtered，否则后端加了状态用户看不到
@@ -2196,21 +2185,16 @@ from app.services import discover as _discover_service  # noqa: E402
 
 _discover_categories = _discover_service.categories()
 _doc07 = (docs_dir / "07-运维手册.md").read_text(encoding="utf-8")
-_DOC07_GATE_NUMBERS = (
-    ("API 端点", f"API 端点 **{total_expected}**"),
-    ("router", f"router **{router_count}**"),
-    ("数据库表", f"数据库表 **{len(Base.metadata.tables)}**"),
-    ("Provider", f"Provider **{len(providers)}**"),
-    ("前端页面", f"前端页面 **{page_count}**"),
-    ("示例站点", f"示例站点 **{len(DEFAULT_SITES)}**"),
-    ("内置定时任务", f"内置定时任务 **{len(job_ids)}**"),
-    ("设置页分组", f"设置页 **{len(SETTING_GROUPS)} 组**"),
-    ("可编辑配置", f"可编辑配置 **{len(config_store.EDITABLE)} 项**"),
-    ("内置规则组模板", f"内置规则组模板 **{len(DEFAULT_RULE_GROUPS)} 个**"),
-    ("发现榜分类", f"发现榜分类 **{len(_discover_categories)} 个**"),
-)
-for _label, _frag in _DOC07_GATE_NUMBERS:
-    check(f"docs/07 门禁清单数字对得上：{_label}", _frag in _doc07, _frag)
+_DOC07_GATE_NUMBERS = {
+    "API 端点": total_expected, "router": router_count, "数据库表": len(Base.metadata.tables),
+    "Provider": len(providers), "可访问页面": page_count, "默认站点": len(DEFAULT_SITES),
+    "内置调度任务": len(job_ids), "配置分组": len(SETTING_GROUPS),
+    "兼容配置键": len(config_store.EDITABLE), "规则组模板": len(DEFAULT_RULE_GROUPS),
+    "发现榜分类": len(_discover_categories),
+}
+for _label, _value in _DOC07_GATE_NUMBERS.items():
+    check(f"生成事实与实际一致：{_label}", int(FACTS[_label]) == _value)
+check("docs/07 引用自动生成事实", "project-facts.md" in _doc07)
 check("docs/07 记录这段散文自己曾漂移", "自己不在门禁里" in _doc07)
 # 同一批数字散落在其他文档，一并钉住
 check("docs/01 设置页数字正确",

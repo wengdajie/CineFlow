@@ -192,7 +192,7 @@ class BilibiliSearchProvider(_WebVideoProvider):
         return headers
 
     async def _do_search(self, keyword: str) -> list[dict[str, Any]] | None:
-        from datetime import UTC, datetime
+        from datetime import datetime, timezone
 
         rows: list[dict[str, Any]] = []
         async with async_client(timeout=self.config.get("timeout") or 20) as client:
@@ -248,7 +248,7 @@ class BilibiliSearchProvider(_WebVideoProvider):
                     "duration": parse_duration(item.get("duration") or ""),
                     "play_count": int(item.get("play") or 0),
                     "publish_at": (
-                        datetime.fromtimestamp(stamp, tz=UTC) if stamp > 0 else None
+                        datetime.fromtimestamp(stamp, tz=timezone.utc) if stamp > 0 else None
                     ),
                 }
             )

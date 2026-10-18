@@ -25,3 +25,10 @@ python -m app.main
 pip install playwright
 python -m playwright install chromium
 ```
+
+
+## 当前事实与模块检查
+
+`python scripts/project_facts.py --write` 从实际模型/路由/注册表生成 `docs/project-facts.md`；`--check` 可离线运行，且使用临时配置，避免接触用户数据库。
+`node scripts/check_frontend.mjs` 校验原生 JavaScript 模块及导入路径，无需安装 Node 项目依赖。
+`verify_docs.py` 保留历史功能约定检查；新增数量口径统一引用自动生成事实，不再另设常量。

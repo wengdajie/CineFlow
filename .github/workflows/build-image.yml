@@ -5,13 +5,42 @@ name: build-image
 
 # 加引号：YAML 1.1 把裸 on 当布尔，键名会变成 True，yq/actionlint 读不到
 "on":
+  pull_request:
+    branches: [main]
   push:
     branches: [main]
     tags: ["v*"]
   workflow_dispatch:
 
 jobs:
+  quality:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: requirements-dev.lock
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install locked dependencies
+        run: python -m pip install --quiet -r requirements-dev.lock
+      - name: Lint
+        run: python -m ruff check app plugins tests scripts/project_facts.py
+      - name: Frontend modules
+        run: node scripts/check_frontend.mjs
+      - name: Tests
+        run: python -m pytest --disable-warnings
+      - name: Documentation facts
+        run: python scripts/project_facts.py --check
   build:
+    needs: quality
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read

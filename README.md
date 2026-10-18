@@ -27,8 +27,8 @@
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)](#-docker-部署推荐)
-[![Tests](https://img.shields.io/badge/tests-1658%20passed-brightgreen)](docs/14-开发指南.md)
-[![Version](https://img.shields.io/badge/version-1.27.0-blue)](docs/08-变更日志.md)
+[![Tests](https://img.shields.io/badge/tests-pytest-brightgreen)](docs/14-开发指南.md)
+[![Version](https://img.shields.io/badge/version-1.28.2-blue)](docs/08-变更日志.md)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 </div>
@@ -122,6 +122,12 @@ CineFlow 是一个**从零实现**的 NAS 影视自动化项目，设计上参�
 > 📖 **每一项的完整说明、字段解释与实现细节** → **[docs/12-功能特性详解.md](docs/12-功能特性详解.md)**
 
 ---
+
+## 本轮精简与升级
+
+本轮保留现有功能，修复 STRM 清理、播放凭据、洗版与并发投递的一致性，统一调度配置，拆分原生前端模块并收敛导航。
+升级前请阅读 [精简优化与升级说明](docs/16-精简优化与升级说明.md)，尤其是旧 STRM 播放链接的重写步骤。
+当前端点、Provider、页面等数量由代码生成，统一见 [项目事实](docs/project-facts.md)。
 
 ## 📚 文档
 

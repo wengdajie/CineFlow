@@ -36,7 +36,7 @@ import json
 import re
 import time
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
 
@@ -66,7 +66,7 @@ SEARCHABLE_CATEGORIES = ("magnet_search", "cloud_search")
 
 #: 本地缓存（离线可用 + 避免每次开页面都打上游）
 CACHE_FILE = settings.DATA_DIR / "zhuiju_catalog.json"
-#: 缓存有效期：上游每天 01:00 (UTC+8) 跑一次检测，12 小时足够
+#: 缓存有效期：上游每天 01:00 (timezone.utc+8) 跑一次检测，12 小时足够
 CACHE_TTL = 12 * 3600
 
 #: 网盘分享链接特征（判定 cloud_search 站是否真的产出可转存链接）
@@ -253,7 +253,7 @@ async def refresh(force: bool = False) -> dict[str, Any]:
 
     payload = {
         "fetched_at": time.time(),
-        "updated_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "upstream_updated_at": str((resources or {}).get("updated_at") or ""),
         "upstream_generated_at": str((availability or {}).get("generated_at") or ""),
         "count": len(entries),
@@ -410,7 +410,7 @@ async def probe_all(limit: int = 0, only_unknown: bool = False) -> dict[str, Any
         if result.get("search_url"):
             entry["search_url"] = result["search_url"]
 
-    payload = {**data, "entries": entries, "probed_at": datetime.now(UTC).isoformat(timespec="seconds")}
+    payload = {**data, "entries": entries, "probed_at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
     payload.pop("stale", None)
     payload.pop("from_cache", None)
     _save_cache(payload)
