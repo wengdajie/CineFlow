@@ -14,10 +14,12 @@ yt-dlp 根本下不了磁力，任务却被标成"正在下载"，用户得等�
 
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import select
 
+from app.core.exceptions import DownloadRejected
 from app.db.models import SiteConfig
 from app.db.session import session_scope
 from app.schemas.enums import ProviderKind, ResourceKind, TaskStatus
@@ -224,23 +226,21 @@ class TestAddDownloadRouting:
         assert "aria2" in (task.error or "")
 
     def test_网盘任务不再空着pending(self, client, only_downloader):
-        """既没网盘账号也没 aria2 时，任务永远走不完，必须写清下一步。"""
+        """缺账号的网盘资源直接拒绝，不生成等待任务。"""
+        from app.db.models import DownloadTask
+
         only_downloader("qbittorrent")
-        task = asyncio.run(
-            download_service.add_download(
-                {
-                    "title": "某网盘资源",
-                    "link": "https://pan.quark.cn/s/abcdef123456",
-                    "kind": ResourceKind.PAN.value,
-                    "site": "PanSou",
-                },
-                notify=False,
+        with session_scope() as session:
+            before = session.query(DownloadTask).count()
+        with pytest.raises(DownloadRejected, match="账号"):
+            asyncio.run(
+                download_service.add_download(
+                    {"title": "test", "link": "https://pan.quark.cn/s/test", "kind": "pan"},
+                    notify=False,
+                )
             )
-        )
-        assert task is not None
-        assert task.status == TaskStatus.PENDING.value
-        assert task.error, "pending 却没有任何说明，界面上就是一片空白"
-        assert "账号" in task.error
+        with session_scope() as session:
+            assert session.query(DownloadTask).count() == before
 
 
 class TestRoutingEndpoint:
@@ -428,7 +428,12 @@ def test_add_download_pan_actually_calls_landing(monkeypatch, client):
 
     async def fake_land(pan_result, save_path, downloader_name):
         calls.append({"pan_result": pan_result, "save_path": save_path})
-        return {"skipped": True}
+        return {
+            "success": True,
+            "downloader": SimpleNamespace(site_name="fake aria2"),
+            "external_id": "accepted",
+            "external_ids": ["accepted"],
+        }
 
     monkeypatch.setattr(download_service, "_try_auto_save_pan", fake_save)
     monkeypatch.setattr(download_service, "_land_pan_to_local", fake_land)
@@ -450,33 +455,34 @@ def test_add_download_pan_actually_calls_landing(monkeypatch, client):
 
 
 def test_pan_landing_failure_waits_for_retry_without_claiming_local_completion(monkeypatch, client):
-    """云端转存成功、本地下载失败，必须保持待处理并保留转存位置。"""
+    """云端操作结果仍由转存记录保存，本地未投递不留下下载队列。"""
+    from app.db.models import DownloadTask
 
-    async def fake_save(link, resource):
-        return {"success": True, "storage": "假百度", "site_id": 7, "saved_path": "/x.mkv"}
+    async def save(*args):
+        return {"success": True, "site_id": 7, "saved_path": "/x.mkv"}
 
-    async def fake_land(pan_result, save_path, downloader_name):
-        return {"success": False, "message": "直链投递失败 → 假 aria2: 拒绝或超时"}
+    async def land(result, *args):
+        assert result["saved_path"] == "/x.mkv"
+        return {"success": False, "message": "假 aria2: 拒绝或超时"}
 
-    monkeypatch.setattr(download_service, "_try_auto_save_pan", fake_save)
-    monkeypatch.setattr(download_service, "_land_pan_to_local", fake_land)
-
-    task = asyncio.run(
-        download_service.add_download(
-            {
-                "title": "某电影 (2020)",
-                "link": "https://pan.baidu.com/s/1abcdefg",
-                "kind": ResourceKind.PAN.value,
-                "pan_mode": "save_then_download",
-            },
-            notify=False,
+    monkeypatch.setattr(download_service, "_try_auto_save_pan", save)
+    monkeypatch.setattr(download_service, "_land_pan_to_local", land)
+    with session_scope() as session:
+        before = session.query(DownloadTask).count()
+    with pytest.raises(DownloadRejected, match="假 aria2"):
+        asyncio.run(
+            download_service.add_download(
+                {
+                    "title": "test",
+                    "link": "https://pan.baidu.com/s/test",
+                    "kind": "pan",
+                    "pan_mode": "save_then_download",
+                },
+                notify=False,
+            )
         )
-    )
-    assert task is not None
-    assert task.status == TaskStatus.PENDING.value
-    assert task.meta["pan_storage_id"] == 7
-    assert task.meta["saved_path"] == "/x.mkv"
-    assert task.error and "假 aria2" in task.error, f"落地失败的原因没落到界面上：{task.error}"
+    with session_scope() as session:
+        assert session.query(DownloadTask).count() == before
 
 
 def test_subscribe_does_not_requeue_same_link(monkeypatch, client):
@@ -490,7 +496,12 @@ def test_subscribe_does_not_requeue_same_link(monkeypatch, client):
         return {"success": True, "storage": "假百度", "site_id": 7, "saved_path": "/x.mkv"}
 
     async def fake_land(pan_result, save_path, downloader_name):
-        return {"skipped": True}
+        return {
+            "success": True,
+            "downloader": SimpleNamespace(site_name="fake aria2"),
+            "external_id": "accepted",
+            "external_ids": ["accepted"],
+        }
 
     monkeypatch.setattr(download_service, "_try_auto_save_pan", fake_save)
     monkeypatch.setattr(download_service, "_land_pan_to_local", fake_land)
@@ -509,6 +520,7 @@ def test_subscribe_does_not_requeue_same_link(monkeypatch, client):
         "title": "喜剧之王单口季 第三季 EP01",
         "link": "https://pan.baidu.com/s/1dedupe-check",
         "kind": ResourceKind.PAN.value,
+        "pan_mode": "save_then_download",
     }
     first = asyncio.run(
         download_service.add_download(resource, subscribe_id=subscribe_id, notify=False)
@@ -532,7 +544,12 @@ def test_manual_add_is_not_blocked_by_dedupe(monkeypatch, client):
         return {"success": True, "storage": "假百度", "site_id": 7, "saved_path": "/y.mkv"}
 
     async def fake_land(pan_result, save_path, downloader_name):
-        return {"skipped": True}
+        return {
+            "success": True,
+            "downloader": SimpleNamespace(site_name="fake aria2"),
+            "external_id": "accepted",
+            "external_ids": ["accepted"],
+        }
 
     monkeypatch.setattr(download_service, "_try_auto_save_pan", fake_save)
     monkeypatch.setattr(download_service, "_land_pan_to_local", fake_land)
@@ -541,6 +558,7 @@ def test_manual_add_is_not_blocked_by_dedupe(monkeypatch, client):
         "title": "手动重下的片子",
         "link": "https://pan.baidu.com/s/1manual-retry",
         "kind": ResourceKind.PAN.value,
+        "pan_mode": "save_then_download",
     }
     first = asyncio.run(download_service.add_download(resource, notify=False))
     second = asyncio.run(download_service.add_download(resource, notify=False))

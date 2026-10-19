@@ -17,7 +17,7 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.core.config import settings
-from app.core.exceptions import ProviderError
+from app.core.exceptions import DownloadRejected, ProviderError
 from app.core.logger import get_logger
 from app.core.meta import parse
 from app.core.pan_links import PAN_LABELS, pan_family
@@ -122,6 +122,7 @@ async def add_download(
             session.add(claim)
             session.flush()
             reserved_id = claim.id
+            reserved_at = claim.created_at
     except IntegrityError:
         return None
     try:
@@ -134,6 +135,12 @@ async def add_download(
             video_format=video_format,
             reserved_id=reserved_id,
         )
+    except DownloadRejected:
+        with session_scope() as session:
+            claim = session.get(DownloadTask, reserved_id)
+            if claim and claim.status == TaskStatus.SUBMITTING.value and not claim.external_id and claim.created_at.replace(tzinfo=None) == reserved_at.replace(tzinfo=None):
+                session.delete(claim)
+        raise
     except asyncio.CancelledError:
         raise  # 保留占位：外部服务可能已接受，自动重发可能重复下载
     except Exception as exc:
@@ -291,6 +298,11 @@ async def _dispatch_download(
                     downloader = landed.get("downloader")
                     external_id = landed.get("external_id")
                     status = TaskStatus.DOWNLOADING.value
+                elif landed.get("uncertain"):
+                    downloader = landed["downloader"]
+                    external_id = landed["external_ids"][0]
+                    status = TaskStatus.SUBMITTING.value
+                    error = landed["message"]
                 else:
                     # 云端转存不等于本地下载成功，保留结果供核对并明确报告失败。
                     error = str(landed.get("message") or "")[:500] or None
@@ -302,6 +314,9 @@ async def _dispatch_download(
             # 这里必须把【下一步该做什么】写进 error，否则任务就这么
             # pending 着，界面上一片空白，用户根本不知道在等什么。
             error = download_routing.pan_pending_hint() or None
+
+    if kind == ResourceKind.PAN.value and not external_id:
+        raise DownloadRejected(error or "网盘资源尚未具备下载条件，请检查账号和 aria2 后重试")
 
     with session_scope() as session:
         values = {
@@ -458,8 +473,15 @@ async def _land_pan_to_local(
                 "external_id": ids[0],
                 "external_ids": ids,
             }
+        withdrawn = []
         for gid in ids:
-            await candidate.remove(gid, delete_files=False)
+            try:
+                withdrawn.append(await candidate.remove(gid, delete_files=False))
+            except Exception:
+                withdrawn.append(False)
+        if not all(withdrawn):
+            return {"success": False, "uncertain": True, "downloader": candidate, "external_ids": ids,
+                    "message": "部分文件已提交，但下载器未确认撤回；请核对 aria2，暂勿重复下载"}
     return {
         "success": False,
         "message": "直链投递失败 → " + "；".join(attempts),

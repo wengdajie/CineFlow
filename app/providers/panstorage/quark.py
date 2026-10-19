@@ -118,7 +118,8 @@ class QuarkStorage(BasePanStorage):
             self._last_error = "夸克接口请求失败，请检查网络或稍后重试"
             return None
         if payload.get("code") not in (0, 200, None) or int(payload.get("status") or 0) >= 400:
-            self._last_error = str(payload.get("message") or "夸克拒绝了请求")[:300] + f"（code={payload.get('code')}）"
+            message = "夸克网盘空间不足，请清理空间或增加容量后重试" if payload.get("code") == 32003 else str(payload.get("message") or "夸克拒绝了请求")[:300]
+            self._last_error = message + f"（code={payload.get('code')}）"
             logger.warning("夸克 %s 返回 %s: %s", path, payload.get("code"), payload.get("message"))
             return None
         # 直链与 API 当次刷新的凭据配套，继续使用旧 __puus 会导致 CDN 403。
@@ -447,7 +448,7 @@ class QuarkStorage(BasePanStorage):
         if not ok:
             return SaveResult(
                 False,
-                f"转存已提交但未确认完成（task {task_id}），请稍后在网盘中确认",
+                f"转存未完成：{self._last_error}（task {task_id}）" if self._last_error else f"转存仍在处理中（task {task_id}），请先在网盘确认，避免重复转存",
                 file_count=len(fid_list),
             )
         # 只返回本次生成的文件/目录，不能把整个网盘根目录交给下载器。
@@ -499,18 +500,22 @@ class QuarkStorage(BasePanStorage):
             share_id, stoken, fid_list, token_list, target_dir
         )
 
-    async def _wait_task(self, task_id: str, *, retries: int = 10) -> bool:
+    async def _wait_task(self, task_id: str, *, retries: int = 30) -> bool:
         """轮询转存任务状态，成功返回 True。"""
         for index in range(retries):
             payload = await self._call(
                 "/task", params={"task_id": task_id, "retry_index": index}
             )
+            if payload is None and self._last_error:
+                return False
             status = ((payload or {}).get("data") or {}).get("status")
             if status == 2:  # 2 = 成功
                 data = (payload or {}).get("data") or {}
                 self._saved_top_fids = [str(fid) for fid in (data.get("save_as") or {}).get("save_as_top_fids") or []]
                 return True
             if status == 3:  # 3 = 失败
+                data = (payload or {}).get("data") or {}
+                self._last_error = str(data.get("error_msg") or data.get("err_msg") or data.get("message") or "夸克转存任务失败")[:300]
                 return False
             await asyncio.sleep(1)
         return False

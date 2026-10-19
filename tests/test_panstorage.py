@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from app.core.exceptions import DownloadRejected
 from app.providers.panstorage.alist import AListStorage
 from app.providers.panstorage.base import BasePanStorage, PanFile, PanQuota, SaveResult
 from app.providers.panstorage.local_dir import LocalDirStorage
@@ -451,88 +452,77 @@ def test_transfer_pending_without_storage(monkeypatch, client):
 
 
 def test_add_download_auto_saves_pan_resource(monkeypatch, client):
-    """仅云端转存成功但没有 aria2，任务应待处理，不能显示已入库。"""
-    from app.db.models import DownloadTask
+    """显式转存的记录保留，但缺 aria2 不生成下载任务。"""
+    from app.db.models import DownloadTask, PanSaveRecord
     from app.db.session import session_scope
-    from app.schemas.enums import ResourceKind, TaskStatus
-    from app.services import download as download_service
-    from app.services import download_routing
+    from app.services import download, download_routing
 
-    quark = _FakeStorage("quark")
-    monkeypatch.setattr(pan_service, "storages", lambda **kwargs: [quark])
+    cloud = _FakeStorage("quark")
+    monkeypatch.setattr(pan_service, "storages", lambda **kwargs: [cloud])
     monkeypatch.setattr(download_routing, "candidates_for", lambda *args: [])
-
-    result = run(
-        download_service.add_download(
-            {
-                "title": "自动转存测试 2026 1080p",
-                "pan_mode": "save_then_download",
-                "kind": ResourceKind.PAN.value,
-                "link": "https://pan.quark.cn/s/auto1",
-                "password": "1111",
-                "site": "PanSou",
-                "extra": {"pan_type": "quark"},
-            }
-        )
-    )
-    assert result is not None
-    assert quark.saved == ["https://pan.quark.cn/s/auto1"]
-
     with session_scope() as session:
-        task = session.get(DownloadTask, result.id)
-        assert task.status == TaskStatus.PENDING.value
-        assert "aria2" in task.error
-        assert task.meta["pan_storage"] == "quark-站点"
-        assert task.meta["saved_path"] == "/影视"
+        before = session.query(DownloadTask).count()
+        saved_before = session.query(PanSaveRecord).filter_by(success=True).count()
+    with pytest.raises(DownloadRejected, match="aria2"):
+        run(
+            download.add_download(
+                {
+                    "title": "test",
+                    "kind": "pan",
+                    "link": "https://pan.quark.cn/s/test",
+                    "pan_mode": "save_then_download",
+                },
+                notify=False,
+            )
+        )
+    assert cloud.saved == ["https://pan.quark.cn/s/test"]
+    with session_scope() as session:
+        assert session.query(DownloadTask).count() == before
+        assert session.query(PanSaveRecord).filter_by(success=True).count() == saved_before + 1
 
 
 def test_add_download_pan_stays_pending_without_storage(monkeypatch, client):
-    """没配网盘时保持原有 pending 行为，等人工或定时任务处理。"""
+    """未配置账号只返回明确原因，不再登记 pending。"""
     from app.db.models import DownloadTask
     from app.db.session import session_scope
-    from app.schemas.enums import ResourceKind, TaskStatus
-    from app.services import download as download_service
+    from app.services import download
 
     monkeypatch.setattr(pan_service, "storages", lambda **kwargs: [])
-    result = run(
-        download_service.add_download(
-            {
-                "title": "没有网盘时的登记",
-                "kind": ResourceKind.PAN.value,
-                "link": "https://pan.quark.cn/s/auto2",
-            }
-        )
-    )
     with session_scope() as session:
-        task = session.get(DownloadTask, result.id)
-        assert task.status == TaskStatus.PENDING.value
+        before = session.query(DownloadTask).count()
+    with pytest.raises(DownloadRejected, match="账号"):
+        run(
+            download.add_download(
+                {"title": "test", "link": "https://pan.quark.cn/s/test", "kind": "pan"},
+                notify=False,
+            )
+        )
+    with session_scope() as session:
+        assert session.query(DownloadTask).count() == before
 
 
 def test_add_download_respects_auto_save_switch(monkeypatch, client):
-    """CF_PAN_AUTO_SAVE=false 时不自动转存。"""
+    """直接下载失败仍不得改成转存，也不登记失败队列。"""
     from app.core.config import settings
     from app.db.models import DownloadTask
     from app.db.session import session_scope
-    from app.schemas.enums import ResourceKind, TaskStatus
-    from app.services import download as download_service
+    from app.services import download
 
-    quark = _FakeStorage("quark")
-    monkeypatch.setattr(pan_service, "storages", lambda **kwargs: [quark])
+    cloud = _FakeStorage("quark")
+    monkeypatch.setattr(pan_service, "storages", lambda **kwargs: [cloud])
     monkeypatch.setattr(settings, "PAN_AUTO_SAVE", False)
-
-    result = run(
-        download_service.add_download(
-            {
-                "title": "开关关闭",
-                "kind": ResourceKind.PAN.value,
-                "link": "https://pan.quark.cn/s/auto3",
-            }
-        )
-    )
-    assert quark.saved == []
     with session_scope() as session:
-        task = session.get(DownloadTask, result.id)
-        assert task.status == TaskStatus.PENDING.value
+        before = session.query(DownloadTask).count()
+    with pytest.raises(DownloadRejected):
+        run(
+            download.add_download(
+                {"title": "test", "link": "https://pan.quark.cn/s/test", "kind": "pan"},
+                notify=False,
+            )
+        )
+    assert cloud.saved == []
+    with session_scope() as session:
+        assert session.query(DownloadTask).count() == before
 
 
 def test_make_dir_and_delete_via_service(monkeypatch, client, tmp_path):

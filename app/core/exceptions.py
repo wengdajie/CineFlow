@@ -30,3 +30,7 @@ class ProviderError(CineFlowError):
 
 class ConfigError(CineFlowError):
     status_code = 400
+
+
+class DownloadRejected(CineFlowError):
+    """资源未投递，允许移除本次内部占位并向用户报告原因。"""

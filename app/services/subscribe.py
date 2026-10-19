@@ -15,6 +15,7 @@ from typing import Any
 
 from sqlalchemy import select
 
+from app.core.exceptions import DownloadRejected
 from app.core.logger import get_logger
 from app.core.selection import pick_missing
 from app.db.base import utcnow
@@ -364,11 +365,16 @@ async def _process_subscribe_inner(subscribe_id: int) -> dict[str, Any]:
                           best_version=subscribe.best_version)
 
     for resource in picked:
-        task = await download_service.add_download(
-            resource,
-            subscribe_id=subscribe_id,
-            save_path=subscribe.save_path,
-        )
+        try:
+            task = await download_service.add_download(
+                resource,
+                subscribe_id=subscribe_id,
+                save_path=subscribe.save_path,
+            )
+        except DownloadRejected as exc:
+            result.setdefault("errors", []).append(exc.message)
+            remaining.update(set((resource.get("meta") or {}).get("episodes") or missing) & set(missing))
+            continue
         if task:
             result["downloads"].append(
                 {
@@ -378,24 +384,24 @@ async def _process_subscribe_inner(subscribe_id: int) -> dict[str, Any]:
                 }
             )
 
-    if picked:
+    if result["downloads"]:
         await notify_service.send(
             f"订阅命中：{subscribe.title}",
-            f"第 {subscribe.season} 季，新增 {len(picked)} 个下载任务\n"
-            + "\n".join(truncate(item.get("title"), 60) for item in picked[:3]),
+            f"第 {subscribe.season} 季，新增 {len(result['downloads'])} 个下载任务\n"
+            + "\n".join(truncate(item.get("title"), 60) for item in result["downloads"][:3]),
             level=NotifyLevel.SUCCESS.value,
             event=EventType.RESOURCE_MATCHED.value,
-            payload={"subscribe_id": subscribe_id, "count": len(picked)},
+            payload={"subscribe_id": subscribe_id, "count": len(result["downloads"])},
         )
 
     with session_scope() as session:
         record = session.get(Subscribe, subscribe_id)
         if record:
             record.last_check_at = utcnow()
-            if picked:
+            if result["downloads"]:
                 record.last_matched_at = utcnow()
             record.lack_episodes = len(remaining)
-            record.error = None
+            record.error = "；".join(result.get("errors", [])[:3]) or None
     return result
 
 

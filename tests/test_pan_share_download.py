@@ -17,6 +17,214 @@ from app.services import download, download_routing, pan_download, pan_storage
 from app.utils.pan115_rsa import encrypt
 
 
+def test_capacity_failure_does_not_become_unconfirmed_timeout(monkeypatch):
+    storage = quark.QuarkStorage({"cookie": "test"})
+    calls = []
+
+    async def call(path, **kwargs):
+        calls.append(path)
+        if path.endswith("/save"):
+            return {"data": {"task_id": "test-task"}}
+        assert path == "/task"
+        storage._last_error = "夸克网盘空间不足（code=32003）"
+        return None
+
+    monkeypatch.setattr(storage, "_call", call)
+    result = asyncio.run(storage._submit_save("share", "token", ["fid"], ["token"], "/"))
+    assert result.success is False
+    assert "空间不足" in result.message
+    assert "未确认完成" not in result.message
+    assert calls.count("/task") == 1
+
+
+def test_rejected_pan_request_leaves_no_download_task(monkeypatch, client, auth_headers):
+    from app.db.models import DownloadTask
+    from app.db.session import session_scope
+
+    async def prepare(*args):
+        return {"success": False, "message": "分享已失效"}
+
+    monkeypatch.setattr(pan_storage, "prepare_share_download", prepare)
+    with session_scope() as session:
+        before = session.query(DownloadTask).count()
+    response = client.post(
+        "/api/v1/downloads",
+        headers=auth_headers,
+        json={"title": "invalid", "link": "https://pan.quark.cn/s/invalid", "kind": "pan"},
+    )
+    assert response.status_code == 400
+    assert "分享已失效" in response.json()["message"]
+    with session_scope() as session:
+        assert session.query(DownloadTask).count() == before
+
+
+def test_quark_failed_task_keeps_reason_without_polling_again(monkeypatch):
+    storage = quark.QuarkStorage({"cookie": "test"})
+    calls = []
+
+    async def call(path, **kwargs):
+        calls.append(path)
+        return {"data": {"status": 3, "error_msg": "文件已失效"}}
+
+    monkeypatch.setattr(storage, "_call", call)
+    assert asyncio.run(storage._wait_task("task")) is False
+    assert storage._last_error == "文件已失效"
+    assert calls == ["/task"]
+
+
+def test_quark_processing_task_can_finish_normally(monkeypatch):
+    storage = quark.QuarkStorage({"cookie": "test"})
+    replies = [
+        {"data": {"status": 1}},
+        {"data": {"status": 2, "save_as": {"save_as_top_fids": ["new"]}}},
+    ]
+
+    async def call(*args, **kwargs):
+        return replies.pop(0)
+
+    async def sleep(*args):
+        pass
+
+    monkeypatch.setattr(storage, "_call", call)
+    monkeypatch.setattr(quark.asyncio, "sleep", sleep)
+    assert asyncio.run(storage._wait_task("task")) is True
+    assert storage._saved_top_fids == ["new"]
+
+
+def test_rejection_does_not_delete_a_replacement_claim(monkeypatch, client):
+    from app.core.exceptions import DownloadRejected
+    from app.db.models import DownloadTask
+    from app.db.session import session_scope
+
+    replacement = []
+
+    async def prepare(*args):
+        with session_scope() as session:
+            old = (
+                session.query(DownloadTask).filter_by(link="https://pan.quark.cn/s/replaced").one()
+            )
+            session.delete(old)
+            session.flush()
+            row = DownloadTask(
+                title="replacement",
+                link="https://pan.quark.cn/s/new",
+                kind="pan",
+                status="submitting",
+            )
+            session.add(row)
+            session.flush()
+            replacement.append(row.id)
+        return {"success": False, "message": "资源失效"}
+
+    monkeypatch.setattr(pan_storage, "prepare_share_download", prepare)
+    with pytest.raises(DownloadRejected):
+        asyncio.run(
+            download.add_download(
+                {"title": "old", "link": "https://pan.quark.cn/s/replaced", "kind": "pan"},
+                notify=False,
+            )
+        )
+    with session_scope() as session:
+        row = session.get(DownloadTask, replacement[0])
+        assert row.title == "replacement"
+        session.delete(row)
+
+
+def test_partial_submission_with_unconfirmed_withdrawal_keeps_recovery_record(
+    monkeypatch, client, auth_headers
+):
+    from app.db.models import DownloadTask
+    from app.db.session import session_scope
+
+    class Downloader:
+        name = "aria2"
+        site_name = "fixture aria2"
+        calls = 0
+
+        async def health_check(self):
+            return True, "ok"
+
+        async def add(self, *args, **kwargs):
+            self.calls += 1
+            return "accepted-file" if self.calls == 1 else None
+
+        async def remove(self, *args, **kwargs):
+            return False
+
+    async def prepare(*args):
+        return {
+            "success": True,
+            "site_id": 1,
+            "saved_path": "/",
+            "download_files": [
+                {"url": "https://fixture.test/one", "path": "/one.mkv", "relative": "one.mkv"},
+                {"url": "https://fixture.test/two", "path": "/two.mkv", "relative": "two.mkv"},
+            ],
+        }
+
+    monkeypatch.setattr(pan_storage, "prepare_share_download", prepare)
+    monkeypatch.setattr(download_routing, "candidates_for", lambda *args: [Downloader()])
+    response = client.post(
+        "/api/v1/downloads",
+        headers=auth_headers,
+        json={"title": "partial", "link": "https://pan.quark.cn/s/partial", "kind": "pan"},
+    )
+    assert response.status_code == 200
+    with session_scope() as session:
+        row = session.get(DownloadTask, response.json()["task_id"])
+        assert row.external_id == "accepted-file"
+        assert row.status == "submitting"
+        assert "未确认撤回" in row.error
+
+
+def test_subscription_rejection_continues_and_counts_only_started_downloads(monkeypatch, client):
+    from app.core.exceptions import DownloadRejected
+    from app.db.models import Subscribe
+    from app.db.session import session_scope
+    from app.services import subscribe
+
+    resources = [
+        {"title": "bad", "kind": "pan", "meta": {"episodes": [1]}},
+        {"title": "good", "kind": "magnet", "meta": {"episodes": [2]}},
+    ]
+    notices = []
+
+    async def refresh(*args):
+        return 2
+
+    async def search(*args, **kwargs):
+        return resources
+
+    async def add(resource, **kwargs):
+        if resource["kind"] == "pan":
+            raise DownloadRejected("空间不足")
+        return SimpleNamespace(id=1)
+
+    async def notify(*args, **kwargs):
+        notices.append(kwargs["payload"]["count"])
+
+    monkeypatch.setattr(subscribe, "refresh_total_episodes", refresh)
+    monkeypatch.setattr(subscribe, "compute_missing", lambda *args: [1, 2])
+    monkeypatch.setattr(subscribe.search_service, "search_for_subscribe", search)
+    monkeypatch.setattr(subscribe, "pick_missing", lambda *args, **kwargs: (resources, set()))
+    monkeypatch.setattr(download, "add_download", add)
+    monkeypatch.setattr(subscribe.notify_service, "send", notify)
+    with session_scope() as session:
+        row = Subscribe(title="Rejected sample", media_type="tv", season=1, total_episodes=2)
+        session.add(row)
+        session.flush()
+        identifier = row.id
+    result = asyncio.run(subscribe.process_subscribe(identifier))
+    assert len(result["downloads"]) == 1
+    assert result["errors"] == ["空间不足"]
+    assert notices == [1]
+    with session_scope() as session:
+        row = session.get(Subscribe, identifier)
+        assert row.error == "空间不足"
+        assert row.lack_episodes == 1
+        session.delete(row)
+
+
 @pytest.mark.parametrize(("url", "provider", "label"), [
     ("https://pan.quark.cn/s/test", "quark", "夸克网盘"),
     ("https://pan.baidu.com/s/test", "baidu", "百度网盘"),
@@ -32,17 +240,22 @@ def test_pan_resource_exposes_specific_platform_before_actions(url, provider, la
     assert row["pan_provider"] == provider
 
 
-def test_cancelled_quark_share_reports_platform_error(monkeypatch):
+@pytest.mark.parametrize(("code", "message", "expected"), [(41012, "好友已取消了分享", "好友已取消了分享"), (32003, "capacity limit[{0}]", "空间不足")])
+def test_cancelled_quark_share_reports_platform_error(monkeypatch, code, message, expected):
     storage = quark.QuarkStorage({"cookie": "test"})
 
     class Client:
-        async def __aenter__(self): return self
-        async def __aexit__(self, *args): pass
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
         async def request(self, *args, **kwargs):
-            return httpx.Response(404, json={"code": 41012, "status": 404, "message": "好友已取消了分享"})
+            return httpx.Response(404, json={"code": code, "status": 404, "message": message})
 
     monkeypatch.setattr(quark, "async_client", lambda **kwargs: Client())
-    with pytest.raises(ValueError, match="好友已取消了分享"):
+    with pytest.raises(ValueError, match=expected):
         asyncio.run(storage.share_downloads("https://pan.quark.cn/s/test"))
 
 
@@ -90,11 +303,18 @@ def test_failed_pan_parse_is_not_reported_as_queued(monkeypatch, client, auth_he
         return {"success": False, "message": "好友已取消了分享"}
 
     monkeypatch.setattr(pan_storage, "prepare_share_download", prepare)
-    response = client.post("/api/v1/downloads", headers=auth_headers, json={
-        "title": "test", "link": "https://pan.quark.cn/s/test", "kind": "pan",
-    })
+    response = client.post(
+        "/api/v1/downloads",
+        headers=auth_headers,
+        json={
+            "title": "test",
+            "link": "https://pan.quark.cn/s/test",
+            "kind": "pan",
+        },
+    )
     assert response.json()["success"] is False
-    assert response.json()["status"] == "failed"
+    assert response.status_code == 400
+    assert "task_id" not in response.json()
     assert "取消" in response.json()["message"]
 
 
