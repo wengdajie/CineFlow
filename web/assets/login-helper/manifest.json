@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "CineFlow 网盘登录助手",
+  "version": "1.0.0",
+  "minimum_chrome_version": "120",
+  "description": "在夸克官网登录后，将 Cookie 回传给你明确连接的 CineFlow 页面。",
+  "permissions": ["cookies", "storage", "scripting", "alarms"],
+  "host_permissions": ["https://*.quark.cn/*"],
+  "optional_host_permissions": ["http://*/*", "https://*/*"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_popup": "popup.html" },
+  "content_security_policy": { "extension_pages": "script-src 'self'; object-src 'none'" }
+}

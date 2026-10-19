@@ -4,6 +4,7 @@ import { resolve, dirname } from "node:path";
 import { spawnSync } from "node:child_process";
 import assert from "node:assert/strict";
 import { el } from "../web/assets/ui.js";
+import "./check_login_helper.mjs";
 
 function check(directory) {
   let count = 0;
