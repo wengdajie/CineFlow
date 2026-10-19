@@ -38,7 +38,7 @@ function fixture(allowed = origin) {
   };
   const context = vm.createContext({ chrome, crypto: webcrypto, TextEncoder, URL, Date: class extends Date { static now() { return state.now; } } });
   vm.runInContext(source, context);
-  const sender = (extra = {}) => ({ frameId: 0, url: tabs.get(1).url, tab: tabs.get(1), ...extra });
+  const sender = (extra = {}) => ({ frameId: 0, documentId: "fixture-document", url: tabs.get(1).url, tab: tabs.get(1), ...extra });
   const send = (action, extra = {}, from = sender()) => new Promise(resolve => {
     chrome.runtime.onMessage.emit({ scope, action, requestId: id, provider: "quark", ...extra }, from, resolve);
   });
@@ -82,6 +82,7 @@ for (const from of [
   await f.send("start");
   const candidate = f.state.sent[0];
   assert.equal(candidate.tabId, 1); assert.equal(candidate.options.frameId, 0);
+  assert.equal(candidate.options.documentId, "fixture-document");
   assert.equal(candidate.message.cookie, "__pus=fixture-private-pus; __puus=fixture-private-puus");
   assert.equal(candidate.message.requestId, id);
   assert.equal(f.state.reads[0].url, "https://drive-pc.quark.cn/1/clouddrive/member");
@@ -123,5 +124,18 @@ for (const reason of ["cancel", "expire", "navigate", "reconfigure", "close-logi
   assert.equal(f.state.reads.length, 1); // 仅启动时的那一次读取。
   await f.send("cancel");
   assert.deepEqual(f.state.removed, []); cases++;
+}
+{
+  const f = fixture(); await f.send("start");
+  f.chrome.tabs.onUpdated.emit(1, { status: "loading" }); await f.flush();
+  assert.equal(f.state.session.pending, undefined);
+  assert.deepEqual(f.state.removed, [10]); cases++;
+}
+{
+  const f = fixture(); await f.send("start");
+  const result = await f.send("start", { requestId: "a".repeat(32) }, f.sender({ documentId: "new-document" }));
+  assert.equal(result.success, true);
+  assert.equal(f.state.session.pending.appDocumentId, "new-document");
+  assert.equal(f.state.session.pending.requestId, "a".repeat(32)); cases++;
 }
 console.log(`Login helper contracts checked: ${cases} cases`);

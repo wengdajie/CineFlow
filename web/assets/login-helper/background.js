@@ -12,7 +12,9 @@ async function deliver(state, message) {
   const { appOrigin } = await chrome.storage.local.get("appOrigin");
   const tab = await chrome.tabs.get(state.appTabId);
   if (appOrigin !== state.appOrigin || new URL(tab.url).origin !== state.appOrigin) throw new Error("CineFlow 页面已变更");
-  await chrome.tabs.sendMessage(state.appTabId, { scope: SCOPE, requestId: state.requestId, ...message }, { frameId: 0 });
+  const options = { frameId: 0 };
+  if (state.appDocumentId) options.documentId = state.appDocumentId;
+  await chrome.tabs.sendMessage(state.appTabId, { scope: SCOPE, requestId: state.requestId, ...message }, options);
 }
 async function clear(state, message) {
   await chrome.storage.session.remove("pending");
@@ -56,17 +58,20 @@ async function command(message, sender) {
   if (message.action === "probe") return { success: true, version: chrome.runtime.getManifest().version };
   let state = await pending();
   if (state && Date.now() >= state.expiresAt) { await clear(state, "登录等待已超时"); state = null; }
+  if (state && state.appTabId === sender.tab.id && state.appDocumentId && state.appDocumentId !== sender.documentId) {
+    await clear(state, "控制台页面已刷新，请重新开始"); state = null;
+  }
   if (message.action === "start") {
     if (message.provider !== "quark") return { success: false, message: "当前仅支持夸克浏览器登录" };
     if (state) return { success: false, message: "已有登录窗口，请先完成或取消" };
     const login = await chrome.tabs.create({ url: "https://pan.quark.cn/", active: true });
-    state = { appTabId: sender.tab.id, appOrigin, loginTabId: login.id, requestId: message.requestId, expiresAt: Date.now() + TTL };
+    state = { appTabId: sender.tab.id, appDocumentId: sender.documentId, appOrigin, loginTabId: login.id, requestId: message.requestId, expiresAt: Date.now() + TTL };
     await chrome.storage.session.set({ pending: state });
     await chrome.alarms.create("cineflow-login-expiry", { when: state.expiresAt });
     await check();
     return { success: true };
   }
-  if (!state || state.requestId !== message.requestId || state.appTabId !== sender.tab.id) return { success: false, message: "登录会话已结束" };
+  if (!state || state.appOrigin !== appOrigin || state.requestId !== message.requestId || state.appTabId !== sender.tab.id) return { success: false, message: "登录会话已结束" };
   if (message.action === "cancel") { await clear(state); return { success: true }; }
   if (message.action === "finish" && state.checking) {
     if (message.accepted) {
@@ -90,6 +95,12 @@ const schedule = () => { serialized(check).catch(() => {}); };
 chrome.cookies.onChanged.addListener(({ cookie }) => {
   if (cookie.domain === "quark.cn" || cookie.domain.endsWith(".quark.cn")) schedule();
 });
-chrome.tabs.onUpdated.addListener(schedule);
+chrome.tabs.onUpdated.addListener((tabId, change = {}) => {
+  serialized(async () => {
+    const state = await pending();
+    if (state && state.appTabId === tabId && change.status === "loading") return clear(state, "控制台页面已刷新，请重新开始");
+    return check();
+  }).catch(() => {});
+});
 chrome.tabs.onRemoved.addListener(schedule);
 chrome.alarms.onAlarm.addListener(({ name }) => { if (name === "cineflow-login-expiry") schedule(); });
