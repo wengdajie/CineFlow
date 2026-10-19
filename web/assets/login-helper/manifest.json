@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "CineFlow 网盘登录助手",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "minimum_chrome_version": "120",
   "description": "在夸克官网登录后，将 Cookie 回传给你明确连接的 CineFlow 页面。",
   "permissions": ["cookies", "storage", "scripting", "alarms"],

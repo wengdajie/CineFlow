@@ -8,5 +8,6 @@ body{font:14px system-ui;width:310px;padding:16px;color:#222}h2{font-size:18px}l
 <p>只向你连接的 CineFlow 地址回传登录凭据。Cookie 不写入扩展存储。</p>
 <label for="address">CineFlow 地址（包含端口）</label>
 <input id="address" type="url" placeholder="http://192.168.1.10:6060" autocomplete="off">
-<button id="connect">保存并连接</button><p id="status" role="status"></p>
+<button id="connect">保存并连接</button>
+<button id="retry" disabled>重新检测并回填</button><p id="status" role="status"></p>
 <script src="popup.js"></script></body></html>

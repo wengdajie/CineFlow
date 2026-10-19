@@ -1,5 +1,17 @@
 const address = document.getElementById("address");
 const status = document.getElementById("status");
+const retry = document.getElementById("retry");
+async function sessionStatus(action = "status") {
+  const result = await chrome.runtime.sendMessage({ scope: "cineflow-login-helper", action });
+  status.textContent = result.message;
+  retry.disabled = !result.success || !result.active;
+}
+sessionStatus().catch(() => { status.textContent = "助手未就绪，请在扩展管理页重新加载。"; });
+retry.addEventListener("click", async () => {
+  retry.disabled = true;
+  try { await sessionStatus("retry"); }
+  catch { status.textContent = "检测失败，请刷新 CineFlow 后重新发起登录。"; }
+});
 chrome.storage.local.get("appOrigin").then(({ appOrigin }) => { address.value = appOrigin || ""; });
 document.getElementById("connect").addEventListener("click", async () => {
   try {

@@ -14,7 +14,7 @@ const id = "1234567890abcdef1234567890abcdef";
 const scope = "cineflow-login-helper";
 const event = () => { const listeners = []; return { addListener: fn => listeners.push(fn), emit: (...args) => listeners.map(fn => fn(...args)) }; };
 function fixture(allowed = origin) {
-  const state = { local: { appOrigin: allowed }, session: {}, cookies: [], sent: [], removed: [], focused: [], reads: [], now: 1000 };
+  const state = { local: { appOrigin: allowed }, session: {}, cookies: [], sent: [], statuses: [], removed: [], focused: [], reads: [], now: 1000 };
   const tabs = new Map([[1, { id: 1, url: origin + "/#storage", windowId: 3 }], [2, { id: 2, url: origin, windowId: 3 }]]);
   const storage = key => ({
     async get(name) { return structuredClone({ [name]: state[key][name] }); },
@@ -22,9 +22,17 @@ function fixture(allowed = origin) {
     async remove(name) { delete state[key][name]; },
   });
   const chrome = {
-    runtime: { onMessage: event(), getManifest: () => ({ version: "1.0.0" }) },
+    runtime: { id: "fixture-extension", getURL: file => "chrome-extension://fixture-extension/" + file, onMessage: event(), getManifest: () => ({ version: manifest.version }) },
     storage: { local: storage("local"), session: storage("session") },
-    cookies: { onChanged: event(), async getAll(query) { state.reads.push(query); return structuredClone(state.cookies); } },
+    cookies: { onChanged: event(), async getAll(query) {
+      state.reads.push(query);
+      if (state.readError) throw new Error("fixture permissions error");
+      const url = new URL(query.url);
+      return structuredClone(state.cookies.filter(item => {
+        const domain = item.domain || ".quark.cn";
+        return (domain.startsWith(".") ? url.hostname === domain.slice(1) || url.hostname.endsWith(domain) : url.hostname === domain) && url.pathname.startsWith(item.path || "/");
+      }));
+    } },
     alarms: { onAlarm: event(), create: async () => {}, clear: async () => {} },
     windows: { async update(windowId) { state.focused.push(windowId); } },
     tabs: {
@@ -33,7 +41,7 @@ function fixture(allowed = origin) {
       async create({ url }) { const tab = { id: 10, url, windowId: 3 }; tabs.set(10, tab); return tab; },
       async remove(tabId) { tabs.delete(tabId); state.removed.push(tabId); },
       async update(tabId, values) { Object.assign(tabs.get(tabId), values); return tabs.get(tabId); },
-      async sendMessage(tabId, message, options) { state.sent.push({ tabId, message: structuredClone(message), options }); },
+      async sendMessage(tabId, message, options) { (message.type === "progress" ? state.statuses : state.sent).push({ tabId, message: structuredClone(message), options }); },
     },
   };
   const context = vm.createContext({ chrome, crypto: webcrypto, TextEncoder, URL, Date: class extends Date { static now() { return state.now; } } });
@@ -50,6 +58,61 @@ const validCookies = () => [
   { name: "__puus", value: "fixture-private-puus", httpOnly: true },
 ];
 let cases = 0;
+const popupSender = { id: "fixture-extension", url: "chrome-extension://fixture-extension/popup.html" };
+{
+  const f = fixture();
+  assert.equal((await f.send("status", {}, popupSender)).active, false);
+  await f.send("start");
+  assert.match((await f.send("status", {}, popupSender)).message, /尚未检测到/);
+  assert.equal(f.state.statuses.length, 1);
+  await f.send("retry");
+  assert.equal(f.state.statuses.length, 1, "相同等待状态不重复刷屏"); cases++;
+}
+{
+  const f = fixture(); f.state.readError = true;
+  await f.send("start");
+  assert.match(f.state.statuses[0].message.message, /读取夸克 Cookie 失败/);
+  f.state.readError = false; f.state.cookies = validCookies();
+  await f.send("retry", {}, popupSender);
+  assert.equal(f.state.sent.length, 1); cases++;
+}
+{
+  const f = fixture(); f.state.cookies = validCookies();
+  await f.send("start"); await f.send("finish", { accepted: false });
+  assert.equal(f.state.sent.length, 1);
+  await f.send("retry", {}, popupSender);
+  assert.equal(f.state.sent.length, 2, "主动重试应允许同一 Cookie 再次校验，恢复临时网络故障");
+  await f.send("retry");
+  assert.equal(f.state.sent.length, 2, "仍在校验时不能重复提交");
+  f.state.now += 30001;
+  await f.send("retry");
+  assert.equal(f.state.sent.length, 3, "丢失校验回执后应能主动恢复"); cases++;
+}
+{
+  const f = fixture();
+  assert.equal((await f.send("retry", {}, { ...popupSender, id: "other-extension" })).success, false);
+  assert.equal((await f.send("retry", {}, { ...popupSender, url: "https://evil.test/" })).success, false);
+  assert.equal(f.state.reads.length, 0); cases++;
+}
+{
+  const f = fixture();
+  f.state.cookies = [{ name: "__puus", value: "fixture-only-puus", domain: "drive-pc.quark.cn", httpOnly: true },
+    { name: "__puus", value: "fixture-wrong-domain", domain: "pan.quark.cn", httpOnly: true }];
+  await f.send("start");
+  assert.equal(f.state.sent[0]?.message.cookie, "__puus=fixture-only-puus", "读取接口适用的 host-only Cookie，排除其他主机同名 Cookie"); cases++;
+}
+{
+  const f = fixture();
+  f.state.cookies = [{ name: "__puus", value: "fixture-only-puus", httpOnly: true }];
+  await f.send("start");
+  assert.equal(f.state.sent[0]?.message.cookie, "__puus=fixture-only-puus", "缺少可选 __pus 不应阻止回填"); cases++;
+}
+{
+  const f = fixture();
+  f.state.cookies = [{ name: "__pus", value: "fixture-only-pus", httpOnly: true }];
+  await f.send("start");
+  assert.equal(f.state.sent[0]?.message.cookie, "__pus=fixture-only-pus"); cases++;
+}
 {
   const f = fixture("");
   assert.equal((await f.send("start")).success, false);
@@ -92,9 +155,12 @@ for (const from of [
   assert.equal(f.state.sent.length, 1);
   assert.equal((await f.send("finish", { accepted: true, requestId: "f".repeat(32) })).success, false);
   assert.equal((await f.send("finish", { accepted: true }, f.sender({ tab: f.tabs.get(2) }))).success, false);
-  assert.equal(f.state.focused.length, 0);
+  assert.equal(f.state.focused.length, 1); // 获取时就返回控制台，校验失败也可见。
   await f.send("finish", { accepted: false });
   assert.equal(f.state.sent.length, 1);
+  f.state.cookies.push({ name: "analytics", value: "fixture-tracking-update" });
+  f.chrome.cookies.onChanged.emit({ cookie: { domain: ".quark.cn" } }); await f.flush();
+  assert.equal(f.state.sent.length, 1, "统计 Cookie 变化不能重复提交或抢焦点");
   f.state.cookies[1].value = "fixture-refreshed";
   f.chrome.cookies.onChanged.emit({ cookie: { domain: ".quark.cn" } }); await f.flush();
   assert.equal(f.state.sent.length, 2);
@@ -102,7 +168,7 @@ for (const from of [
   assert.equal(f.state.session.pending, undefined);
   assert.equal(f.tabs.get(1).active, true);
   assert.deepEqual(f.state.removed, [10]);
-  assert.deepEqual(f.state.focused, [3]); cases++;
+  assert.deepEqual(f.state.focused, [3, 3, 3]); cases++;
 }
 for (const reason of ["cancel", "expire", "navigate", "reconfigure", "close-login"]) {
   const f = fixture(); await f.send("start"); f.state.reads.length = 0;

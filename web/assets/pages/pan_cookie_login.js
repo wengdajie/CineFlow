@@ -27,10 +27,10 @@ export function showBrowserCookieLogin({ api, provider, onDone, autoStart = fals
       toast(result.message || "登录成功，凭据已保存", "ok");
       return true;
     } catch (error) {
-      status.textContent = automatic ? error.message + "；请在夸克页面完成登录，助手会继续检测。" : error.message;
+      status.textContent = automatic ? "Cookie 已回填，但未保存：" + error.message + "。请确认官网登录完成后点击重新检测并回填。" : error.message;
       if (!automatic) toast(error.message, "err");
       return false;
-    } finally { busy = false; saveButton.disabled = false; cookie.disabled = false; }
+    } finally { busy = false; saveButton.disabled = false; cookie.disabled = false; retryButton.disabled = !active || closed; }
   };
   const listener = async (event) => {
     const message = event.data;
@@ -42,7 +42,9 @@ export function showBrowserCookieLogin({ api, provider, onDone, autoStart = fals
       if (message.success) reply.resolve(message);
       else reply.reject(new Error(message.message || "登录助手未连接"));
     } else if (message.type === "ended" && active) {
-      active = false; startButton.disabled = false; status.textContent = message.message;
+      active = false; startButton.disabled = false; retryButton.disabled = true; status.textContent = message.message;
+    } else if (message.type === "progress" && active && !busy) {
+      status.textContent = message.message;
     } else if (message.type === "candidate" && active && !busy && typeof message.cookie === "string") {
       cookie.value = message.cookie;
       const accepted = await save(message.cookie, true);
@@ -56,17 +58,31 @@ export function showBrowserCookieLogin({ api, provider, onDone, autoStart = fals
     if (active || busy || closed) return;
     startButton.disabled = true;
     try {
-      await request("probe");
+      const helper = await request("probe");
+      const [major, minor] = (helper.version || "0.0").split(".").map(Number);
+      if (!(major > 1 || major === 1 && minor >= 1)) {
+        throw new Error("登录助手版本较旧，请重新下载并解压覆盖，在扩展管理页重新加载扩展，再刷新控制台（需要 1.1.0 或更新版）。");
+      }
       active = true;
+      retryButton.disabled = false;
       status.textContent = "已打开夸克官网，请完成登录。成功后会自动返回本页。";
       await request("start", {}, 10000);
-    } catch (error) { active = false; startButton.disabled = false; status.textContent = error.message; }
+    } catch (error) { active = false; startButton.disabled = false; retryButton.disabled = true; status.textContent = error.message; }
   };
   const startButton = iconButton("跳转登录并自动获取", "user", start, "primary");
+  const retryButton = iconButton("重新检测并回填", "refresh", async () => {
+    if (!active || busy) return;
+    retryButton.disabled = true;
+    status.textContent = "正在重新检测夸克登录凭据…";
+    try { await request("retry", {}, 10000); }
+    catch (error) { status.textContent = error.message; }
+    finally { retryButton.disabled = !active || busy || closed; }
+  }, "ghost");
+  retryButton.disabled = true;
   const saveButton = iconButton("校验并保存", "check", async () => {
     if (busy) return;
     if (!cookie.value.trim()) { status.textContent = "请先登录获取 Cookie，或手动粘贴"; return; }
-    if (active) { active = false; await request("cancel").catch(() => {}); startButton.disabled = false; }
+    if (active) { active = false; await request("cancel").catch(() => {}); startButton.disabled = false; retryButton.disabled = true; }
     if (await save(cookie.value.trim(), false)) { cookie.value = ""; close(); if (onDone) onDone(); }
   }, "primary");
   const download = iconButton("下载登录助手", "download", async () => {
@@ -79,7 +95,7 @@ export function showBrowserCookieLogin({ api, provider, onDone, autoStart = fals
     } catch (error) { status.textContent = error.message; }
   }, "ghost");
   content.append(
-    el("div", { class: "row wrap", style: "margin-bottom:12px" }, [startButton, download]),
+    el("div", { class: "row wrap", style: "margin-bottom:12px" }, [startButton, retryButton, download]),
     el("details", { style: "margin-bottom:16px" }, [el("summary", { text: "首次配置登录助手" }),
       el("p", { class: "tiny dim", text: "下载并解压扩展，在 chrome://extensions 或 edge://extensions 开启开发者模式，加载已解压的扩展。点击工具栏助手，填入下面的地址并连接。" }),
       el("code", { text: location.origin }),

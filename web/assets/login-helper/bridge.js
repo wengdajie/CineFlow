@@ -6,7 +6,7 @@
     const message = event.data;
     if (event.source !== window || event.origin !== location.origin ||
         message?.source !== "cineflow-cookie-login" ||
-        !["probe", "start", "finish", "cancel"].includes(message.action)) return;
+        !["probe", "start", "finish", "cancel", "retry"].includes(message.action)) return;
     try {
       const result = await chrome.runtime.sendMessage({
         scope: "cineflow-login-helper", action: message.action,
