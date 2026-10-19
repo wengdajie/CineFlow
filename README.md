@@ -30,7 +30,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)](#-docker-部署推荐)
 [![Tests](https://img.shields.io/badge/tests-pytest-brightgreen)](docs/14-开发指南.md)
-[![Version](https://img.shields.io/badge/version-1.29.0-blue)](docs/08-变更日志.md)
+[![Version](https://img.shields.io/badge/version-1.29.1-blue)](docs/08-变更日志.md)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 </div>
@@ -127,6 +127,8 @@ CineFlow 是一个**从零实现**的 NAS 影视自动化项目，设计上参�
 
 ## 本轮精简与升级
 
+**v1.29.1**：夸克新增“跳转登录并自动获取 Cookie”，在官网完成登录后自动校验、保存并返回控制台。首次需在 Chrome/Edge 安装登录助手；NAS/Docker 无需安装浏览器。详见 [安装与使用步骤](docs/21-浏览器登录与Cookie自动回填.md)。
+
 **v1.29.0**：热榜点击后自动搜索，结果逐站显示；统一订阅的剧集目录；多网盘原文件下载交给 aria2，普通下载不再隐式转存。深度审查修复覆盖失败、任务竞态和凭据暴露等问题，Python 3.10 / 3.12 各 1854 项测试通过。外部网盘仍需有效账号及下载权限，本地 aria2 验证不代表全部平台实盘可用。
 
 详见 [搜索与多网盘说明](docs/18-搜索响应与多网盘下载修复.md)、[深度审查报告](docs/19-深度审查与本地验证.md) 和 [v1.29.0 发布与 Docker 使用](docs/20-v1.29.0发布与Docker使用.md)。
@@ -163,7 +165,7 @@ README 只保留**声明 / 介绍 / 安装**三件事，其余全部在 [`docs/`
 
 **无需下载源码**，直接拉取 GitHub Actions 自动构建的多架构镜像（amd64 / arm64）：
 
-镜像为 `ghcr.io/wengdajie/cineflow:latest`，本次版本标签为 `v1.29.0`。离线 Docker 包可在 [GitHub Releases](https://github.com/wengdajie/CineFlow/releases) 下载，包含两个架构及 SHA-256 校验文件；[Actions 构建](https://github.com/wengdajie/CineFlow/actions/workflows/build-image.yml) 也保留临时产物。
+镜像为 `ghcr.io/wengdajie/cineflow:latest`，本次版本标签为 `v1.29.1`。离线 Docker 包可在 [GitHub Releases](https://github.com/wengdajie/CineFlow/releases) 下载，包含两个架构及 SHA-256 校验文件；[Actions 构建](https://github.com/wengdajie/CineFlow/actions/workflows/build-image.yml) 也保留临时产物。
 
 ```bash
 # 通用版（群晖 / 威联通 / Linux / Windows）

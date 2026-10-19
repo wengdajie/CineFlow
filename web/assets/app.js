@@ -4,6 +4,7 @@ import { safeHref } from './ui.js';
 import { API, createApi } from './api.js';
 import { createSearchPage } from './pages/search.js';
 import { createSettingsPage } from './pages/settings.js';
+import { showBrowserCookieLogin } from './pages/pan_cookie_login.js';
 /* ============================================================
    CineFlow 控制台 · 零依赖单页应用
    ------------------------------------------------------------
@@ -4303,7 +4304,7 @@ import { createSettingsPage } from './pages/settings.js';
   /** 网盘浏览器的当前位置（页面级状态，切页后保留便于来回跳转）。 */
   const panState = { siteId: null, path: "/" };
 
-  /** 网盘账号登录入口：扫码（115/百度）或导入 Cookie（含夸克）。
+  /** 网盘账号登录入口：扫码、浏览器官网登录或导入 Cookie。
 
       能力清单由后端 /pan/login/providers 下发，前端**不写死**哪个盘能扫码
       —— 与网盘能力位（capabilities）同一原则，将来新增网盘前端零改动。
@@ -4325,7 +4326,7 @@ import { createSettingsPage } from './pages/settings.js';
     const body = el("div", {});
     const close = panelModal(
       "登录网盘账号",
-      "扫码登录后凭据会自动写入站点并启用；不支持扫码的网盘可导入 Cookie",
+      "扫码或浏览器登录后自动保存凭据并启用，也可手动导入 Cookie",
       body,
       true
     );
@@ -4342,11 +4343,16 @@ import { createSettingsPage } from './pages/settings.js';
                     el("strong", { text: p.label }),
                     p.qrcode
                       ? el("span", { class: "tag brand tiny", text: "支持扫码" })
-                      : el("span", { class: "tag tiny", text: "仅 Cookie" }),
+                      : el("span", { class: "tag tiny", text: p.browser ? "浏览器登录" : "仅 Cookie" }),
                   ]),
                   el("div", { class: "tiny dim", style: "margin-top:4px", text: p.note }),
                 ]),
                 el("div", { class: "row tight" }, [
+                  p.browser
+                    ? iconButton("浏览器登录", "user", () => {
+                        close(); showBrowserCookieLogin({ api, provider: p, onDone, autoStart: true });
+                      }, "sm primary")
+                    : null,
                   p.qrcode
                     ? iconButton(
                         p.needs_app_credentials ? "授权登录" : "扫码登录",
@@ -4531,6 +4537,10 @@ import { createSettingsPage } from './pages/settings.js';
     /** 导入 Cookie：保存前先校验，无效不写库。 */
     const importCookie = (provider) => {
       close();
+      if (provider.browser) {
+        showBrowserCookieLogin({ api, provider, onDone });
+        return;
+      }
       modal(
         "导入「" + provider.label + "」Cookie",
         [

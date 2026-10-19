@@ -7,10 +7,13 @@
 
 from __future__ import annotations
 
+import io
+import zipfile
 from typing import Any
 
 from sqlalchemy import select
 
+from app.core.config import ROOT_DIR
 from app.core.logger import get_logger
 from app.db.models import SiteConfig
 from app.db.session import session_scope
@@ -68,8 +71,9 @@ PROVIDERS: dict[str, dict[str, Any]] = {
         "label": "夸克网盘",
         "qrcode": False,
         "cookie": True,
+        "browser": True,
         "module": quark_login,
-        "note": "不支持扫码（登录需签名公参，见文档）；支持 Cookie 导入并即时校验",
+        "note": "支持浏览器登录自动获取 Cookie（首次需安装登录助手），也可手动导入并校验",
     },
 }
 
@@ -82,11 +86,23 @@ def providers() -> list[dict[str, Any]]:
             "label": str(meta["label"]),
             "qrcode": bool(meta["qrcode"]),
             "cookie": bool(meta["cookie"]),
+            "browser": bool(meta.get("browser")),
             "note": str(meta["note"]),
             "needs_app_credentials": bool(meta.get("needs_app_credentials")),
         }
         for key, meta in PROVIDERS.items()
     ]
+
+
+def browser_extension_zip() -> bytes:
+    """只打包公开扩展源文件，不读取用户配置或浏览器数据。"""
+    source = ROOT_DIR / "web" / "assets" / "login-helper"
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
+        for name in ("manifest.json", "background.js", "bridge.js", "popup.html", "popup.js"):
+            archive.writestr(name, (source / name).read_bytes())
+        archive.writestr("README.txt", "CineFlow 网盘登录助手\n\n解压到固定目录，在 Chrome 的 chrome://extensions 或 Edge 的 edge://extensions 开启开发者模式，加载已解压的扩展。\n点击工具栏登录助手，填写 CineFlow 的完整地址（含端口）并保存连接，再回到 CineFlow 点击浏览器登录。\nCookie 只回传给已连接的 CineFlow 页面，不写入扩展存储；仅在你开始登录后读取夸克 Cookie。\n")
+    return output.getvalue()
 
 
 async def start_qrcode(

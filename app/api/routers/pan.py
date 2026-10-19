@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Response
 
 from app.api.deps import CurrentUser, OperatorUser
 from app.schemas.models import (
@@ -251,6 +251,12 @@ async def login_complete(
     if not result.get("success"):
         raise HTTPException(status_code=400, detail=result.get("message", "保存失败"))
     return result
+
+
+@router.get("/login/browser-extension", summary="下载浏览器网盘登录助手")
+def login_browser_extension(user: CurrentUser) -> Response:
+    return Response(login_service.browser_extension_zip(), media_type="application/zip",
+                    headers={"Content-Disposition": "attachment; filename=cineflow-login-helper.zip", "Cache-Control": "no-store"})
 
 
 @router.post("/login/cookie", summary="导入 Cookie（可选即时校验）")

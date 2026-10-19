@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import sys
 import time
+import zipfile
 from urllib.parse import urlencode
 from urllib.request import ProxyHandler, Request, build_opener
 
@@ -44,7 +46,10 @@ def main() -> None:
     )
     account = json.loads(read("/api/v1/auth/me", token=auth["access_token"]))
     assert account["username"] == username and account["is_superuser"], "管理员登录失败"
-    print(f"Container smoke passed: version={expected}, health, frontend, login")
+    with zipfile.ZipFile(io.BytesIO(read("/api/v1/pan/login/browser-extension", token=auth["access_token"]))) as archive:
+        assert json.loads(archive.read("manifest.json"))["manifest_version"] == 3
+        assert "background.js" in archive.namelist()
+    print(f"Container smoke passed: version={expected}, health, frontend, login, browser helper")
 
 
 if __name__ == "__main__":

@@ -607,3 +607,33 @@ def test_frontend_does_not_persist_the_secret_key():
         key = m.group(1)
         assert "secret" not in key.lower(), f"SecretKey 被持久化了：{key}"
 
+
+def test_browser_extension_archive_requires_login(client):
+    assert client.get("/api/v1/pan/login/browser-extension").status_code == 401
+
+
+def test_browser_extension_archive_contains_only_public_sources(client, auth_headers):
+    import io
+    import json
+    import zipfile
+
+    response = client.get("/api/v1/pan/login/browser-extension", headers=auth_headers)
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/zip"
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        assert set(archive.namelist()) == {"manifest.json", "background.js", "bridge.js", "popup.html", "popup.js", "README.txt"}
+        manifest = json.loads(archive.read("manifest.json"))
+        assert manifest["manifest_version"] == 3
+        assert manifest["host_permissions"] == ["https://*.quark.cn/*"]
+        assert "cookies" in manifest["permissions"]
+        assert "content_scripts" not in manifest
+        assert "appOrigin" in archive.read("popup.js").decode()
+
+
+def test_quark_advertises_browser_login_without_claiming_qr_api(client, auth_headers):
+    response = client.get("/api/v1/pan/login/providers", headers=auth_headers)
+    provider = next(item for item in response.json()["data"] if item["provider"] == "quark")
+    assert provider["browser"] is True
+    assert provider["cookie"] is True
+    assert provider["qrcode"] is False
+
