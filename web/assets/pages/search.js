@@ -1,4 +1,4 @@
-import { el, icon, segment, table, rankCell, kindLabel, fmtSize, toast, loading, emptyBox, typeLabel, heatCell, iconButton } from '../ui.js';
+import { el, icon, segment, table, rankCell, resourceKindLabel, fmtSize, toast, loading, emptyBox, typeLabel, heatCell, iconButton } from '../ui.js';
 
 export function createSearchPage({searchState, SORTERS, resourceActions, siteReportCard, apiStream, api, shell}) {
 async function pageSearch() {
@@ -112,7 +112,7 @@ async function pageSearch() {
               render: (row) =>
                 el("span", { class: "tag " + (row.kind === "pan" ? "brand" : "") }, [
                   icon(row.kind === "pan" ? "cloud" : "link", "sm"),
-                  el("span", { text: kindLabel(row.kind) }),
+                  el("span", { text: resourceKindLabel(row) }),
                 ]),
             },
             { title: "画质", render: (row) => (row.meta && row.meta.resolution) || "-" },

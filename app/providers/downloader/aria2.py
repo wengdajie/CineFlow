@@ -96,8 +96,12 @@ class Aria2Downloader(BaseDownloader):
         user_agent: str | None = None,
         filename: str | None = None,
         headers: dict[str, str] | None = None,
+        original_file: bool = False,
     ) -> str | None:
         options: dict[str, Any] = {}
+        if original_file:
+            # 网盘下载的是选中的原文件；.torrent/.meta4 也不应另起 BT/Metalink 任务。
+            options.update({"follow-torrent": "false", "follow-metalink": "false"})
         target_path = save_path or self.default_save_path()
         if target_path:
             options["dir"] = target_path

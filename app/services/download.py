@@ -20,6 +20,7 @@ from app.core.config import settings
 from app.core.exceptions import ProviderError
 from app.core.logger import get_logger
 from app.core.meta import parse
+from app.core.pan_links import PAN_LABELS, pan_family
 from app.db.base import utcnow
 from app.db.models import DownloadTask, Subscribe
 from app.db.session import session_scope
@@ -291,11 +292,11 @@ async def _dispatch_download(
                     external_id = landed.get("external_id")
                     status = TaskStatus.DOWNLOADING.value
                 else:
-                    # 转存成功但落地失败：**不能报成整体失败**（云端确实存下了），
-                    # 但也不能装作没事——把原因写进 error 让用户能看到。
+                    # 云端转存不等于本地下载成功，保留结果供核对并明确报告失败。
                     error = str(landed.get("message") or "")[:500] or None
             else:
                 error = str(pan_result.get("message") or "")[:500] or None
+                status = TaskStatus.PENDING.value if pan_result.get("needs_config") else TaskStatus.FAILED.value
         elif not download_routing.has_pan_account():
             # 既没网盘账号也没 aria2，这条任务永远不会自己走完。
             # 这里必须把【下一步该做什么】写进 error，否则任务就这么
@@ -324,7 +325,7 @@ async def _dispatch_download(
                 "score": resource.get("score"),
                 "resolution": meta.get("resolution"),
                 "quality": meta.get("quality"),
-                "pan_type": (resource.get("extra") or {}).get("pan_type"),
+                "pan_type": PAN_LABELS.get(pan_family(link), resource.get("pan_type") or "待识别网盘") if kind == ResourceKind.PAN.value else None,
                 "pan_origin": "share" if kind == ResourceKind.PAN.value and not resource.get("pan_saved") and resource.get("pan_mode") != "save_then_download" else "storage",
                 "video_format": video_format or None,
                 **(
@@ -408,6 +409,23 @@ async def _land_pan_to_local(
     if not site_id:
         return {"success": False, "message": "缺少网盘站点 ID，无法换取直链"}
 
+    reachable = []
+    reasons = []
+    for candidate in candidates:
+        health = getattr(candidate, "health_check", None)
+        if health:
+            try:
+                ok, message = await health()
+            except Exception:
+                ok, message = False, "连接异常"
+            if not ok:
+                reasons.append(f"{candidate.site_name}：{message}")
+                continue
+        reachable.append(candidate)
+    if not reachable:
+        return {"success": False, "message": "aria2 当前不可用，请启动或检查 RPC 配置：" + "；".join(reasons)}
+    candidates = reachable
+
     try:
         files = await pan_download.resolve_files(pan_result)
     except (ValueError, OSError) as exc:
@@ -424,6 +442,7 @@ async def _land_pan_to_local(
             if getattr(candidate, "name", None) == "aria2":
                 options["filename"] = Path(item["path"]).name
                 options["headers"] = item.get("headers") or {}
+                options["original_file"] = True
             try:
                 external_id = await candidate.add(item["url"], **options)
             except Exception:
@@ -504,7 +523,7 @@ async def _try_auto_save_pan(
     """
     from app.services import pan_storage as pan_service
 
-    if not bool(settings.PAN_AUTO_SAVE):
+    if resource.get("pan_mode") != "save_then_download" and not bool(settings.PAN_AUTO_SAVE):
         return None
     try:
         if not pan_service.storages():

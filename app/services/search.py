@@ -836,6 +836,8 @@ def _save_results(
                     for field, value in (item.get("extra") or {}).items()
                     if field in _MEDIA_META_KEYS
                 }
+                if item.get("kind") == "pan":
+                    media_meta.update({key: item[key] for key in ("pan_type", "pan_provider") if item.get(key)})
                 if key in existing:
                     # 已存在的记录要**回填**作品级元数据：站点后来才补上封面/评分，
                     # 或者本次是从带元数据的站点命中的。只跳过不更新的话，

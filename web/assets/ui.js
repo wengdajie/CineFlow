@@ -189,6 +189,10 @@ const kindLabel = (value) =>
   ({ torrent: "种子", magnet: "磁力", pan: "网盘", direct: "直链" }[value] ||
     value);
 
+const resourceKindLabel = (row) => row.kind === "pan"
+  ? row.pan_type || (row.meta || {}).pan_type || (row.extra || {}).pan_type || "待识别网盘"
+  : kindLabel(row.kind);
+
 const SITE_STATUS = {
   ok: ["有结果", "ok"],
   empty: ["无匹配", ""],
@@ -404,4 +408,4 @@ function rankCell(rank) {
   return el("span", { class: "rank" + cls, text: String(rank) });
 }
 
-export { ICONS, icon, el, fmtSize, fmtSpeed, fmtDuration, fmtCompact, baseName, fmtTime, pad2, fmtRelative, toast, STATUS_MAP, statusTag, typeLabel, typeIcon, kindLabel, SITE_STATUS, loading, emptyBox, table, segment, modal, panelModal, iconButton, statCard, heatCell, rankCell };
+export { ICONS, icon, el, fmtSize, fmtSpeed, fmtDuration, fmtCompact, baseName, fmtTime, pad2, fmtRelative, toast, STATUS_MAP, statusTag, typeLabel, typeIcon, kindLabel, resourceKindLabel, SITE_STATUS, loading, emptyBox, table, segment, modal, panelModal, iconButton, statCard, heatCell, rankCell };

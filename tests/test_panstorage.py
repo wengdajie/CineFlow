@@ -180,9 +180,13 @@ def test_quark_save_share_happy_path(monkeypatch):
         if path == "/share/sharepage/save":
             return {"data": {"task_id": "task-1"}}
         if path == "/task":
-            return {"data": {"status": 2}}
+            return {"data": {"status": 2, "save_as": {"save_as_top_fids": ["saved-1"]}}}
         if path == "/file/sort":
-            return {"data": {"list": []}}
+            items = [{"fid": "folder", "file_name": "影视", "file_type": 0}] if params["pdir_fid"] == "0" else [
+                {"fid": "saved-1", "file_name": "one.mkv", "file_type": 1},
+                {"fid": "unrelated", "file_name": "other.mkv", "file_type": 1},
+            ]
+            return {"data": {"list": items}}
         return None
 
     monkeypatch.setattr(storage, "_call", fake_call)
@@ -190,6 +194,7 @@ def test_quark_save_share_happy_path(monkeypatch):
     assert result.success is True
     assert result.file_count == 1
     assert result.saved_path == "/影视"
+    assert result.saved_files == ["/影视/one.mkv"]
     assert "/share/sharepage/token" in calls and "/share/sharepage/save" in calls
 
 

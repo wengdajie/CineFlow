@@ -61,7 +61,7 @@ async def add_download(payload: DownloadRequest, user: OperatorUser) -> dict[str
     # 「已加入下载队列」，而任务列表里其实是一条红色失败 —— 用户完全被误导
     # （实测：qBittorrent 没起来时，磁力/种子都是这个表现）。
     # 所以把「真实结局」如实带出去，让前端能按 ok / failed 分别提示。
-    ok = task.status != TaskStatus.FAILED.value
+    ok = task.status != TaskStatus.FAILED.value and not (task.status == TaskStatus.PENDING.value and task.error)
     payload: dict[str, Any] = {
         "success": ok,
         "task_id": task.id,

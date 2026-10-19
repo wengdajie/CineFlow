@@ -2068,7 +2068,7 @@ check("落地时把 UA 一起投给下载器",
       '"user_agent": item.get("user_agent")' in _dls
       and 'await candidate.add(item["url"], **options)' in _dls)
 check("没有下载器时算跳过而不是失败", '{"skipped": True}' in _dls)
-check("落地失败保持 transferred 但写明原因", "云端确实存下了" in _dls)
+check("落地失败保留云端结果并写明原因", '"pan_storage_id": pan_saved.get("site_id")' in _dls and 'error = str(landed.get("message")' in _dls)
 
 # 前端：后端有能力 ≠ 用户能用到
 _appjs = pathlib.Path("web/assets/app.js").read_text(encoding="utf-8")

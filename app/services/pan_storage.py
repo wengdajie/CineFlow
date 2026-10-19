@@ -13,7 +13,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.config import settings
 from app.core.logger import get_logger
-from app.core.pan_links import PAN_LABELS, pan_family
+from app.core.pan_links import PAN_LABELS, pan_family, share_password
 from app.db.base import utcnow
 from app.db.models import DownloadTask, PanSaveRecord, SiteConfig
 from app.db.session import session_scope
@@ -78,10 +78,10 @@ async def prepare_share_download(share_url: str, password: str | None = None) ->
     label = PAN_LABELS.get(family, "该网盘")
     candidates = [item for item in storages() if item.name == family and getattr(item, "supports_share_download", False)]
     if not candidates:
-        return {"success": False, "origin": "share", "message": f"请先配置并登录{label}账号；下载不会改用其他网盘，也不会自动转存"}
+        return {"success": False, "origin": "share", "needs_config": True, "message": f"请先配置并登录{label}账号；下载不会改用其他网盘，也不会自动转存"}
     storage = candidates[0]
     try:
-        files = await storage.share_downloads(share_url, password=password)
+        files = await storage.share_downloads(share_url, password=share_password(share_url, password))
         files = [item for item in files if not item.is_dir]
         if not files or len(files) > 200:
             raise ValueError("分享为空或超过 200 个文件，请选择较小的分享目录")
@@ -92,7 +92,7 @@ async def prepare_share_download(share_url: str, password: str | None = None) ->
                 "download_files": [{"url": item.download_url, "path": item.path,
                                     "relative": item.path.lstrip("/"),
                                     "user_agent": storage.direct_link_user_agent,
-                                    "headers": storage.download_headers(item.download_url)} for item in files]}
+                                    "headers": item.download_headers or storage.download_headers(item.download_url)} for item in files]}
     except Exception as exc:
         message = str(exc) if isinstance(exc, ValueError) else f"请求异常（{type(exc).__name__}）"
         return {"success": False, "origin": "share", "message": f"{label}下载解析失败：{message}"}
@@ -247,6 +247,7 @@ async def save_share(
 
     # 没显式指定就用「上次用过的 / 站点默认」，让无头入口也享受到记忆
     effective_dir = str(target_dir or "").strip() or suggested_target_dir(storage)
+    password = share_password(share_url, password)
     result = await storage.save_share(
         share_url, password=password, target_dir=effective_dir or None
     )

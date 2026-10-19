@@ -5,6 +5,7 @@ import hashlib
 import json
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
 from app.core.pan_links import pan_family
@@ -14,6 +15,169 @@ from app.providers.panstorage.base import PanFile
 from app.schemas.models import DownloadRequest
 from app.services import download, download_routing, pan_download, pan_storage
 from app.utils.pan115_rsa import encrypt
+
+
+@pytest.mark.parametrize(("url", "provider", "label"), [
+    ("https://pan.quark.cn/s/test", "quark", "夸克网盘"),
+    ("https://pan.baidu.com/s/test", "baidu", "百度网盘"),
+    ("https://alipan.com/s/test", "alipan", "阿里云盘"),
+    ("https://115cdn.com/s/test", "pan115", "115 网盘"),
+    ("https://pan.xunlei.com/s/test", "xunlei", "迅雷网盘"),
+])
+def test_pan_resource_exposes_specific_platform_before_actions(url, provider, label):
+    from app.providers.base import Resource
+
+    row = Resource(title="test", link=url, kind="pan").to_dict()
+    assert row["pan_type"] == label
+    assert row["pan_provider"] == provider
+
+
+def test_cancelled_quark_share_reports_platform_error(monkeypatch):
+    storage = quark.QuarkStorage({"cookie": "test"})
+
+    class Client:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+        async def request(self, *args, **kwargs):
+            return httpx.Response(404, json={"code": 41012, "status": 404, "message": "好友已取消了分享"})
+
+    monkeypatch.setattr(quark, "async_client", lambda **kwargs: Client())
+    with pytest.raises(ValueError, match="好友已取消了分享"):
+        asyncio.run(storage.share_downloads("https://pan.quark.cn/s/test"))
+
+
+def test_quark_download_uses_cookie_refreshed_by_url_response(monkeypatch):
+    storage = quark.QuarkStorage({"options": {"cookie": "__puus=old; __pus=keep"}})
+
+    class Client:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+        async def request(self, *args, **kwargs):
+            return httpx.Response(200, request=httpx.Request("POST", "https://drive-pc.quark.cn/1/clouddrive/file/download"),
+                headers={"Set-Cookie": "__puus=new; Domain=.quark.cn; Path=/; Secure; HttpOnly"},
+                json={"code": 0, "data": [{"fid": "1", "download_url": "https://dl-pc-zb.pds.quark.cn/fixture"}]})
+
+    monkeypatch.setattr(quark, "async_client", lambda **kwargs: Client())
+    url = asyncio.run(storage.download_url("/one.mkv", file_id="1"))
+    headers = storage.download_headers(url)
+    assert "__puus=new" in headers["Cookie"]
+    assert "__puus=old" not in headers["Cookie"]
+    assert "__pus=keep" in headers["Cookie"]
+
+
+def test_each_quark_url_keeps_its_matching_cookie_without_exposing_headers(monkeypatch):
+    storage = quark.QuarkStorage({"id": 1, "name": "quark", "cookie": "initial"})
+    files = [PanFile("one.mkv", "/one.mkv", file_id="1"), PanFile("two.mkv", "/two.mkv", file_id="2")]
+
+    async def listing(*args, **kwargs):
+        return files
+
+    async def call(path, **kwargs):
+        fid = kwargs["body"]["fids"][0]
+        storage.config["cookie"] = "__puus=private-" + fid
+        return {"data": [{"fid": fid, "download_url": "https://cdn.quark.cn/" + fid}]}
+
+    monkeypatch.setattr(storage, "list_share", listing)
+    monkeypatch.setattr(storage, "_call", call)
+    monkeypatch.setattr(pan_storage, "storages", lambda: [storage])
+    result = asyncio.run(pan_storage.prepare_share_download("https://pan.quark.cn/s/test"))
+    assert [item["headers"]["Cookie"] for item in result["download_files"]] == ["__puus=private-1", "__puus=private-2"]
+    assert all("private-" not in json.dumps(item.to_dict()) for item in files)
+
+
+def test_failed_pan_parse_is_not_reported_as_queued(monkeypatch, client, auth_headers):
+    async def prepare(*args):
+        return {"success": False, "message": "好友已取消了分享"}
+
+    monkeypatch.setattr(pan_storage, "prepare_share_download", prepare)
+    response = client.post("/api/v1/downloads", headers=auth_headers, json={
+        "title": "test", "link": "https://pan.quark.cn/s/test", "kind": "pan",
+    })
+    assert response.json()["success"] is False
+    assert response.json()["status"] == "failed"
+    assert "取消" in response.json()["message"]
+
+
+def test_embedded_share_password_is_used_and_explicit_password_wins(monkeypatch):
+    from app.core.pan_links import share_password
+
+    assert share_password("https://pan.quark.cn/s/test?pwd=abcd") == "abcd"
+    assert share_password("https://pan.quark.cn/s/test?pwd=abcd", "override") == "override"
+    received = []
+
+    class Storage:
+        name = "quark"
+        supports_share_download = True
+
+        async def share_downloads(self, link, *, password=None):
+            received.append(password)
+            return []
+
+    monkeypatch.setattr(pan_storage, "storages", lambda: [Storage()])
+    asyncio.run(pan_storage.prepare_share_download("https://pan.quark.cn/s/test?pwd=abcd"))
+    assert received == ["abcd"]
+
+
+def test_explicit_save_then_download_is_not_blocked_by_auto_save_setting(monkeypatch):
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "PAN_AUTO_SAVE", False)
+    monkeypatch.setattr(pan_storage, "storages", lambda: [object()])
+
+    async def save(*args, **kwargs):
+        return {"success": True, "saved_files": ["/selected.mkv"]}
+
+    monkeypatch.setattr(pan_storage, "save_share", save)
+    result = asyncio.run(download._try_auto_save_pan("https://pan.quark.cn/s/test", {"pan_mode": "save_then_download"}))
+    assert result["success"] is True
+
+
+def test_quark_nonowner_share_requires_explicit_save(monkeypatch):
+    storage = quark.QuarkStorage({"cookie": "test"})
+
+    async def call(path, **kwargs):
+        if path.endswith("/token"):
+            return {"data": {"stoken": "test"}}
+        assert path.endswith("/detail"), "不得把他人分享 ID 交给盘内下载或转存接口"
+        return {"data": {"is_owner": 0, "list": [{"fid": "1", "file_name": "one.mkv", "file_type": 1}]}}
+
+    monkeypatch.setattr(storage, "_call", call)
+    with pytest.raises(ValueError, match="转存后下载"):
+        asyncio.run(storage.share_downloads("https://pan.quark.cn/s/test"))
+
+
+def test_quark_saved_root_download_only_contains_new_ids(monkeypatch):
+    storage = quark.QuarkStorage({"cookie": "test"})
+
+    async def call(path, **kwargs):
+        if path.endswith("/save"):
+            return {"data": {"task_id": "task"}}
+        if path == "/task":
+            return {"data": {"status": 2, "save_as": {"save_as_top_fids": ["new"]}}}
+        assert path == "/file/sort"
+        return {"data": {"list": [{"fid": "old", "file_name": "old.mkv", "file_type": 1}, {"fid": "new", "file_name": "new.mkv", "file_type": 1}]}}
+
+    monkeypatch.setattr(storage, "_call", call)
+    result = asyncio.run(storage._submit_save("share", "token", ["original"], ["fid-token"], "/"))
+    assert result.success is True
+    assert result.saved_files == ["/new.mkv"]
+
+
+def test_unavailable_aria2_is_reported_before_resolving_files(monkeypatch):
+    class Offline:
+        site_name = "aria2 test"
+
+        async def health_check(self):
+            return False, "无法连接 aria2"
+
+    async def forbidden(*args):
+        pytest.fail("下载器离线时不应换取临时直链")
+
+    monkeypatch.setattr(download_routing, "candidates_for", lambda *args: [Offline()])
+    monkeypatch.setattr(pan_download, "resolve_files", forbidden)
+    result = asyncio.run(download._land_pan_to_local({"saved_path": "/one.mkv", "site_id": 1}, "/tmp/test", None))
+    assert result["success"] is False
+    assert "aria2 当前不可用" in result["message"]
 
 
 @pytest.mark.parametrize(
@@ -82,6 +246,8 @@ def test_default_download_does_not_save_and_does_not_persist_signed_urls(
 
     async def rpc(method, params=None):
         calls.append((method, params))
+        if method == "aria2.getVersion":
+            return {"version": "test"}
         return "gid-download"
 
     monkeypatch.setattr(downloader, "_call", rpc)
@@ -101,7 +267,23 @@ def test_default_download_does_not_save_and_does_not_persist_signed_urls(
     assert task.meta["pan_download_ids"] == ["gid-download"]
     assert "secret" not in json.dumps(task.meta)
     assert "private" not in json.dumps(task.meta)
-    assert calls[0][1][1]["header"] == ["Cookie: private"]
+    assert next(params for method, params in calls if method == "aria2.addUri")[1]["header"] == ["Cookie: private"]
+    options = next(params for method, params in calls if method == "aria2.addUri")[1]
+    assert options["follow-torrent"] == "false"
+    assert options["follow-metalink"] == "false"
+
+
+def test_aria2_bt_download_retains_default_torrent_following(monkeypatch):
+    downloader = Aria2Downloader({"name": "aria2"})
+    calls = []
+
+    async def rpc(method, params=None):
+        calls.append(params)
+        return "gid"
+
+    monkeypatch.setattr(downloader, "_call", rpc)
+    asyncio.run(downloader.add("https://fixture.test/file.torrent"))
+    assert "follow-torrent" not in calls[0][1]
 
 
 @pytest.mark.parametrize("metadata", [{"pan_origin": "share"}, {}])

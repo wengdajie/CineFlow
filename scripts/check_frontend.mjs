@@ -3,7 +3,7 @@ import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { spawnSync } from "node:child_process";
 import assert from "node:assert/strict";
-import { el } from "../web/assets/ui.js";
+import { el, resourceKindLabel } from "../web/assets/ui.js";
 import "./check_login_helper.mjs";
 
 function check(directory) {
@@ -40,3 +40,8 @@ for (const href of ["https://example.test/detail", "http://127.0.0.1:6060/", "#s
 }
 delete globalThis.document;
 console.log("Frontend link safety checked: 8 cases");
+assert.equal(resourceKindLabel({kind: "pan", pan_type: "夸克网盘"}), "夸克网盘");
+assert.equal(resourceKindLabel({kind: "pan", meta: {pan_type: "百度网盘"}}), "百度网盘");
+assert.equal(resourceKindLabel({kind: "pan"}), "待识别网盘");
+assert.equal(resourceKindLabel({kind: "magnet"}), "磁力");
+console.log("Resource platform labels checked: 4 cases");

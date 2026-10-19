@@ -18,8 +18,11 @@ from __future__ import annotations
 
 import asyncio
 import re
+from http.cookies import SimpleCookie
 from typing import Any
 from urllib.parse import urlsplit
+
+import httpx
 
 from app.core.config import settings
 from app.core.logger import get_logger
@@ -31,7 +34,7 @@ from app.providers.panstorage.base import (
     SaveResult,
 )
 from app.providers.registry import register
-from app.utils.http import fetch_json
+from app.utils.http import async_client
 
 logger = get_logger(__name__)
 
@@ -58,6 +61,7 @@ class QuarkStorage(BasePanStorage):
     display_name = "夸克网盘"
     supports_share_download = True
     direct_link_user_agent = settings.USER_AGENT
+    _last_error = ""
 
     def download_headers(self, url: str) -> dict[str, str]:
         host = (urlsplit(url).hostname or "").lower()
@@ -95,22 +99,38 @@ class QuarkStorage(BasePanStorage):
         body: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         """调用夸克 API，成功返回整个响应体。"""
+        self._last_error = ""
         if not self.cookie:
+            self._last_error = "未配置夸克 Cookie，请先登录"
             return None
         merged = {**_COMMON_PARAMS, **(params or {})}
-        payload = await fetch_json(
-            f"{API_BASE}{path}",
-            method=method,
-            params=merged,
-            json_body=body,
-            headers=self._headers(),
-            timeout=self.config.get("timeout"),
-        )
-        if not payload:
+        try:
+            async with async_client(timeout=self.config.get("timeout"), headers=self._headers(), follow_redirects=False) as client:
+                response = await client.request(method, f"{API_BASE}{path}", params=merged, json=body)
+            payload = response.json()
+        except httpx.HTTPError:
+            self._last_error = "夸克接口请求失败，请检查网络或稍后重试"
             return None
-        if payload.get("code") not in (0, 200, None):
+        except ValueError:
+            self._last_error = f"夸克未返回有效 JSON（HTTP {response.status_code}），请稍后重试"
+            return None
+        if not isinstance(payload, dict) or not payload:
+            self._last_error = "夸克接口请求失败，请检查网络或稍后重试"
+            return None
+        if payload.get("code") not in (0, 200, None) or int(payload.get("status") or 0) >= 400:
+            self._last_error = str(payload.get("message") or "夸克拒绝了请求")[:300] + f"（code={payload.get('code')}）"
             logger.warning("夸克 %s 返回 %s: %s", path, payload.get("code"), payload.get("message"))
             return None
+        # 直链与 API 当次刷新的凭据配套，继续使用旧 __puus 会导致 CDN 403。
+        refreshed = [item for item in response.cookies.jar if item.name in ("__pus", "__puus") and item.value]
+        if refreshed:
+            cookie = SimpleCookie()
+            cookie.load(self.cookie)
+            for item in refreshed:
+                cookie[item.name] = item.value
+            value = "; ".join(f"{name}={item.coded_value}" for name, item in cookie.items())
+            self.config["cookie"] = value
+            self.config["options"] = {**(self.config.get("options") or {}), "cookie": value}
         return payload
 
     # ---------------- 目录 ----------------
@@ -226,6 +246,9 @@ class QuarkStorage(BasePanStorage):
                 },
             )
             batch = ((detail or {}).get("data") or {}).get("list")
+            owner = ((detail or {}).get("data") or {}).get("is_owner")
+            if owner is not None:
+                self._share_is_owner = str(owner) in ("1", "True", "true")
             if detail is None:
                 self._share_incomplete = True
             if not isinstance(batch, list):
@@ -260,6 +283,8 @@ class QuarkStorage(BasePanStorage):
         截断时如实记日志，而不是假装列全了（ADR-82）。
         """
         self._share_incomplete = False
+        self._last_error = ""
+        self._share_is_owner = None
         share_id = self.parse_share_id(share_url)
         if not share_id or not self.cookie:
             return []
@@ -341,18 +366,23 @@ class QuarkStorage(BasePanStorage):
     async def share_downloads(self, share_url: str, *, password: str | None = None) -> list[PanFile]:
         # 只读取可下载原文件；平台不授权直接读取时，交给用户明确选择转存。
         files = await self.list_share(share_url, password=password)
+        if self._last_error:
+            raise ValueError(self._last_error)
         if getattr(self, "_share_incomplete", False):
             raise ValueError("夸克分享未完整列出，请选择较小的分享")
         files = [item for item in files if not item.is_dir]
         if not files or len(files) > 200:
             raise ValueError("夸克分享为空、已失效或超过 200 个文件")
+        if getattr(self, "_share_is_owner", None) is False:
+            raise ValueError("夸克要求先转存他人分享，请选择「转存后下载」，或在官网处理；本次没有执行转存")
         for item in files:
             payload = await self._call("/file/download", method="POST", body={"fids": [item.file_id]})
             entries = (payload or {}).get("data") or []
             item.download_url = next((entry.get("download_url") for entry in entries
                                       if str(entry.get("fid")) == item.file_id), None)
             if not item.download_url:
-                raise ValueError("夸克未授权直接下载该分享；请在官方页面下载，或明确转存后从网盘文件列表下载")
+                raise ValueError(self._last_error or "夸克未授权直接下载该分享；请选择转存后下载，或在官方页面处理")
+            item.download_headers = self.download_headers(item.download_url)
         return files
 
     async def save_share_files(
@@ -392,7 +422,10 @@ class QuarkStorage(BasePanStorage):
     ) -> SaveResult:
         """第 3~4 步：提交转存任务并轮询结果。"""
         target = self.normalize_path(target_dir or self.root_path)
-        to_pdir_fid = await self._resolve_fid(target) or "0"
+        to_pdir_fid = await self._resolve_fid(target)
+        if not to_pdir_fid:
+            return SaveResult(False, "目标目录不存在，请先在网盘创建目录")
+        self._saved_top_fids = []
         save_payload = await self._call(
             "/share/sharepage/save",
             method="POST",
@@ -413,16 +446,27 @@ class QuarkStorage(BasePanStorage):
         ok = await self._wait_task(str(task_id))
         if not ok:
             return SaveResult(
-                True,
+                False,
                 f"转存已提交但未确认完成（task {task_id}），请稍后在网盘中确认",
-                saved_path=target,
                 file_count=len(fid_list),
             )
+        # 只返回本次生成的文件/目录，不能把整个网盘根目录交给下载器。
+        saved_ids = set(self._saved_top_fids)
+        saved_files = []
+        if saved_ids:
+            try:
+                entries = await self._list_by_fid(to_pdir_fid, strict=True)
+                saved_files = [self.join_path(target, item.name) for item in entries if item.file_id in saved_ids]
+                if len(saved_files) != len(saved_ids):
+                    saved_files = []
+            except OSError:
+                saved_files = []
         return SaveResult(
             True,
-            f"已转存 {len(fid_list)} 个文件",
-            saved_path=target,
+            f"已转存 {len(fid_list)} 个文件" if saved_files else "已转存，但未确认具体落地文件，请从网盘文件列表选择下载",
+            saved_path=target if saved_files else None,
             file_count=len(fid_list),
+            saved_files=saved_files,
         )
 
     async def save_share(
@@ -463,6 +507,8 @@ class QuarkStorage(BasePanStorage):
             )
             status = ((payload or {}).get("data") or {}).get("status")
             if status == 2:  # 2 = 成功
+                data = (payload or {}).get("data") or {}
+                self._saved_top_fids = [str(fid) for fid in (data.get("save_as") or {}).get("save_as_top_fids") or []]
                 return True
             if status == 3:  # 3 = 失败
                 return False

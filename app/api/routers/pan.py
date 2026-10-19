@@ -133,6 +133,7 @@ async def download_files(payload: PanDownloadRequest, user: OperatorUser) -> dic
         raise HTTPException(status_code=404, detail="网盘不存在或未启用")
     task = await add_download({
         "title": PurePosixPath(payload.path).name, "kind": "pan", "site": storage.site_name,
+        "pan_type": storage.display_name,
         "link": f"pan://{payload.site_id}/{quote(payload.path.lstrip('/'), safe='/')}",
         "pan_saved": {"success": True, "storage": storage.site_name, "site_id": payload.site_id,
                       "saved_path": payload.path, "file_id": payload.file_id, "is_dir": payload.is_dir},

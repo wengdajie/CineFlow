@@ -110,6 +110,11 @@ class Resource:
         data["unique_key"] = self.unique_key
         data["actions"] = self.actions
         data["paywalled"] = self.paywalled
+        if self.kind == ResourceKind.PAN.value:
+            from app.core.pan_links import PAN_LABELS, pan_family
+
+            data["pan_provider"] = pan_family(self.link)
+            data["pan_type"] = PAN_LABELS.get(data["pan_provider"], "待识别网盘")
         return data
 
 

@@ -29,6 +29,8 @@ class PanFile:
     #: 可直接播放/下载的临时直链（多数网盘需单独换取，可能为空）
     download_url: str | None = None
     extra: dict[str, Any] = field(default_factory=dict)
+    #: 与当次直链配套的临时鉴权头；仅内部下载使用，不进入 to_dict()。
+    download_headers: dict[str, str] = field(default_factory=dict, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
         return {

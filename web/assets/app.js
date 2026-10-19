@@ -1,4 +1,4 @@
-import { ICONS, icon, el, fmtSize, fmtSpeed, fmtDuration, fmtCompact, baseName, fmtTime, pad2, fmtRelative, toast, STATUS_MAP, statusTag, typeLabel, typeIcon, kindLabel, SITE_STATUS, loading, emptyBox, table, segment, modal, panelModal, iconButton, statCard, heatCell, rankCell } from './ui.js';
+import { ICONS, icon, el, fmtSize, fmtSpeed, fmtDuration, fmtCompact, baseName, fmtTime, pad2, fmtRelative, toast, STATUS_MAP, statusTag, typeLabel, typeIcon, kindLabel, resourceKindLabel, SITE_STATUS, loading, emptyBox, table, segment, modal, panelModal, iconButton, statCard, heatCell, rankCell } from './ui.js';
 import { THEME_KEY, store, ROLE_LABEL, canDo } from './state.js';
 import { safeHref } from './ui.js';
 import { API, createApi } from './api.js';
@@ -607,7 +607,7 @@ import { showBrowserCookieLogin } from './pages/pan_cookie_login.js';
         button.title = route.reason || route.hint || "";
       }
     });
-    button.addEventListener("click", async () => {
+    const submit = async (panMode = "download") => {
       const route = routeFor(await downloadRouting(), row.kind);
       if (route && !route.ready) {
         // 明确告知缺什么、去哪儿加，而不是投出去等一个必然的失败
@@ -628,6 +628,7 @@ import { showBrowserCookieLogin } from './pages/pan_cookie_login.js';
             password: row.password,
             page_url: row.page_url,
             meta: row.meta || {},
+            pan_mode: panMode,
           },
         });
         // HTTP 200 不代表投递成功：下载器连不上时后端会落库成 failed 并回
@@ -640,7 +641,7 @@ import { showBrowserCookieLogin } from './pages/pan_cookie_login.js';
           if (onDone) onDone();
           return;
         }
-        button.querySelector("span").textContent = "已添加";
+        button.querySelector("span").textContent = res && res.status === "pending" ? "待处理" : "已添加";
         // pending（如网盘缺账号/aria2）不是失败，但也没真的开始下，给中性提示
         if (res && res.message) toast(res.message, "warn");
         else toast("已加入下载队列", "ok");
@@ -650,6 +651,14 @@ import { showBrowserCookieLogin } from './pages/pan_cookie_login.js';
         button.disabled = false;
         button.querySelector("span").textContent = "下载";
       }
+    };
+    button.addEventListener("click", () => {
+      if (row.kind !== "pan") { submit(); return; }
+      modal("下载「" + resourceKindLabel(row) + "」资源", [{
+        key: "pan_mode", label: "下载方式", type: "select", value: "download",
+        options: [{ value: "download", label: "直接下载（不转存）" }, { value: "save_then_download", label: "转存后下载（会保存到自己的网盘）" }],
+        hint: "aria2 负责下载原文件。部分平台的他人分享需先转存；仅选择第二项才会执行转存，失效分享两种方式都无法处理。",
+      }], (values) => submit(values.pan_mode), "开始下载");
     });
     return button;
   }
@@ -2380,7 +2389,7 @@ import { showBrowserCookieLogin } from './pages/pan_cookie_login.js';
                 el("div", {}, [
                   el("div", { class: "truncate", title: row.title, text: row.title }),
                   el("div", { class: "cell-sub", text:
-                    kindLabel(row.kind) + " · " + (row.site || "-") + " · " + fmtSize(row.size) }),
+                    resourceKindLabel(row) + " · " + (row.site || "-") + " · " + fmtSize(row.size) }),
                 ]),
             },
             {
@@ -2395,7 +2404,7 @@ import { showBrowserCookieLogin } from './pages/pan_cookie_login.js';
                 ]);
               },
             },
-            { title: "状态", render: (row) => statusTag(row.status) },
+            { title: "状态", render: (row) => el("div", {}, [statusTag(row.status), row.error ? el("div", { class: "tiny", style: "max-width:320px;white-space:normal;color:var(--danger)", text: row.error }) : null]) },
             {
               title: "季集",
               render: (row) =>
@@ -4119,7 +4128,7 @@ import { showBrowserCookieLogin } from './pages/pan_cookie_login.js';
               render: (row) =>
                 el("span", { class: "tag " + (row.kind === "pan" ? "brand" : "ok") }, [
                   icon(row.kind === "pan" ? "cloud" : "link", "sm"),
-                  el("span", { text: row.kind === "pan" ? "网盘" : "BT" }),
+                  el("span", { text: row.kind === "pan" ? resourceKindLabel(row) : "BT" }),
                 ]),
             },
             { title: "做种", class: "num", render: (row) => row.seeders || "-" },
